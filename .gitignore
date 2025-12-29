@@ -33,6 +33,7 @@ assets/demo_animation_frames/
 frontend/node_modules/
 frontend/.next/
 frontend/out/
+frontend/.source/
 
 # Python package build
 dist/

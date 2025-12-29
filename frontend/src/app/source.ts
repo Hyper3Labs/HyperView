@@ -4,7 +4,11 @@ import { docs, meta } from '../../.source/server';
 export const source = {
   getPage(slug?: string[]) {
     const path = slug?.join('/') || 'index';
-    const doc = docs.find((d: any) => d.path === path);
+    const doc = docs.find((d: any) => {
+      const filePath = d.info?.path || '';
+      const fileName = filePath.replace(/\.mdx?$/, '');
+      return fileName === path;
+    });
     if (!doc) return null;
     
     return {
@@ -19,13 +23,14 @@ export const source = {
   
   generateParams() {
     return docs.map((doc: any) => {
-      const path = doc.path || 'index';
-      console.log('Doc path:', path, 'Type:', typeof path);
-      if (path === 'index') {
+      const filePath = doc.info?.path || '';
+      const fileName = filePath.replace(/\.mdx?$/, '');
+      
+      if (fileName === 'index') {
         return { slug: [] };
       }
       return {
-        slug: path.split('/'),
+        slug: fileName.split('/'),
       };
     });
   },
