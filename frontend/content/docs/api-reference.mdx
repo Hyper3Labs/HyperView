@@ -1,0 +1,349 @@
+---
+title: API Reference
+description: REST API endpoints and Python API reference
+---
+
+# API Reference
+
+HyperView provides both a REST API for the web interface and a Python API for programmatic access.
+
+## REST API Endpoints
+
+The FastAPI server exposes the following endpoints at `http://127.0.0.1:5151`:
+
+### GET /api/dataset
+
+Get dataset metadata including name, labels, and colors.
+
+**Response:**
+
+```json
+{
+  "name": "cifar100_demo",
+  "labels": ["apple", "aquarium_fish", "baby", ...],
+  "label_colors": {
+    "apple": "#FF6B6B",
+    "aquarium_fish": "#4ECDC4",
+    ...
+  }
+}
+```
+
+### GET /api/samples
+
+Get paginated samples with thumbnail images.
+
+**Query Parameters:**
+- `offset` (int): Starting index (default: 0)
+- `limit` (int): Number of samples to return (default: 100)
+
+**Response:**
+
+```json
+{
+  "samples": [
+    {
+      "id": "sample_0",
+      "label": "apple",
+      "image": "data:image/jpeg;base64,/9j/4AAQ...",
+      "index": 0
+    },
+    ...
+  ],
+  "total": 500,
+  "offset": 0,
+  "limit": 100
+}
+```
+
+### GET /api/samples/batch
+
+Get specific samples by their IDs.
+
+**Query Parameters:**
+- `ids` (string): Comma-separated list of sample IDs
+
+**Response:**
+
+```json
+[
+  {
+    "id": "sample_42",
+    "label": "bicycle",
+    "image": "data:image/jpeg;base64,/9j/4AAQ...",
+    "index": 42
+  },
+  ...
+]
+```
+
+### GET /api/embeddings
+
+Get 2D coordinates for all samples (both Euclidean and Hyperbolic).
+
+**Response:**
+
+```json
+{
+  "euclidean": [
+    [0.123, 0.456],
+    [-0.789, 0.234],
+    ...
+  ],
+  "hyperbolic": [
+    [0.098, 0.123],
+    [-0.234, 0.567],
+    ...
+  ],
+  "sample_ids": ["sample_0", "sample_1", ...]
+}
+```
+
+### POST /api/selection
+
+Synchronize selection state between frontend and backend.
+
+**Request Body:**
+
+```json
+{
+  "selected_ids": ["sample_0", "sample_5", "sample_42"]
+}
+```
+
+**Response:**
+
+```json
+{
+  "status": "ok",
+  "selected_count": 3
+}
+```
+
+## Python API Reference
+
+### Dataset Class
+
+The main class for working with datasets.
+
+#### Constructor
+
+```python
+hv.Dataset(name: str, persist: bool = True)
+```
+
+Create or load a dataset.
+
+**Parameters:**
+- `name`: Unique identifier for the dataset
+- `persist`: Whether to store dataset persistently (default: True)
+
+#### Methods
+
+##### add_from_huggingface()
+
+```python
+dataset.add_from_huggingface(
+    dataset_name: str,
+    split: str = "train",
+    image_key: str = "img",
+    label_key: str = "label",
+    max_samples: Optional[int] = None,
+)
+```
+
+Load samples from HuggingFace Hub.
+
+##### add_images_dir()
+
+```python
+dataset.add_images_dir(
+    path: str,
+    label_from_folder: bool = False,
+)
+```
+
+Load images from a local directory.
+
+##### compute_embeddings()
+
+```python
+dataset.compute_embeddings(
+    model: str = "clip",
+    show_progress: bool = True,
+)
+```
+
+Compute high-dimensional embeddings for all samples.
+
+**Parameters:**
+- `model`: Embedding model to use ("clip" or "resnet")
+- `show_progress`: Show progress bar during computation
+
+##### compute_visualization()
+
+```python
+dataset.compute_visualization()
+```
+
+Compute 2D projections (Euclidean UMAP + Hyperbolic Poincaré).
+
+##### save()
+
+```python
+dataset.save(path: str)
+```
+
+Save dataset to a JSON file.
+
+##### load() (Class Method)
+
+```python
+dataset = hv.Dataset.load(path: str)
+```
+
+Load dataset from a JSON file.
+
+##### list_datasets() (Class Method)
+
+```python
+datasets = hv.Dataset.list_datasets()
+```
+
+Get list of all persistent datasets.
+
+##### exists() (Class Method)
+
+```python
+exists = hv.Dataset.exists(name: str)
+```
+
+Check if a dataset exists.
+
+##### delete() (Class Method)
+
+```python
+hv.Dataset.delete(name: str)
+```
+
+Delete a dataset permanently.
+
+#### Properties
+
+```python
+len(dataset)         # Number of samples
+dataset.name         # Dataset name
+dataset.labels       # List of unique labels
+dataset.samples      # Iterator over all samples
+dataset[sample_id]   # Get sample by ID
+```
+
+### Launch Function
+
+```python
+hv.launch(dataset: Dataset, port: int = 5151, open_browser: bool = True)
+```
+
+Start the web server and open the visualization UI.
+
+**Parameters:**
+- `dataset`: Dataset to visualize
+- `port`: Port number for the server (default: 5151)
+- `open_browser`: Automatically open browser (default: True)
+
+### Sample Class
+
+Represents a single sample in the dataset.
+
+#### Properties
+
+```python
+sample.id          # Unique identifier (str)
+sample.image       # Image data or path
+sample.label       # Label/class (str)
+sample.embedding   # High-dimensional embedding (Optional[np.ndarray])
+sample.position_2d # 2D coordinates (Optional[Tuple[float, float]])
+```
+
+## Example Usage
+
+### Complete Workflow
+
+```python
+import hyperview as hv
+
+# Create dataset
+dataset = hv.Dataset("my_project")
+
+# Add data
+dataset.add_from_huggingface(
+    "uoft-cs/cifar100",
+    split="train",
+    max_samples=1000
+)
+
+# Process
+dataset.compute_embeddings(model="clip")
+dataset.compute_visualization()
+
+# Save for later
+dataset.save("my_project.json")
+
+# Launch UI
+hv.launch(dataset, port=5151)
+```
+
+### Batch Processing
+
+```python
+# Process multiple datasets
+dataset_names = ["dataset1", "dataset2", "dataset3"]
+
+for name in dataset_names:
+    dataset = hv.Dataset(name)
+    dataset.add_from_huggingface(f"org/{name}")
+    dataset.compute_embeddings()
+    dataset.compute_visualization()
+    dataset.save(f"{name}.json")
+```
+
+### Inspecting Samples
+
+```python
+# Get total samples
+print(f"Total samples: {len(dataset)}")
+
+# Get unique labels
+print(f"Labels: {dataset.labels}")
+
+# Iterate over samples
+for sample in dataset.samples:
+    print(f"ID: {sample.id}, Label: {sample.label}")
+
+# Get specific sample
+sample = dataset["sample_42"]
+print(f"Sample embedding shape: {sample.embedding.shape}")
+```
+
+## Error Handling
+
+All API methods may raise exceptions. Wrap calls in try-except blocks:
+
+```python
+try:
+    dataset.compute_embeddings()
+except Exception as e:
+    print(f"Failed to compute embeddings: {e}")
+```
+
+Common exceptions:
+- `FileNotFoundError`: Dataset or file not found
+- `ValueError`: Invalid parameters
+- `RuntimeError`: Computation errors
+
+## Rate Limiting
+
+The REST API does not currently implement rate limiting, but it's recommended to:
+- Batch requests when possible
+- Use pagination for large datasets
+- Cache responses on the client side

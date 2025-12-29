@@ -1,4 +1,7 @@
 import type { NextConfig } from "next";
+import { createMDX } from 'fumadocs-mdx/next';
+
+const withMDX = createMDX();
 
 const nextConfig: NextConfig = {
   output: "export",
@@ -6,6 +9,7 @@ const nextConfig: NextConfig = {
   images: {
     unoptimized: true,
   },
+  pageExtensions: ['js', 'jsx', 'ts', 'tsx', 'md', 'mdx'],
   // Proxy API calls to backend during development
   async rewrites() {
     return [
@@ -17,4 +21,4 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+export default withMDX(nextConfig);
