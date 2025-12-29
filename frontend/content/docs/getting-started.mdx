@@ -17,7 +17,11 @@ cd HyperView
 
 # Install with uv
 uv venv .venv
-source .venv/bin/activate
+
+# Activate virtual environment
+source .venv/bin/activate  # On macOS/Linux
+# Or on Windows: .venv\Scripts\activate
+
 uv pip install -e .
 ```
 
@@ -91,7 +95,8 @@ For the best development experience, run the backend and frontend separately:
 
 ```bash
 # Activate your virtual environment first
-source .venv/bin/activate
+source .venv/bin/activate  # On macOS/Linux
+# Or on Windows: .venv\Scripts\activate
 
 # Run the demo script in no-browser mode
 python scripts/demo.py --samples 200 --no-browser
