@@ -65,9 +65,7 @@ export default function Layout({ children }: { children: ReactNode }) {
 
         {/* Main content */}
         <main className="flex-1 max-w-4xl">
-          <article className="prose prose-invert prose-slate max-w-none">
-            {children}
-          </article>
+          {children}
         </main>
       </div>
     </div>

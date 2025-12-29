@@ -12,10 +12,10 @@ export default async function Page(props: {
   const MDX = page.data.body;
 
   return (
-    <div>
-      <h1 className="text-4xl font-bold mb-4">{page.data.title}</h1>
+    <div className="prose prose-invert max-w-none">
+      <h1>{page.data.title}</h1>
       {page.data.description && (
-        <p className="text-xl text-text-muted mb-8">{page.data.description}</p>
+        <p className="text-xl text-text-muted">{page.data.description}</p>
       )}
       <MDX />
     </div>
