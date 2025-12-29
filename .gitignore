@@ -42,3 +42,7 @@ build/
 # Data cache
 *.hf/
 .cache/
+
+# MkDocs
+site/
+.cache/

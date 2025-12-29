@@ -1,0 +1,86 @@
+site_name: HyperView
+site_description: Open-source dataset curation with hyperbolic embeddings visualization
+site_author: HyperView Team
+site_url: https://hackerroomai.github.io/HyperView
+
+repo_name: HackerRoomAI/HyperView
+repo_url: https://github.com/HackerRoomAI/HyperView
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    # Palette toggle for light mode
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Palette toggle for dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.highlight
+    - search.suggest
+    - content.code.copy
+    - content.code.annotate
+
+extra_css:
+  - assets/custom.css
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/HackerRoomAI/HyperView
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/hyperview/
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Quick Start: getting-started/quickstart.md
+    - Python API: getting-started/api.md
+  - User Guide:
+    - Working with Datasets: guide/datasets.md
+    - Computing Embeddings: guide/embeddings.md
+    - Visualization: guide/visualization.md
+  - Concepts:
+    - Why Hyperbolic?: concepts/hyperbolic.md
+    - Architecture: concepts/architecture.md
+  - Interactive Demo: demo.md
+  - API Reference: api-reference.md
+  - Development:
+    - Contributing: development/contributing.md
+    - Frontend Development: development/frontend.md
