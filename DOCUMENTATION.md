@@ -101,19 +101,70 @@ This will:
 
 ## GitHub Pages Setup
 
-To enable GitHub Pages for this repository:
+To enable GitHub Pages for this repository, follow these steps:
 
-1. Go to repository **Settings** > **Pages**
-2. Under **Source**, select:
-   - **Source**: GitHub Actions (recommended)
-   - The workflow in `.github/workflows/docs.yml` will handle deployment
+### Option 1: Using GitHub Actions (Recommended)
 
-Alternatively, you can use the `gh-pages` branch:
-1. Select **Deploy from a branch**
-2. Choose **gh-pages** branch
-3. Select **/ (root)** folder
+1. Go to your repository on GitHub: https://github.com/HackerRoomAI/HyperView
 
-The site will be available at: **https://hackerroomai.github.io/HyperView**
+2. Navigate to **Settings** > **Pages** (in the left sidebar)
+
+3. Under **Build and deployment**, select:
+   - **Source**: `GitHub Actions`
+
+4. The workflow in `.github/workflows/docs.yml` will automatically:
+   - Build the documentation on every push to `main`
+   - Deploy to GitHub Pages
+   - Make the site available at: **https://hackerroomai.github.io/HyperView**
+
+5. To trigger the first deployment:
+   - Merge this PR to the `main` branch
+   - Or manually trigger the workflow from the **Actions** tab
+
+### Option 2: Using gh-pages Branch
+
+Alternatively, you can deploy manually:
+
+1. Run the following command locally:
+   ```bash
+   mkdocs gh-deploy
+   ```
+
+2. This will:
+   - Build the documentation
+   - Create/update the `gh-pages` branch
+   - Push to GitHub
+
+3. Go to **Settings** > **Pages** and select:
+   - **Source**: Deploy from a branch
+   - **Branch**: `gh-pages`
+   - **Folder**: `/ (root)`
+
+### Verifying Deployment
+
+After enabling GitHub Pages:
+
+1. Go to **Settings** > **Pages**
+2. You should see: "Your site is live at https://hackerroomai.github.io/HyperView"
+3. Click the link to view your documentation
+
+**Note:** The first deployment may take a few minutes.
+
+### Troubleshooting
+
+**Issue**: Pages not showing up after enabling
+
+**Solution**: 
+- Check the **Actions** tab for workflow runs
+- Ensure the workflow completed successfully
+- Wait a few minutes for GitHub Pages to update
+
+**Issue**: 404 errors on the site
+
+**Solution**:
+- Verify the workflow ran successfully
+- Check that the `site/` directory contains built files
+- Ensure the repository is public (or you have GitHub Pro for private repos)
 
 ## Custom Domain (Optional)
 
