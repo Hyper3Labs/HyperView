@@ -11,7 +11,7 @@ export async function GET(_req: Request, { params }: RouteContext<'/og/docs/[...
   if (!page) notFound();
 
   return new ImageResponse(
-    <DefaultImage title={page.data.title} description={page.data.description} site="My App" />,
+    <DefaultImage title={page.data.title} description={page.data.description} site="HyperView" />,
     {
       width: 1200,
       height: 630,
@@ -21,7 +21,6 @@ export async function GET(_req: Request, { params }: RouteContext<'/og/docs/[...
 
 export function generateStaticParams() {
   return source.getPages().map((page) => ({
-    lang: page.locale,
     slug: getPageImage(page).segments,
   }));
 }
