@@ -1,0 +1,135 @@
+---
+title: API Reference
+description: REST API and Python API reference
+---
+
+# API Reference
+
+HyperView provides both a REST API and Python API.
+
+## REST API
+
+The FastAPI server exposes endpoints at `http://127.0.0.1:5151`.
+
+### GET /api/dataset
+
+Get dataset metadata.
+
+**Response:**
+```json
+{
+  "name": "cifar100_demo",
+  "labels": ["apple", "aquarium_fish", ...],
+  "label_colors": {
+    "apple": "#FF6B6B",
+    ...
+  }
+}
+```
+
+### GET /api/samples
+
+Get paginated samples with thumbnails.
+
+**Query Parameters:**
+- `offset` (int): Starting index (default: 0)
+- `limit` (int): Number of samples (default: 100)
+
+**Response:**
+```json
+{
+  "samples": [
+    {
+      "id": "sample_0",
+      "label": "apple",
+      "image": "data:image/jpeg;base64,...",
+      "index": 0
+    }
+  ],
+  "total": 500,
+  "offset": 0,
+  "limit": 100
+}
+```
+
+### GET /api/embeddings
+
+Get 2D coordinates for all samples.
+
+**Response:**
+```json
+{
+  "euclidean": [[0.123, 0.456], ...],
+  "hyperbolic": [[0.098, 0.123], ...],
+  "sample_ids": ["sample_0", "sample_1", ...]
+}
+```
+
+## Python API
+
+### Dataset Class
+
+Main class for working with datasets.
+
+#### Constructor
+
+```python
+hv.Dataset(name: str, persist: bool = True)
+```
+
+Create or load a dataset.
+
+#### Methods
+
+**add_from_huggingface()**
+```python
+dataset.add_from_huggingface(
+    dataset_name: str,
+    split: str = "train",
+    image_key: str = "img",
+    label_key: str = "label",
+    max_samples: Optional[int] = None,
+)
+```
+
+**compute_embeddings()**
+```python
+dataset.compute_embeddings(
+    model: str = "clip",
+    show_progress: bool = True,
+)
+```
+
+**compute_visualization()**
+```python
+dataset.compute_visualization()
+```
+
+**save()**
+```python
+dataset.save(path: str)
+```
+
+**load() (Class Method)**
+```python
+dataset = hv.Dataset.load(path: str)
+```
+
+### Launch Function
+
+```python
+hv.launch(
+    dataset: Dataset,
+    port: int = 5151,
+    open_browser: bool = True
+)
+```
+
+Start the web server and open the visualization UI.
+
+## Next Steps
+
+<Cards>
+  <Card title="Quick Start" href="/docs/quick-start" description="Try the API" />
+  <Card title="Architecture" href="/docs/architecture" description="Learn the design" />
+</Cards>

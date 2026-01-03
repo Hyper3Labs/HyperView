@@ -1,0 +1,71 @@
+---
+title: Architecture
+description: System design and components
+---
+
+# Architecture
+
+HyperView follows a client-server architecture with a Python backend and React frontend.
+
+## System Overview
+
+```
+┌─────────────────┐      HTTP/REST      ┌──────────────────┐
+│   React UI      │ ◄─────────────────► │   FastAPI        │
+│   (Next.js)     │                      │   Backend        │
+└─────────────────┘                      └──────────────────┘
+                                                  │
+                                                  │
+                                         ┌────────▼────────┐
+                                         │  EmbedAnything  │
+                                         │  UMAP/Poincaré  │
+                                         └─────────────────┘
+```
+
+## Components
+
+### Backend (Python)
+
+- **FastAPI Server**: REST API for dataset operations
+- **EmbedAnything**: Fast CLIP-based image embeddings
+- **UMAP**: Dimensionality reduction for Euclidean space
+- **Hyperbolic Embeddings**: Poincaré disk projection
+
+### Frontend (React)
+
+- **Next.js 16**: React framework with App Router
+- **regl-scatterplot**: High-performance WebGL scatter plots
+- **Zustand**: State management
+- **Tailwind CSS**: Styling
+
+## Data Flow
+
+1. **Load**: Images loaded from HuggingFace or local directory
+2. **Embed**: CLIP embeddings computed for each image
+3. **Reduce**: High-dimensional embeddings projected to 2D
+4. **Visualize**: Interactive scatter plot + image grid
+5. **Select**: Bidirectional selection between views
+
+## Dual-Panel Interface
+
+### Image Grid Panel
+
+- Displays thumbnails of dataset samples
+- Click to select/deselect
+- Multi-select with Ctrl/Cmd + click
+- Selected images highlighted
+
+### Scatter Plot Panel
+
+- WebGL-powered for smooth performance
+- Toggle between Euclidean and Hyperbolic views
+- Color-coded by label/class
+- Click points to select corresponding images
+- Zoom and pan with mouse
+
+## Next Steps
+
+<Cards>
+  <Card title="API Reference" href="/docs/api" description="Explore the API" />
+  <Card title="Quick Start" href="/docs/quick-start" description="Try it yourself" />
+</Cards>

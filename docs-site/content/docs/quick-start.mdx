@@ -1,0 +1,70 @@
+---
+title: Quick Start
+description: Run your first HyperView visualization
+---
+
+# Quick Start
+
+Get HyperView up and running with a demo dataset in minutes.
+
+## Run the Demo
+
+The fastest way to see HyperView in action:
+
+```bash
+hyperview demo --samples 500
+```
+
+This command will:
+
+1. Load 500 samples from CIFAR-100
+2. Compute CLIP embeddings using EmbedAnything
+3. Generate Euclidean (UMAP) and Hyperbolic (Poincaré disk) visualizations
+4. Start the web server at **http://127.0.0.1:5151**
+
+Open your browser and explore the interactive visualization!
+
+## Using the Python API
+
+For more control, use the Python API:
+
+```python
+import hyperview as hv
+
+# Create a new dataset
+dataset = hv.Dataset("my_dataset")
+
+# Load from HuggingFace
+dataset.add_from_huggingface(
+    "uoft-cs/cifar100",
+    split="train",
+    max_samples=1000
+)
+
+# Compute embeddings and visualization
+dataset.compute_embeddings()
+dataset.compute_visualization()
+
+# Launch the UI
+hv.launch(dataset)  # Opens http://127.0.0.1:5151
+```
+
+## Save and Load Datasets
+
+Datasets can be saved for later use:
+
+```python
+# Save dataset with embeddings
+dataset.save("my_dataset.json")
+
+# Load later
+dataset = hv.Dataset.load("my_dataset.json")
+hv.launch(dataset)
+```
+
+## Next Steps
+
+<Cards>
+  <Card title="Architecture" href="/docs/architecture" description="Understand the system design" />
+  <Card title="API Reference" href="/docs/api" description="Explore the full API" />
+</Cards>

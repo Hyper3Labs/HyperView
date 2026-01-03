@@ -1,0 +1,45 @@
+---
+title: Welcome to HyperView
+description: Open-source dataset curation with hyperbolic embeddings visualization
+---
+
+# Welcome to HyperView
+
+**HyperView** is a powerful tool for exploring and curating datasets using hyperbolic embeddings. It provides an intuitive dual-panel interface that combines image grids with interactive scatter plots, supporting both Euclidean and hyperbolic visualizations.
+
+## Key Features
+
+<Cards>
+  <Card title="Dual-Panel UI" description="Image grid + scatter plot with bidirectional selection" />
+  <Card title="Euclidean/Hyperbolic Toggle" description="Switch between 2D UMAP and Poincaré disk" />
+  <Card title="HuggingFace Integration" description="Load datasets directly from HuggingFace Hub" />
+  <Card title="Fast Embeddings" description="CLIP-based embeddings via EmbedAnything" />
+</Cards>
+
+## Why Hyperbolic?
+
+Traditional Euclidean embeddings struggle with hierarchical data. In Euclidean space, volume grows polynomially (r^d), causing **Representation Collapse** where minority classes get crushed together.
+
+**Hyperbolic space** (Poincaré disk) has exponential volume growth (e^r), naturally preserving hierarchical structure and keeping rare classes distinct.
+
+## Quick Start
+
+Get started with HyperView in minutes:
+
+<Cards>
+  <Card title="Installation" href="/docs/installation" description="Install and set up HyperView" />
+  <Card title="Quick Start" href="/docs/quick-start" description="Run your first demo" />
+  <Card title="Architecture" href="/docs/architecture" description="Learn about the system design" />
+  <Card title="API Reference" href="/docs/api" description="Explore the API" />
+</Cards>
+
+## Tech Stack
+
+- **Backend**: Python, FastAPI, EmbedAnything, UMAP
+- **Frontend**: Next.js 16, React 18, regl-scatterplot, Zustand, Tailwind CSS
+- **Package Manager**: uv (Python), npm (frontend)
+
+## Open Source
+
+HyperView is MIT licensed and available on [GitHub](https://github.com/HackerRoomAI/HyperView).
+

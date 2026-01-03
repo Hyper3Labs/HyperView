@@ -1,0 +1,50 @@
+---
+title: Installation
+description: Install HyperView on your system
+---
+
+# Installation
+
+HyperView uses `uv` as its package manager for Python dependencies.
+
+## Prerequisites
+
+- Python 3.8 or higher
+- Node.js 16+ (for frontend development)
+- uv package manager
+
+## Quick Install
+
+Clone the repository and install dependencies:
+
+```bash
+git clone https://github.com/HackerRoomAI/HyperView.git
+cd HyperView
+
+# Create virtual environment
+uv venv .venv
+
+# Activate virtual environment
+# On macOS/Linux:
+source .venv/bin/activate
+# On Windows:
+.venv\Scripts\activate
+
+# Install HyperView
+uv pip install -e .
+```
+
+## Verify Installation
+
+Check that HyperView is installed correctly:
+
+```bash
+hyperview --version
+```
+
+## Next Steps
+
+<Cards>
+  <Card title="Quick Start" href="/docs/quick-start" description="Run your first demo" />
+  <Card title="Architecture" href="/docs/architecture" description="Learn about the system" />
+</Cards>
