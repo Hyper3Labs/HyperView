@@ -1,0 +1,42 @@
+# HyperView
+
+> Open-source dataset curation with hyperbolic embeddings visualization
+
+HyperView is a powerful tool for exploring and curating datasets using hyperbolic embeddings. It provides an intuitive dual-panel interface that combines image grids with interactive scatter plots.
+
+## Key Features
+
+- **Dual-Panel UI**: Image grid + scatter plot with bidirectional selection
+- **Euclidean/Hyperbolic Toggle**: Switch between 2D UMAP and Poincaré disk
+- **HuggingFace Integration**: Load datasets directly from HuggingFace Hub
+- **Fast Embeddings**: CLIP-based image embeddings via EmbedAnything
+- **FiftyOne-like API**: Familiar workflow for dataset exploration
+
+## Tech Stack
+
+- Backend: Python, FastAPI, EmbedAnything, UMAP
+- Frontend: Next.js 16, React 18, regl-scatterplot, Zustand, Tailwind CSS
+- Package Manager: uv (Python), npm (frontend)
+
+## Quick Start
+
+```bash
+git clone https://github.com/HackerRoomAI/HyperView.git
+cd HyperView
+uv venv .venv
+source .venv/bin/activate
+uv pip install -e .
+hyperview demo --samples 500
+```
+
+## Documentation
+
+Visit `/docs` for complete documentation including:
+- Getting Started guide
+- Architecture overview
+- Dataset management
+- API reference
+
+## License
+
+MIT License - see LICENSE for details

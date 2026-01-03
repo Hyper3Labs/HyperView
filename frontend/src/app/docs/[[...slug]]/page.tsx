@@ -13,10 +13,16 @@ export default async function Page(props: {
 
   return (
     <div className="prose prose-invert max-w-none">
-      <h1>{page.data.title}</h1>
-      {page.data.description && (
-        <p className="text-xl text-text-muted">{page.data.description}</p>
-      )}
+      <div className="not-prose mb-8">
+        <h1 className="text-4xl md:text-5xl font-bold text-text mb-4 leading-tight">
+          {page.data.title}
+        </h1>
+        {page.data.description && (
+          <p className="text-lg md:text-xl text-text-muted leading-relaxed">
+            {page.data.description}
+          </p>
+        )}
+      </div>
       <MDX />
     </div>
   );
