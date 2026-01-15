@@ -1,13 +1,9 @@
 """Abstract storage backend interface for HyperView."""
 
-from __future__ import annotations
-
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from hyperview.core.sample import Sample
+from hyperview.core.sample import Sample
 
 
 class StorageBackend(ABC):
@@ -97,6 +93,48 @@ class StorageBackend(ABC):
 
         Returns:
             Set of IDs that exist in storage.
+        """
+
+    @abstractmethod
+    def get_samples_by_ids(self, sample_ids: list[str]) -> list[Sample]:
+        """Retrieve multiple samples by ID.
+
+        Implementations should preserve the input order when possible.
+        Missing IDs should be skipped.
+        """
+
+    @abstractmethod
+    def get_visualization_embeddings(
+        self,
+    ) -> tuple[list[str], list[str | None], list[list[float]], list[list[float]]]:
+        """Return all 2D embedding coords needed by the frontend scatter.
+
+        Returns:
+            (ids, labels, euclidean_xy, hyperbolic_xy)
+
+        Notes:
+            This should avoid loading heavy fields (thumbnails, high-dim embeddings)
+            when the backend supports column projection.
+        """
+
+    @abstractmethod
+    def get_lasso_candidates_aabb(
+        self,
+        *,
+        space: str,
+        x_min: float,
+        x_max: float,
+        y_min: float,
+        y_max: float,
+    ) -> tuple[list[str], "np.ndarray"]:
+        """Return candidate (id, xy) rows within an axis-aligned bounding box.
+
+        Args:
+            space: Projection key (e.g. "euclidean", "hyperbolic").
+            x_min/x_max/y_min/y_max: Bounds in the same data space as /api/embeddings.
+
+        Returns:
+            (ids, coords_xy) where coords_xy has shape (n, 2) float32.
         """
 
     @abstractmethod

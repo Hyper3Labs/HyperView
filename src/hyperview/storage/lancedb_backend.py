@@ -1,15 +1,13 @@
 """LanceDB storage backend for HyperView."""
 
-from __future__ import annotations
-
 import json
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import lancedb
 import pyarrow as pa
 
+from hyperview.core.sample import Sample
 from hyperview.storage.backend import StorageBackend
 from hyperview.storage.config import StorageConfig, get_default_database_dir
 from hyperview.storage.schema import (
@@ -18,9 +16,6 @@ from hyperview.storage.schema import (
     dict_to_sample,
     sample_to_dict,
 )
-
-if TYPE_CHECKING:
-    from hyperview.core.sample import Sample
 
 
 class LanceDBBackend(StorageBackend):
@@ -413,6 +408,118 @@ class LanceDBBackend(StorageBackend):
                 existing.update(sid for sid in chunk if sid in self)
 
         return existing
+
+    def get_samples_by_ids(self, sample_ids: list[str]) -> list[Sample]:
+        """Retrieve multiple samples by ID.
+
+        Uses chunked `id IN (...)` queries to avoid per-ID round trips.
+        """
+        if self._table is None or not sample_ids:
+            return []
+
+        rows_by_id: dict[str, dict] = {}
+
+        def query_chunk(chunk: list[str]) -> None:
+            escaped = [sid.replace("'", "''") for sid in chunk]
+            id_list = "', '".join(escaped)
+            results = self._table.search().where(f"id IN ('{id_list}')").to_list()
+            for r in results:
+                rid = r.get("id")
+                if isinstance(rid, str):
+                    rows_by_id[rid] = r
+
+        chunk_size = 500
+        for i in range(0, len(sample_ids), chunk_size):
+            query_chunk(sample_ids[i : i + chunk_size])
+
+        out: list[Sample] = []
+        for sid in sample_ids:
+            row = rows_by_id.get(sid)
+            if row is not None:
+                out.append(dict_to_sample(row))
+        return out
+
+    def get_visualization_embeddings(
+        self,
+    ) -> tuple[list[str], list[str | None], list[list[float]], list[list[float]]]:
+        """Return ids/labels and both 2D projections for the scatter."""
+        if self._table is None:
+            return [], [], [], []
+
+        rows = (
+            self._table.search()
+            .select(["id", "label", "embedding_2d_euclidean", "embedding_2d_hyperbolic"])
+            .where("embedding_2d_euclidean IS NOT NULL AND embedding_2d_hyperbolic IS NOT NULL")
+            .to_list()
+        )
+
+        ids: list[str] = []
+        labels: list[str | None] = []
+        euclidean: list[list[float]] = []
+        hyperbolic: list[list[float]] = []
+
+        for r in rows:
+            eid = r.get("id")
+            e2 = r.get("embedding_2d_euclidean")
+            h2 = r.get("embedding_2d_hyperbolic")
+            if not isinstance(eid, str) or e2 is None or h2 is None:
+                continue
+            ids.append(eid)
+            labels.append(r.get("label"))
+            euclidean.append(list(e2))
+            hyperbolic.append(list(h2))
+
+        return ids, labels, euclidean, hyperbolic
+
+    def get_lasso_candidates_aabb(
+        self,
+        *,
+        space: str,
+        x_min: float,
+        x_max: float,
+        y_min: float,
+        y_max: float,
+    ) -> tuple[list[str], "np.ndarray"]:
+        """Return candidate (id, xy) rows within an AABB for a given projection."""
+        if self._table is None:
+            import numpy as np
+
+            return [], np.empty((0, 2), dtype=np.float32)
+
+        if space == "euclidean":
+            col = "embedding_2d_euclidean"
+        elif space == "hyperbolic":
+            col = "embedding_2d_hyperbolic"
+        else:
+            raise ValueError(f"Unknown space: {space}")
+
+        # Keep selection universe consistent with /api/embeddings: require both projections.
+        expr = (
+            "embedding_2d_euclidean IS NOT NULL AND "
+            "embedding_2d_hyperbolic IS NOT NULL AND "
+            f"{col}[1] >= {x_min} AND {col}[1] <= {x_max} AND "
+            f"{col}[2] >= {y_min} AND {col}[2] <= {y_max}"
+        )
+
+        rows = self._table.search().select(["id", col]).where(expr).to_list()
+
+        ids: list[str] = []
+        coords: list[list[float]] = []
+        for r in rows:
+            sid = r.get("id")
+            xy = r.get(col)
+            if not isinstance(sid, str) or xy is None:
+                continue
+            if len(xy) != 2:
+                continue
+            ids.append(sid)
+            coords.append([float(xy[0]), float(xy[1])])
+
+        import numpy as np
+
+        if not coords:
+            return [], np.empty((0, 2), dtype=np.float32)
+        return ids, np.asarray(coords, dtype=np.float32)
 
     def close(self) -> None:
         """Close the storage connection."""

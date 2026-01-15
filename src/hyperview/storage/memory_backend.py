@@ -1,16 +1,11 @@
 """In-memory storage backend for testing and development."""
 
-from __future__ import annotations
-
 from collections.abc import Callable, Iterator
-from typing import TYPE_CHECKING
 
 import numpy as np
 
+from hyperview.core.sample import Sample
 from hyperview.storage.backend import StorageBackend
-
-if TYPE_CHECKING:
-    from hyperview.core.sample import Sample
 
 
 class MemoryBackend(StorageBackend):
@@ -157,6 +152,68 @@ class MemoryBackend(StorageBackend):
     def get_existing_ids(self, sample_ids: list[str]) -> set[str]:
         """Return set of sample_ids that already exist in storage."""
         return {sid for sid in sample_ids if sid in self._samples}
+
+    def get_samples_by_ids(self, sample_ids: list[str]) -> list[Sample]:
+        """Retrieve multiple samples by ID."""
+        out: list[Sample] = []
+        for sid in sample_ids:
+            s = self._samples.get(sid)
+            if s is not None:
+                out.append(s)
+        return out
+
+    def get_visualization_embeddings(
+        self,
+    ) -> tuple[list[str], list[str | None], list[list[float]], list[list[float]]]:
+        """Return ids/labels and both 2D projections for the scatter."""
+        ids: list[str] = []
+        labels: list[str | None] = []
+        euclidean: list[list[float]] = []
+        hyperbolic: list[list[float]] = []
+
+        for s in self._samples.values():
+            if s.embedding_2d is None or s.embedding_2d_hyperbolic is None:
+                continue
+            ids.append(s.id)
+            labels.append(s.label)
+            euclidean.append(s.embedding_2d)
+            hyperbolic.append(s.embedding_2d_hyperbolic)
+
+        return ids, labels, euclidean, hyperbolic
+
+    def get_lasso_candidates_aabb(
+        self,
+        *,
+        space: str,
+        x_min: float,
+        x_max: float,
+        y_min: float,
+        y_max: float,
+    ) -> tuple[list[str], np.ndarray]:
+        """Return candidate (id, xy) rows within an AABB for a given projection."""
+        if space not in ("euclidean", "hyperbolic"):
+            raise ValueError(f"Unknown space: {space}")
+
+        ids: list[str] = []
+        coords: list[list[float]] = []
+
+        for s in self._samples.values():
+            # Keep selection universe consistent with /api/embeddings: require both projections.
+            if s.embedding_2d is None or s.embedding_2d_hyperbolic is None:
+                continue
+
+            xy = s.embedding_2d if space == "euclidean" else s.embedding_2d_hyperbolic
+            if xy is None or len(xy) != 2:
+                continue
+
+            x, y = float(xy[0]), float(xy[1])
+            if x < x_min or x > x_max or y < y_min or y > y_max:
+                continue
+
+            ids.append(s.id)
+            coords.append([x, y])
+
+        return ids, np.asarray(coords, dtype=np.float32)
 
     def close(self) -> None:
         """Close the storage connection (no-op for in-memory)."""
