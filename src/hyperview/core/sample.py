@@ -1,7 +1,5 @@
 """Sample class representing a single data point in a dataset."""
 
-from __future__ import annotations
-
 import base64
 import io
 from pathlib import Path
@@ -97,7 +95,7 @@ class SampleFromArray(Sample):
         image_array: np.ndarray,
         label: str | None = None,
         metadata: dict[str, Any] | None = None,
-    ) -> SampleFromArray:
+    ) -> "SampleFromArray":
         """Create a sample from a numpy array."""
         sample = cls(
             id=id,

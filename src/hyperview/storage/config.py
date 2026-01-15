@@ -1,7 +1,5 @@
 """Storage configuration for HyperView."""
 
-from __future__ import annotations
-
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -40,7 +38,7 @@ class StorageConfig:
     embedding_2d_dim: int = 2
 
     @classmethod
-    def default(cls, embedding_dim: int = 512) -> StorageConfig:
+    def default(cls, embedding_dim: int = 512) -> "StorageConfig":
         """Create a default configuration with optional custom embedding dimension."""
         return cls(
             database_dir=get_default_database_dir(),

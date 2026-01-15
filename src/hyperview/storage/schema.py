@@ -1,14 +1,11 @@
 """LanceDB schema definitions for HyperView samples."""
 
-from __future__ import annotations
-
 import json
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import pyarrow as pa
 
-if TYPE_CHECKING:
-    from hyperview.core.sample import Sample
+from hyperview.core.sample import Sample
 
 
 def create_sample_schema(embedding_dim: int = 512) -> pa.Schema:
@@ -90,8 +87,6 @@ def dict_to_sample(row: dict[str, Any]) -> Sample:
     Returns:
         Sample object.
     """
-    from hyperview.core.sample import Sample
-
     metadata = {}
     if row.get("metadata_json"):
         try:

@@ -1,22 +1,18 @@
 """Dataset class for managing collections of samples."""
 
-from __future__ import annotations
-
 import hashlib
 import json
 import uuid
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import numpy as np
 from datasets import load_dataset
 from PIL import Image
 
 from hyperview.core.sample import Sample, SampleFromArray
-
-if TYPE_CHECKING:
-    from hyperview.storage.backend import StorageBackend
+from hyperview.storage.backend import StorageBackend
 
 
 class Dataset:
@@ -598,7 +594,7 @@ class Dataset:
             json.dump(data, f)
 
     @classmethod
-    def load(cls, filepath: str, persist: bool = False) -> Dataset:
+    def load(cls, filepath: str, persist: bool = False) -> "Dataset":
         """Load dataset from a JSON file.
 
         Args:
@@ -637,7 +633,7 @@ class Dataset:
         return dataset
 
     @classmethod
-    def open(cls, name: str, embedding_dim: int = 512) -> Dataset:
+    def open(cls, name: str, embedding_dim: int = 512) -> "Dataset":
         """Open an existing persistent dataset.
 
         Args:
