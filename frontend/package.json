@@ -6,17 +6,24 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "eslint .",
     "export": "next build && cp -r out/* ../src/hyperview/server/static/"
   },
   "dependencies": {
+    "@radix-ui/react-slot": "^1.2.4",
+    "@radix-ui/react-toggle": "^1.1.10",
+    "@radix-ui/react-toggle-group": "^1.1.11",
     "@tanstack/react-virtual": "^3.10.9",
-    "@types/d3-scale": "^4.0.9",
-    "d3-scale": "^4.0.2",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.562.0",
     "next": "^16.0.7",
     "react": "18.3.1",
     "react-dom": "18.3.1",
-    "regl-scatterplot": "^1.9.2",
+    "react-resizable-panels": "^4.4.1",
+    "tailwind-merge": "^3.4.0",
+    "tailwindcss-animate": "^1.0.7",
+    "hyper-scatter": "file:../hyper-scatter",
     "zustand": "^5.0.1"
   },
   "devDependencies": {

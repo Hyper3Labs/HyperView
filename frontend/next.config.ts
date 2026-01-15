@@ -1,8 +1,12 @@
 import type { NextConfig } from "next";
+import path from "path";
 
 const nextConfig: NextConfig = {
   output: "export",
   trailingSlash: true,
+  // Needed for Turbopack to resolve local linked/file dependencies in a monorepo.
+  outputFileTracingRoot: path.join(__dirname, ".."),
+  transpilePackages: ["hyper-scatter"],
   images: {
     unoptimized: true,
   },

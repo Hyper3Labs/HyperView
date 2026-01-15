@@ -43,8 +43,8 @@ build/
 *.hf/
 .cache/
 
-# external repo
-viz_impl/
+# external repo (https://github.com/HackerRoomAI/hyper-scatter)
+hyper-scatter/
 
 # nohup
 nohup.out
