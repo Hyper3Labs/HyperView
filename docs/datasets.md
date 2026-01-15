@@ -12,7 +12,11 @@ dataset = hv.Dataset("my_dataset")
 dataset = hv.Dataset("my_dataset", persist=False)
 ```
 
-**Storage location:** `~/.hyperview/lancedb/` (configurable via `HYPERVIEW_DATABASE_DIR`)
+**Storage location:** `~/.hyperview/datasets/` (configurable via `HYPERVIEW_DATABASE_DIR`)
+
+Internally, each dataset is stored as two Lance tables (directories) inside that folder:
+- `hyperview_{dataset_name}.lance/` (samples)
+- `hyperview_{dataset_name}_meta.lance/` (metadata like label colors)
 
 ## Adding Samples
 
