@@ -1,7 +1,5 @@
 """Command-line interface for HyperView."""
 
-from __future__ import annotations
-
 import argparse
 import sys
 
@@ -30,6 +28,17 @@ def main():
         default=5151,
         help="Port to run the server on (default: 5151)",
     )
+    demo_parser.add_argument(
+        "--host",
+        type=str,
+        default="127.0.0.1",
+        help="Host to bind the server to (default: 127.0.0.1)",
+    )
+    demo_parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Do not open a browser window automatically",
+    )
 
     # Serve command
     serve_parser = subparsers.add_parser("serve", help="Serve a saved dataset")
@@ -40,32 +49,52 @@ def main():
         default=5151,
         help="Port to run the server on (default: 5151)",
     )
+    serve_parser.add_argument(
+        "--host",
+        type=str,
+        default="127.0.0.1",
+        help="Host to bind the server to (default: 127.0.0.1)",
+    )
+    serve_parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Do not open a browser window automatically",
+    )
 
     args = parser.parse_args()
 
     if args.command == "demo":
-        run_demo(args.samples, args.port)
+        run_demo(args.samples, args.port, host=args.host, open_browser=not args.no_browser)
     elif args.command == "serve":
-        serve_dataset(args.dataset, args.port)
+        serve_dataset(args.dataset, args.port, host=args.host, open_browser=not args.no_browser)
     else:
         parser.print_help()
         sys.exit(1)
 
 
-def run_demo(num_samples: int = 500, port: int = 5151):
+def run_demo(
+    num_samples: int = 500,
+    port: int = 5151,
+    *,
+    host: str = "127.0.0.1",
+    open_browser: bool = True,
+):
     """Run a demo with CIFAR-100 data."""
     print("Loading CIFAR-100 dataset...")
     dataset = Dataset("cifar100_demo")
 
     try:
-        count = dataset.add_from_huggingface(
+        added, skipped = dataset.add_from_huggingface(
             "uoft-cs/cifar100",
             split="train",
             image_key="img",
             label_key="fine_label",
             max_samples=num_samples,
         )
-        print(f"Loaded {count} samples")
+        if skipped > 0:
+            print(f"Loaded {added} samples ({skipped} already present)")
+        else:
+            print(f"Loaded {added} samples")
     except Exception as e:
         print(f"Failed to load HuggingFace dataset: {e}")
         print("Please ensure 'datasets' is installed: pip install datasets")
@@ -79,10 +108,16 @@ def run_demo(num_samples: int = 500, port: int = 5151):
     dataset.compute_visualization()
     print("Visualizations ready")
 
-    launch(dataset, port=port)
+    launch(dataset, port=port, host=host, open_browser=open_browser)
 
 
-def serve_dataset(filepath: str, port: int = 5151):
+def serve_dataset(
+    filepath: str,
+    port: int = 5151,
+    *,
+    host: str = "127.0.0.1",
+    open_browser: bool = True,
+):
     """Serve a saved dataset."""
     from hyperview import Dataset, launch
 
@@ -90,7 +125,7 @@ def serve_dataset(filepath: str, port: int = 5151):
     dataset = Dataset.load(filepath)
     print(f"Loaded {len(dataset)} samples")
 
-    launch(dataset, port=port)
+    launch(dataset, port=port, host=host, open_browser=open_browser)
 
 
 if __name__ == "__main__":
