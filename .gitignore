@@ -42,3 +42,16 @@ build/
 # Data cache
 *.hf/
 .cache/
+
+# external repo
+viz_impl/
+
+# nohup
+nohup.out
+frontend/nohup.out
+
+# Local logs / tool artifacts
+.hyperview-*.log
+.hyperview-*.pid
+.playwright-mcp/
+frontend/tsconfig.tsbuildinfo
