@@ -23,7 +23,7 @@
     "react-resizable-panels": "^4.4.1",
     "tailwind-merge": "^3.4.0",
     "tailwindcss-animate": "^1.0.7",
-    "hyper-scatter": "file:../hyper-scatter",
+    "hyper-scatter": "^0.1.0",
     "zustand": "^5.0.1"
   },
   "devDependencies": {
