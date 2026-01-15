@@ -2,50 +2,82 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --background: #0a0a0b;
-  --surface: #18181b;
-  --surface-light: #27272a;
-  --border: #3f3f46;
-  --primary: #4F46E5;
-  --primary-light: #818CF8;
-  --text: #fafafa;
-  --text-muted: #a1a1aa;
+@layer base {
+  :root {
+    /* Rerun-inspired dark theme as default (dark-first) */
+    --background: 215 28% 7%;       /* #0d1117 */
+    --foreground: 213 27% 92%;      /* #e6edf3 */
+    
+    --card: 215 21% 11%;            /* #161b22 */
+    --card-foreground: 213 27% 92%;
+    
+    --popover: 215 21% 11%;
+    --popover-foreground: 213 27% 92%;
+    
+    --primary: 212 100% 67%;        /* #58a6ff */
+    --primary-foreground: 215 28% 7%;
+    
+    --secondary: 215 14% 17%;       /* #21262d */
+    --secondary-foreground: 213 27% 92%;
+    
+    --muted: 215 14% 17%;
+    --muted-foreground: 213 12% 58%;  /* #8b949e */
+    
+    --accent: 215 14% 17%;
+    --accent-foreground: 213 27% 92%;
+    
+    --destructive: 0 62% 50%;
+    --destructive-foreground: 0 0% 98%;
+    
+    --border: 215 14% 22%;          /* #30363d */
+    --input: 215 14% 22%;
+    --ring: 212 100% 67%;
+    
+    --radius: 0.375rem;
+    
+    /* Custom Rerun-specific tokens */
+    --surface: 215 21% 11%;         /* #161b22 */
+    --surface-light: 215 14% 17%;   /* #21262d */
+    --surface-elevated: 215 14% 22%; /* #30363d */
+    --border-subtle: 215 14% 17%;
+    --text: 213 27% 92%;            /* #e6edf3 */
+    --text-muted: 213 12% 58%;      /* #8b949e */
+    --text-subtle: 215 10% 46%;     /* #6e7681 */
+    --accent-cyan: 176 60% 53%;     /* #39d3cc */
+    --accent-orange: 27 86% 59%;    /* #f0883e */
+  }
 }
 
-* {
-  box-sizing: border-box;
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+      'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
 }
 
-body {
-  background-color: var(--background);
-  color: var(--text);
-  margin: 0;
-  padding: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-/* Custom scrollbar */
+/* Custom scrollbar - Rerun style */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--surface);
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 4px;
+  background: hsl(var(--surface-elevated));
+  border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #4d4d4d;
+  background: hsl(var(--text-subtle));
 }
 
 /* Hide scrollbar for some elements */
