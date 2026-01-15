@@ -1,17 +1,18 @@
 """FastAPI application for HyperView."""
 
-from __future__ import annotations
-
 import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import numpy as np
+
 from hyperview.core.dataset import Dataset
+from hyperview.core.selection import points_in_polygon
 
 # Global dataset reference (set by launch())
 _current_dataset: Dataset | None = None
@@ -22,6 +23,17 @@ class SelectionRequest(BaseModel):
     """Request model for selection sync."""
 
     sample_ids: list[str]
+
+
+class LassoSelectionRequest(BaseModel):
+    """Request model for lasso selection queries."""
+
+    space: str
+    # Polygon vertices in data space, interleaved: [x0, y0, x1, y1, ...]
+    polygon: list[float]
+    offset: int = 0
+    limit: int = 100
+    include_thumbnails: bool = True
 
 
 class SampleResponse(BaseModel):
@@ -171,15 +183,9 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
         if _current_dataset is None:
             raise HTTPException(status_code=404, detail="No dataset loaded")
 
-        samples = []
-        for sample_id in request.sample_ids:
-            try:
-                sample = _current_dataset[sample_id]
-                samples.append(sample.to_api_dict(include_thumbnail=True))
-            except KeyError:
-                continue
+        samples = _current_dataset._storage.get_samples_by_ids(request.sample_ids)
 
-        return {"samples": samples}
+        return {"samples": [s.to_api_dict(include_thumbnail=True) for s in samples]}
 
     @app.get("/api/embeddings", response_model=EmbeddingsResponse)
     async def get_embeddings():
@@ -187,22 +193,17 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
         if _current_dataset is None:
             raise HTTPException(status_code=404, detail="No dataset loaded")
 
-        samples = [
-            s
-            for s in _current_dataset.samples
-            if s.embedding_2d is not None and s.embedding_2d_hyperbolic is not None
-        ]
-
-        if not samples:
+        ids, labels, euclidean, hyperbolic = _current_dataset._storage.get_visualization_embeddings()
+        if not ids:
             raise HTTPException(
                 status_code=400, detail="No embeddings computed. Call compute_visualization() first."
             )
 
         return EmbeddingsResponse(
-            ids=[s.id for s in samples],
-            labels=[s.label for s in samples],
-            euclidean=[s.embedding_2d for s in samples],
-            hyperbolic=[s.embedding_2d_hyperbolic for s in samples],
+            ids=ids,
+            labels=labels,
+            euclidean=euclidean,
+            hyperbolic=hyperbolic,
             label_colors=_current_dataset.get_label_colors(),
         )
 
@@ -210,6 +211,78 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
     async def sync_selection(request: SelectionRequest):
         """Sync selection state (for future use)."""
         return {"status": "ok", "selected": request.sample_ids}
+
+    @app.post("/api/selection/lasso")
+    async def lasso_selection(request: LassoSelectionRequest):
+        """Compute a lasso selection over the current embeddings.
+
+        Returns a total selected count and a paginated page of selected samples.
+
+        Notes:
+        - Selection is performed in *data space* (the same coordinates returned
+          by /api/embeddings).
+        - For now we use an in-memory scan with a tight AABB prefilter.
+        """
+        if _current_dataset is None:
+            raise HTTPException(status_code=404, detail="No dataset loaded")
+
+        if request.offset < 0:
+            raise HTTPException(status_code=400, detail="offset must be >= 0")
+        if request.limit < 1 or request.limit > 2000:
+            raise HTTPException(status_code=400, detail="limit must be between 1 and 2000")
+
+        if len(request.polygon) < 6 or len(request.polygon) % 2 != 0:
+            raise HTTPException(
+                status_code=400,
+                detail="polygon must be an even-length list with at least 3 vertices",
+            )
+
+        poly = np.asarray(request.polygon, dtype=np.float32).reshape((-1, 2))
+        if not np.all(np.isfinite(poly)):
+            raise HTTPException(status_code=400, detail="polygon must contain only finite numbers")
+
+        # Tight AABB prefilter.
+        x_min = float(np.min(poly[:, 0]))
+        x_max = float(np.max(poly[:, 0]))
+        y_min = float(np.min(poly[:, 1]))
+        y_max = float(np.max(poly[:, 1]))
+
+
+        try:
+            candidate_ids, candidate_coords = _current_dataset._storage.get_lasso_candidates_aabb(
+                space=request.space,
+                x_min=x_min,
+                x_max=x_max,
+                y_min=y_min,
+                y_max=y_max,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        if candidate_coords.size == 0:
+            return {"total": 0, "offset": request.offset, "limit": request.limit, "sample_ids": [], "samples": []}
+
+        inside_mask = points_in_polygon(candidate_coords, poly)
+        if not np.any(inside_mask):
+            return {"total": 0, "offset": request.offset, "limit": request.limit, "sample_ids": [], "samples": []}
+
+        selected_ids = [candidate_ids[i] for i in np.flatnonzero(inside_mask)]
+        total = len(selected_ids)
+
+        start = int(request.offset)
+        end = int(request.offset + request.limit)
+        sample_ids = selected_ids[start:end]
+
+        samples = _current_dataset._storage.get_samples_by_ids(sample_ids)
+        sample_dicts = [s.to_api_dict(include_thumbnail=request.include_thumbnails) for s in samples]
+
+        return {
+            "total": total,
+            "offset": request.offset,
+            "limit": request.limit,
+            "sample_ids": sample_ids,
+            "samples": sample_dicts,
+        }
 
     @app.get("/api/search/similar/{sample_id}", response_model=SimilaritySearchResponse)
     async def search_similar(
