@@ -1,8 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useMemo, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useStore } from "@/store/useStore";
+import { Panel, PanelFooter } from "./Panel";
+import { PanelHeader } from "./PanelHeader";
+import { GridIcon, CheckIcon } from "./icons";
 import type { Sample } from "@/types";
 
 interface ImageGridProps {
@@ -17,7 +20,15 @@ const MIN_ITEM_WIDTH = 200; // Minimum width for each image
 
 export function ImageGrid({ samples, onLoadMore, hasMore }: ImageGridProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const { selectedIds, isLassoSelection, toggleSelection, addToSelection, setHoveredId, hoveredId } = useStore();
+  const {
+    selectedIds,
+    isLassoSelection,
+    lassoTotal,
+    toggleSelection,
+    addToSelection,
+    setHoveredId,
+    hoveredId,
+  } = useStore();
   const [columnCount, setColumnCount] = useState(4);
 
   // Calculate column count based on container width
@@ -43,28 +54,17 @@ export function ImageGrid({ samples, onLoadMore, hasMore }: ImageGridProps) {
     return () => resizeObserver.disconnect();
   }, []);
 
-  // Filter samples based on selection
-  const filteredSamples = useMemo(() => {
-    // Only filter (hide non-selected) when it's a lasso selection
-    if (isLassoSelection && selectedIds.size > 0) {
-      return samples.filter((sample) => selectedIds.has(sample.id));
-    }
-
-    // Otherwise, show all samples
-    return samples;
-  }, [samples, selectedIds, isLassoSelection]);
-
-  // Calculate rows from filtered samples
-  const rowCount = Math.ceil(filteredSamples.length / columnCount);
+  // In lasso mode, `samples` is already the selected-page list.
+  const rowCount = Math.ceil(samples.length / columnCount);
 
   // Create stable row keys based on the sample IDs in each row
   const getRowKey = useCallback(
     (index: number) => {
       const startIndex = index * columnCount;
-      const rowSamples = filteredSamples.slice(startIndex, startIndex + columnCount);
+      const rowSamples = samples.slice(startIndex, startIndex + columnCount);
       return rowSamples.map((s) => s.id).join("-") || `row-${index}`;
     },
-    [filteredSamples, columnCount]
+    [samples, columnCount]
   );
 
   const virtualizer = useVirtualizer({
@@ -127,24 +127,18 @@ export function ImageGrid({ samples, onLoadMore, hasMore }: ImageGridProps) {
   const items = virtualizer.getVirtualItems();
 
   return (
-    <div className="flex flex-col h-full bg-surface overflow-hidden">
-      {/* Header */}
-      <div className="h-12 flex items-center justify-between px-4 border-b border-border bg-surface-light">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium">Samples</span>
-          <span className="text-xs text-text-muted">
-            {selectedIds.size > 0 ? `${selectedIds.size} selected` : `${filteredSamples.length} items`}
-          </span>
-        </div>
-        {selectedIds.size > 0 && (
-          <button
-            onClick={() => useStore.getState().setSelectedIds(new Set())}
-            className="px-2 py-1 text-xs text-text-muted hover:text-text hover:bg-surface rounded transition-colors"
-          >
-            Clear Selection
-          </button>
-        )}
-      </div>
+    <Panel>
+      <PanelHeader
+        icon={<GridIcon />}
+        title="Samples"
+        subtitle={
+          isLassoSelection
+            ? `${lassoTotal} selected`
+            : selectedIds.size > 0
+              ? `${selectedIds.size} selected`
+              : `${samples.length} items`
+        }
+      />
 
       {/* Grid Container */}
       <div ref={containerRef} className="flex-1 overflow-auto p-2">
@@ -158,7 +152,7 @@ export function ImageGrid({ samples, onLoadMore, hasMore }: ImageGridProps) {
           {items.map((virtualRow) => {
             const rowIndex = virtualRow.index;
             const startIndex = rowIndex * columnCount;
-            const rowSamples = filteredSamples.slice(startIndex, startIndex + columnCount);
+            const rowSamples = samples.slice(startIndex, startIndex + columnCount);
 
             return (
               <div
@@ -174,7 +168,7 @@ export function ImageGrid({ samples, onLoadMore, hasMore }: ImageGridProps) {
                 className="flex gap-2 px-1"
               >
                 {rowSamples.map((sample) => {
-                  const isSelected = selectedIds.has(sample.id);
+                  const isSelected = isLassoSelection ? true : selectedIds.has(sample.id);
                   const isHovered = hoveredId === sample.id;
 
                   return (
@@ -184,14 +178,15 @@ export function ImageGrid({ samples, onLoadMore, hasMore }: ImageGridProps) {
                         relative flex-1 rounded-md overflow-hidden cursor-pointer
                         transition-all duration-150 ease-out
                         ${isSelected ? "ring-2 ring-primary" : ""}
-                        ${isHovered ? "ring-2 ring-primary-light" : ""}
+                        ${isHovered ? "ring-2 ring-primary/50" : ""}
                       `}
                       onClick={(e) => handleClick(sample, e)}
                       onMouseEnter={() => setHoveredId(sample.id)}
                       onMouseLeave={() => setHoveredId(null)}
                     >
-                      {/* Image */}
+                      {/* Image - using native img for base64 data (Next Image doesn't support this) */}
                       {sample.thumbnail ? (
+                        // eslint-disable-next-line @next/next/no-img-element
                         <img
                           src={`data:image/jpeg;base64,${sample.thumbnail}`}
                           alt={sample.filename}
@@ -199,8 +194,8 @@ export function ImageGrid({ samples, onLoadMore, hasMore }: ImageGridProps) {
                           loading="lazy"
                         />
                       ) : (
-                        <div className="w-full h-full bg-surface-light flex items-center justify-center">
-                          <span className="text-text-muted text-xs">No image</span>
+                        <div className="w-full h-full bg-muted flex items-center justify-center">
+                          <span className="text-muted-foreground text-xs">No image</span>
                         </div>
                       )}
 
@@ -222,19 +217,7 @@ export function ImageGrid({ samples, onLoadMore, hasMore }: ImageGridProps) {
                       {/* Selection indicator */}
                       {isSelected && (
                         <div className="absolute top-1 right-1 w-5 h-5 rounded-full bg-primary flex items-center justify-center">
-                          <svg
-                            className="w-3 h-3 text-white"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={3}
-                              d="M5 13l4 4L19 7"
-                            />
-                          </svg>
+                          <CheckIcon />
                         </div>
                       )}
                     </div>
@@ -250,12 +233,9 @@ export function ImageGrid({ samples, onLoadMore, hasMore }: ImageGridProps) {
         </div>
       </div>
 
-      {/* Instructions footer */}
-      <div className="px-3 py-2 text-xs text-text-muted border-t border-border bg-surface-light">
-        <span className="opacity-70">
-          Click to select • Cmd/Ctrl+click to multi-select • Shift+click for range
-        </span>
-      </div>
-    </div>
+      <PanelFooter>
+        <span>Click • ⌘+click multi • ⇧+click range</span>
+      </PanelFooter>
+    </Panel>
   );
 }

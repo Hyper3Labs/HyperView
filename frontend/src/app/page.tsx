@@ -1,9 +1,20 @@
 "use client";
 
-import { useEffect, useCallback, useState, useRef } from "react";
+import { useEffect, useCallback, useState } from "react";
+import {
+  ResizablePanelGroup,
+  ResizablePanel,
+  ResizableHandle,
+} from "@/components/ui/resizable";
 import { Header, ImageGrid, ScatterPanel } from "@/components";
 import { useStore } from "@/store/useStore";
-import { fetchDataset, fetchSamples, fetchEmbeddings, fetchSamplesBatch } from "@/lib/api";
+import {
+  fetchDataset,
+  fetchSamples,
+  fetchEmbeddings,
+  fetchSamplesBatch,
+  fetchLassoSelection,
+} from "@/lib/api";
 
 const SAMPLES_PER_PAGE = 100;
 
@@ -21,14 +32,18 @@ export default function Home() {
     error,
     setError,
     selectedIds,
+    isLassoSelection,
+    lassoQuery,
+    lassoSamples,
+    lassoTotal,
+    lassoIsLoading,
+    setLassoResults,
   } = useStore();
 
   const [loadingMore, setLoadingMore] = useState(false);
-  const [leftPanelWidth, setLeftPanelWidth] = useState(50); // percentage
-  const containerRef = useRef<HTMLDivElement>(null);
-  const isDraggingRef = useRef(false);
 
-  // Initial data load
+  // Initial data load - runs once on mount
+  // Store setters are stable and don't need to be in deps
   useEffect(() => {
     const loadData = async () => {
       setIsLoading(true);
@@ -54,11 +69,13 @@ export default function Home() {
     };
 
     loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Fetch selected samples that aren't already loaded
   useEffect(() => {
     const fetchSelectedSamples = async () => {
+      if (isLassoSelection) return;
       if (selectedIds.size === 0) return;
 
       // Find IDs that are selected but not in our samples array
@@ -76,11 +93,67 @@ export default function Home() {
     };
 
     fetchSelectedSamples();
-  }, [selectedIds, samples, addSamplesIfMissing]);
+  }, [selectedIds, samples, addSamplesIfMissing, isLassoSelection]);
+
+  // Fetch initial lasso selection page when a new lasso query begins.
+  useEffect(() => {
+    if (!isLassoSelection) return;
+    if (!lassoQuery) return;
+    if (!lassoIsLoading) return;
+
+    const abort = new AbortController();
+
+    const run = async () => {
+      try {
+        const res = await fetchLassoSelection({
+          viewMode: lassoQuery.viewMode,
+          polygon: lassoQuery.polygon,
+          offset: 0,
+          limit: SAMPLES_PER_PAGE,
+          signal: abort.signal,
+        });
+        if (abort.signal.aborted) return;
+        setLassoResults(res.samples, res.total, false);
+      } catch (err) {
+        // Ignore cancellation.
+        if ((err as any)?.name === "AbortError") return;
+        console.error("Failed to fetch lasso selection:", err);
+        setLassoResults([], 0, false);
+      }
+    };
+
+    run();
+
+    return () => abort.abort();
+  }, [isLassoSelection, lassoIsLoading, lassoQuery, setLassoResults]);
 
   // Load more samples
   const loadMore = useCallback(async () => {
-    if (loadingMore || samples.length >= totalSamples) return;
+    if (loadingMore) return;
+
+    if (isLassoSelection) {
+      if (!lassoQuery) return;
+      if (lassoIsLoading) return;
+      if (!lassoIsLoading && lassoSamples.length >= lassoTotal) return;
+
+      setLoadingMore(true);
+      try {
+        const res = await fetchLassoSelection({
+          viewMode: lassoQuery.viewMode,
+          polygon: lassoQuery.polygon,
+          offset: lassoSamples.length,
+          limit: SAMPLES_PER_PAGE,
+        });
+        setLassoResults(res.samples, res.total, true);
+      } catch (err) {
+        console.error("Failed to load more lasso samples:", err);
+      } finally {
+        setLoadingMore(false);
+      }
+      return;
+    }
+
+    if (samples.length >= totalSamples) return;
 
     setLoadingMore(true);
     try {
@@ -91,42 +164,22 @@ export default function Home() {
     } finally {
       setLoadingMore(false);
     }
-  }, [samples.length, totalSamples, loadingMore, appendSamples]);
+  }, [
+    loadingMore,
+    appendSamples,
+    isLassoSelection,
+    lassoIsLoading,
+    lassoQuery,
+    lassoSamples.length,
+    lassoTotal,
+    samples.length,
+    totalSamples,
+    setLassoResults,
+  ]);
 
-  // Handle resizing
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!isDraggingRef.current || !containerRef.current) return;
-
-      const container = containerRef.current;
-      const containerRect = container.getBoundingClientRect();
-      const newWidth = ((e.clientX - containerRect.left) / containerRect.width) * 100;
-
-      // Constrain between 20% and 80%
-      const clampedWidth = Math.min(Math.max(newWidth, 20), 80);
-      setLeftPanelWidth(clampedWidth);
-    };
-
-    const handleMouseUp = () => {
-      isDraggingRef.current = false;
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-    };
-
-    document.addEventListener("mousemove", handleMouseMove);
-    document.addEventListener("mouseup", handleMouseUp);
-
-    return () => {
-      document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, []);
-
-  const handleMouseDown = () => {
-    isDraggingRef.current = true;
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-  };
+  const displayedSamples = isLassoSelection ? lassoSamples : samples;
+  const displayedTotal = isLassoSelection ? lassoTotal : totalSamples;
+  const displayedHasMore = displayedSamples.length < displayedTotal;
 
   if (error) {
     return (
@@ -134,9 +187,9 @@ export default function Home() {
         <Header />
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center">
-            <div className="text-red-500 text-lg mb-2">Error</div>
-            <div className="text-text-muted">{error}</div>
-            <p className="text-text-muted mt-4 text-sm">
+            <div className="text-destructive text-lg mb-2">Error</div>
+            <div className="text-muted-foreground">{error}</div>
+            <p className="text-muted-foreground mt-4 text-sm">
               Make sure the HyperView backend is running on port 5151.
             </p>
           </div>
@@ -152,7 +205,7 @@ export default function Home() {
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center">
             <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-            <div className="text-text-muted">Loading dataset...</div>
+            <div className="text-muted-foreground">Loading dataset...</div>
           </div>
         </div>
       </div>
@@ -163,33 +216,42 @@ export default function Home() {
     <div className="h-screen flex flex-col bg-background">
       <Header />
 
-      {/* Main content - two panels */}
-      <div ref={containerRef} className="flex-1 flex overflow-hidden">
-        {/* Left panel - Image Grid */}
-        <div
-          className="min-w-0"
-          style={{ width: `calc(${leftPanelWidth}% - 2px)` }}
+      {/* Main content - resizable panels with Rerun-style spacing */}
+      <div className="flex-1 p-1 bg-background overflow-hidden">
+        <ResizablePanelGroup
+          orientation="horizontal"
+          id="hyperview-main-layout"
+          className="h-full"
         >
-          <ImageGrid
-            samples={samples}
-            onLoadMore={loadMore}
-            hasMore={samples.length < totalSamples}
-          />
-        </div>
+          {/* Left panel - Image Grid */}
+          <ResizablePanel
+            id="image-grid"
+            defaultSize={50}
+            minSize={20}
+            maxSize={80}
+            className="min-w-0"
+          >
+            <ImageGrid
+              samples={displayedSamples}
+              onLoadMore={loadMore}
+              hasMore={displayedHasMore}
+            />
+          </ResizablePanel>
 
-        {/* Resizable divider */}
-        <div
-          className="w-1 bg-border hover:bg-primary cursor-col-resize flex-shrink-0 transition-colors"
-          onMouseDown={handleMouseDown}
-        />
+          {/* Resizable handle with grip */}
+          <ResizableHandle withHandle />
 
-        {/* Right panel - Scatter Plot */}
-        <div
-          className="min-w-0"
-          style={{ width: `calc(${100 - leftPanelWidth}% - 2px)` }}
-        >
-          <ScatterPanel />
-        </div>
+          {/* Right panel - Scatter Plot */}
+          <ResizablePanel
+            id="scatter-panel"
+            defaultSize={50}
+            minSize={20}
+            maxSize={80}
+            className="min-w-0"
+          >
+            <ScatterPanel />
+          </ResizablePanel>
+        </ResizablePanelGroup>
       </div>
     </div>
   );

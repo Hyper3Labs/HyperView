@@ -24,10 +24,19 @@ interface AppState {
   // Selection
   selectedIds: Set<string>;
   isLassoSelection: boolean;
-  setSelectedIds: (ids: Set<string>, isLasso?: boolean) => void;
+  setSelectedIds: (ids: Set<string>) => void;
   toggleSelection: (id: string) => void;
   addToSelection: (ids: string[]) => void;
   clearSelection: () => void;
+
+  // Lasso selection (server-driven)
+  lassoQuery: { viewMode: ViewMode; polygon: number[] } | null;
+  lassoSamples: Sample[];
+  lassoTotal: number;
+  lassoIsLoading: boolean;
+  beginLassoSelection: (query: { viewMode: ViewMode; polygon: number[] }) => void;
+  setLassoResults: (samples: Sample[], total: number, append?: boolean) => void;
+  clearLassoSelection: () => void;
 
   // Hover state
   hoveredId: string | null;
@@ -40,14 +49,6 @@ interface AppState {
   // Error state
   error: string | null;
   setError: (error: string | null) => void;
-
-  // Label filter
-  filterLabel: string | null;
-  setFilterLabel: (label: string | null) => void;
-
-  // UI state
-  showLabels: boolean;
-  setShowLabels: (show: boolean) => void;
 }
 
 export const useStore = create<AppState>((set, get) => ({
@@ -82,7 +83,15 @@ export const useStore = create<AppState>((set, get) => ({
   // Selection
   selectedIds: new Set<string>(),
   isLassoSelection: false,
-  setSelectedIds: (ids, isLasso = false) => set({ selectedIds: ids, isLassoSelection: isLasso }),
+  setSelectedIds: (ids) =>
+    set({
+      selectedIds: ids,
+      isLassoSelection: false,
+      lassoQuery: null,
+      lassoSamples: [],
+      lassoTotal: 0,
+      lassoIsLoading: false,
+    }),
   toggleSelection: (id) =>
     set((state) => {
       const newSet = new Set(state.selectedIds);
@@ -92,16 +101,67 @@ export const useStore = create<AppState>((set, get) => ({
         newSet.add(id);
       }
       // Manual selection from image grid, not lasso
-      return { selectedIds: newSet, isLassoSelection: false };
+      return {
+        selectedIds: newSet,
+        isLassoSelection: false,
+        lassoQuery: null,
+        lassoSamples: [],
+        lassoTotal: 0,
+        lassoIsLoading: false,
+      };
     }),
   addToSelection: (ids) =>
     set((state) => {
       const newSet = new Set(state.selectedIds);
       ids.forEach((id) => newSet.add(id));
       // Manual selection from image grid, not lasso
-      return { selectedIds: newSet, isLassoSelection: false };
+      return {
+        selectedIds: newSet,
+        isLassoSelection: false,
+        lassoQuery: null,
+        lassoSamples: [],
+        lassoTotal: 0,
+        lassoIsLoading: false,
+      };
     }),
-  clearSelection: () => set({ selectedIds: new Set<string>(), isLassoSelection: false }),
+  clearSelection: () =>
+    set({
+      selectedIds: new Set<string>(),
+      isLassoSelection: false,
+      lassoQuery: null,
+      lassoSamples: [],
+      lassoTotal: 0,
+      lassoIsLoading: false,
+    }),
+
+  // Lasso selection (server-driven)
+  lassoQuery: null,
+  lassoSamples: [],
+  lassoTotal: 0,
+  lassoIsLoading: false,
+  beginLassoSelection: (query) =>
+    set({
+      isLassoSelection: true,
+      selectedIds: new Set<string>(),
+      lassoQuery: query,
+      lassoSamples: [],
+      lassoTotal: 0,
+      lassoIsLoading: true,
+    }),
+  setLassoResults: (samples, total, append = false) =>
+    set((state) => ({
+      lassoSamples: append ? [...state.lassoSamples, ...samples] : samples,
+      lassoTotal: total,
+      lassoIsLoading: false,
+    })),
+  clearLassoSelection: () =>
+    set({
+      isLassoSelection: false,
+      lassoQuery: null,
+      lassoSamples: [],
+      lassoTotal: 0,
+      lassoIsLoading: false,
+    }),
 
   // Hover
   hoveredId: null,
@@ -114,12 +174,4 @@ export const useStore = create<AppState>((set, get) => ({
   // Error
   error: null,
   setError: (error) => set({ error }),
-
-  // Label filter
-  filterLabel: null,
-  setFilterLabel: (label) => set({ filterLabel: label }),
-
-  // UI state
-  showLabels: true,
-  setShowLabels: (show) => set({ showLabels: show }),
 }));

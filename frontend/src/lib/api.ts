@@ -1,4 +1,4 @@
-import type { DatasetInfo, EmbeddingsData, Sample, SamplesResponse } from "@/types";
+import type { DatasetInfo, EmbeddingsData, Sample, SamplesResponse, ViewMode } from "@/types";
 
 const API_BASE = process.env.NODE_ENV === "development" ? "http://127.0.0.1:5151" : "";
 
@@ -59,4 +59,40 @@ export async function fetchSamplesBatch(sampleIds: string[]): Promise<Sample[]> 
   }
   const data = await res.json();
   return data.samples;
+}
+
+export interface LassoSelectionResponse {
+  total: number;
+  offset: number;
+  limit: number;
+  sample_ids: string[];
+  samples: Sample[];
+}
+
+export async function fetchLassoSelection(args: {
+  viewMode: ViewMode;
+  polygon: ArrayLike<number>;
+  offset?: number;
+  limit?: number;
+  includeThumbnails?: boolean;
+  signal?: AbortSignal;
+}): Promise<LassoSelectionResponse> {
+  const res = await fetch(`${API_BASE}/api/selection/lasso`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      space: args.viewMode === "euclidean" ? "euclidean" : "hyperbolic",
+      polygon: Array.from(args.polygon),
+      offset: args.offset ?? 0,
+      limit: args.limit ?? 100,
+      include_thumbnails: args.includeThumbnails ?? true,
+    }),
+    signal: args.signal,
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to fetch lasso selection: ${res.statusText}`);
+  }
+  return res.json();
 }
