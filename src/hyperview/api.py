@@ -1,7 +1,5 @@
 """Public API for HyperView."""
 
-from __future__ import annotations
-
 import json
 import socket
 import threading
@@ -59,7 +57,9 @@ class Session:
         self.dataset = dataset
         self.host = host
         self.port = port
-        self.url = f"http://{host}:{port}"
+        # Prefer a browser-connectable host for user-facing URLs.
+        # When binding to 0.0.0.0, users should connect via 127.0.0.1 locally.
+        self.url = f"http://{self._connect_host}:{port}"
         self._server_thread: threading.Thread | None = None
         self._server: uvicorn.Server | None = None
         self._startup_error: BaseException | None = None
@@ -147,8 +147,6 @@ class Session:
                 f"a non-HyperView app (port={self.port})."
             )
 
-            time.sleep(0.05)
-
         raise TimeoutError(
             "HyperView server did not become ready in time "
             f"(port={self.port}). Last error: {last_health_error}"
@@ -209,17 +207,28 @@ def launch(
 
     if notebook:
         session.start(background=True)
-        url = f"http://{host}:{port}"
-        print(f"\nHyperView is running at {url}")
+        print(f"\nHyperView is running at {session.url}")
         session.show(height=height)
     else:
+        session.start(background=True)
+        print("   Press Ctrl+C to stop.\n")
+        print(f"\nHyperView is running at {session.url}")
+
         if open_browser:
             session.open_browser()
 
-        print("   Press Ctrl+C to stop.\n")
-        url = f"http://{host}:{port}"
-        print(f"\nHyperView is running at {url}")
-        session.start(background=False)
+        try:
+            while True:
+                # Keep the main thread alive so the daemon server thread can run.
+                time.sleep(0.25)
+                if session._server_thread is not None and not session._server_thread.is_alive():
+                    raise RuntimeError("HyperView server stopped unexpectedly.")
+        except KeyboardInterrupt:
+            pass
+        finally:
+            session.stop()
+            if session._server_thread is not None:
+                session._server_thread.join(timeout=2.0)
 
     return session
 
