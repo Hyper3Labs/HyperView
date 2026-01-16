@@ -23,28 +23,28 @@ classifiers = [
 ]
 
 dependencies = [
-    "fastapi>=0.115.0",
-    "uvicorn[standard]>=0.32.0",
-    "embed-anything>=0.3.0",
-    "numpy>=1.26.0",
-    "umap-learn>=0.5.6",
-    "pillow>=10.0.0",
-    "pydantic>=2.0.0",
-    "aiofiles>=24.0.0",
-    "datasets>=3.0.0",
-    "lancedb>=0.5.0",
-    "pyarrow>=14.0.0",
+    "fastapi>=0.128.0",
+    "uvicorn[standard]>=0.40.0",
+    "embed-anything>=0.7.0",
+    "numpy>=1.26.4,<2.4",
+    "umap-learn>=0.5.11",
+    "pillow>=12.1.0",
+    "pydantic>=2.12.5",
+    "aiofiles>=25.1.0",
+    "datasets>=4.5.0",
+    "lancedb>=0.26.1",
+    "pyarrow>=22.0.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0.0",
-    "pytest-asyncio>=0.24.0",
-    "httpx>=0.27.0",
-    "ruff>=0.7.0",
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.3.0",
+    "httpx>=0.28.1",
+    "ruff>=0.14.13",
 ]
 hyperbolic = [
-    "torch>=2.0.0",
+    "torch>=2.9.1",
     "geoopt>=0.5.1",
 ]
 
