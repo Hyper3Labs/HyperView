@@ -242,7 +242,8 @@ def launch(
         >>> hv.launch(dataset)
     """
     if notebook is None:
-        notebook = _is_notebook()
+        # Colab is always a notebook environment, even if _is_notebook() fails to detect it
+        notebook = _is_notebook() or _is_colab()
 
     if _is_colab() and host == "127.0.0.1":
         # Colab port forwarding/proxying is most reliable when the server binds
