@@ -11,10 +11,7 @@ This smoke test creates a tiny synthetic dataset with random images + precompute
 ### 1) Install HyperView
 
 ```bash
-!pip install -q uv
-!git clone https://github.com/HackerRoomAI/HyperView.git
-%cd HyperView
-!uv pip install -e .
+!pip install -q git+https://github.com/HackerRoomAI/HyperView.git
 ```
 
 ### 2) Create a synthetic dataset and launch
