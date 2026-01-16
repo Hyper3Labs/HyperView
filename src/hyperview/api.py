@@ -214,7 +214,7 @@ class Session:
 
 def launch(
     dataset: Dataset,
-    port: int = 5151,
+    port: int = 6262,
     host: str = "127.0.0.1",
     open_browser: bool = True,
     notebook: bool | None = None,

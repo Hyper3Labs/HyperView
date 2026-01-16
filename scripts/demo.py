@@ -22,7 +22,7 @@ def main():
         "--samples", type=int, default=50000, help="Number of samples to load (default: 50000)"
     )
     parser.add_argument(
-        "--port", type=int, default=5151, help="Port to run server on (default: 5151)"
+        "--port", type=int, default=6262, help="Port to run server on (default: 6262)"
     )
     parser.add_argument(
         "--no-browser", action="store_true", help="Don't open browser automatically"
