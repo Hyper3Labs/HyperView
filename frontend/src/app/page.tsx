@@ -190,7 +190,7 @@ export default function Home() {
             <div className="text-destructive text-lg mb-2">Error</div>
             <div className="text-muted-foreground">{error}</div>
             <p className="text-muted-foreground mt-4 text-sm">
-              Make sure the HyperView backend is running on port 5151.
+              Make sure the HyperView backend is running on port 6262.
             </p>
           </div>
         </div>

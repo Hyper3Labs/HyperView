@@ -25,8 +25,8 @@ def main():
     demo_parser.add_argument(
         "--port",
         type=int,
-        default=5151,
-        help="Port to run the server on (default: 5151)",
+        default=6262,
+        help="Port to run the server on (default: 6262)",
     )
     demo_parser.add_argument(
         "--host",
@@ -46,8 +46,8 @@ def main():
     serve_parser.add_argument(
         "--port",
         type=int,
-        default=5151,
-        help="Port to run the server on (default: 5151)",
+        default=6262,
+        help="Port to run the server on (default: 6262)",
     )
     serve_parser.add_argument(
         "--host",
@@ -74,7 +74,7 @@ def main():
 
 def run_demo(
     num_samples: int = 500,
-    port: int = 5151,
+    port: int = 6262,
     *,
     host: str = "127.0.0.1",
     open_browser: bool = True,
@@ -113,7 +113,7 @@ def run_demo(
 
 def serve_dataset(
     filepath: str,
-    port: int = 5151,
+    port: int = 6262,
     *,
     host: str = "127.0.0.1",
     open_browser: bool = True,

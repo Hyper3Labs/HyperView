@@ -1,6 +1,6 @@
 import type { DatasetInfo, EmbeddingsData, Sample, SamplesResponse, ViewMode } from "@/types";
 
-const API_BASE = process.env.NODE_ENV === "development" ? "http://127.0.0.1:5151" : "";
+const API_BASE = process.env.NODE_ENV === "development" ? "http://127.0.0.1:6262" : "";
 
 export async function fetchDataset(): Promise<DatasetInfo> {
   const res = await fetch(`${API_BASE}/api/dataset`);

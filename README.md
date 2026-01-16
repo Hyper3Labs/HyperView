@@ -46,7 +46,7 @@ This will:
 1. Load 500 samples from CIFAR-100
 2. Compute CLIP embeddings
 3. Generate Euclidean and Hyperbolic visualizations
-4. Start the server at **http://127.0.0.1:5151**
+4. Start the server at **http://127.0.0.1:6262**
 
 ### Python API
 
@@ -71,8 +71,12 @@ dataset.compute_embeddings()
 dataset.compute_visualization()
 
 # Launch the UI
-hv.launch(dataset)  # Opens http://127.0.0.1:5151
+hv.launch(dataset)  # Opens http://127.0.0.1:6262
 ```
+
+### Google Colab
+
+See [docs/colab.md](docs/colab.md) for a fast Colab smoke test and notebook-friendly launch behavior.
 
 ### Save and Load Datasets
 
@@ -127,7 +131,7 @@ source .venv/bin/activate
 # Run the demo script in no-browser mode
 python scripts/demo.py --samples 200 --no-browser
 ```
-This runs the API on **http://127.0.0.1:5151**
+This runs the API on **http://127.0.0.1:6262**
 
 **Terminal 2 - Start the frontend dev server:**
 ```bash
@@ -137,7 +141,7 @@ npm run dev
 ```
 This runs the frontend on **http://localhost:3000** with hot reloading.
 
-Open **http://localhost:3000** in your browser. The frontend automatically proxies `/api/*` requests to the backend at port 5151 (configured in `next.config.ts`).
+Open **http://localhost:3000** in your browser. The frontend automatically proxies `/api/*` requests to the backend at port 6262 (configured in `next.config.ts`).
 
 Now you can:
 - Edit React components and see changes instantly
