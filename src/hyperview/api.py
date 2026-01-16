@@ -1,6 +1,7 @@
 """Public API for HyperView."""
 
 import json
+import os
 import socket
 import threading
 import time
@@ -158,11 +159,51 @@ class Session:
             self._server.should_exit = True
 
     def show(self, height: int = 800):
-        """Display the visualizer in a notebook."""
-        try:
-            from IPython.display import IFrame, display
+        """Display the visualizer in a notebook.
 
-            display(IFrame(self.url, width="100%", height=height))
+        In Google Colab, notebook kernels cannot be accessed via localhost.
+        Colab exposes kernel ports through a proxy URL (see
+        `google.colab.kernel.proxyPort`). This renders a link to the proxied URL
+        that opens in a new tab.
+
+        In other notebook environments, it renders a clickable link to the local
+        URL and a best-effort JavaScript auto-open.
+        """
+        if _is_colab():
+            try:
+                from google.colab.output import eval_js  # type: ignore[import-not-found]
+                from IPython.display import HTML, display
+
+                proxy_url = eval_js(f"google.colab.kernel.proxyPort({self.port})")
+                app_url = str(proxy_url).rstrip("/") + "/"
+
+                display(
+                    HTML(
+                        "<p>HyperView is running in Colab. "
+                        f"<a href=\"{app_url}\" target=\"_blank\" rel=\"noopener noreferrer\">"
+                        "Open HyperView in a new tab</a>.</p>"
+                    )
+                )
+                display(HTML(f"<p style=\"font-size:12px;color:#666;\">{app_url}</p>"))
+                return
+            except Exception:
+                # Fall through to the generic notebook behavior.
+                pass
+
+        # Default: open in a new browser tab (works well for Jupyter).
+        try:
+            from IPython.display import HTML, Javascript, display
+
+            display(
+                HTML(
+                    "<p>HyperView is running. "
+                    f"<a href=\"{self.url}\" target=\"_blank\" rel=\"noopener\">Open in a new tab</a>."
+                    "</p>"
+                )
+            )
+
+            # Best-effort auto-open. Some browsers may block popups.
+            display(Javascript(f'window.open("{self.url}", "_blank");'))
         except ImportError:
             print(f"IPython not installed. Please visit {self.url} in your browser.")
 
@@ -203,11 +244,22 @@ def launch(
     if notebook is None:
         notebook = _is_notebook()
 
+    if _is_colab() and host == "127.0.0.1":
+        # Colab port forwarding/proxying is most reliable when the server binds
+        # to all interfaces.
+        host = "0.0.0.0"
+
     session = Session(dataset, host, port)
 
     if notebook:
         session.start(background=True)
-        print(f"\nHyperView is running at {session.url}")
+        if _is_colab():
+            print(
+                f"\nHyperView is running (Colab, port={session.port}). "
+                "Use the link below to open it."
+            )
+        else:
+            print(f"\nHyperView is running at {session.url}. Opening a new tab...")
         session.show(height=height)
     else:
         session.start(background=True)
@@ -247,3 +299,15 @@ def _is_notebook() -> bool:
             return False  # Other type (?)
     except (ImportError, NameError):
         return False  # Probably standard Python interpreter
+
+
+def _is_colab() -> bool:
+    """Check if running inside a Google Colab notebook runtime."""
+    if os.environ.get("COLAB_RELEASE_TAG"):
+        return True
+    try:
+        import google.colab  # type: ignore[import-not-found]
+
+        return True
+    except Exception:
+        return False

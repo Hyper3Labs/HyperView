@@ -74,6 +74,10 @@ dataset.compute_visualization()
 hv.launch(dataset)  # Opens http://127.0.0.1:5151
 ```
 
+### Google Colab
+
+See [docs/colab.md](docs/colab.md) for a fast Colab smoke test and notebook-friendly launch behavior.
+
 ### Save and Load Datasets
 
 ```python
