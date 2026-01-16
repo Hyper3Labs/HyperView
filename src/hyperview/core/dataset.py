@@ -5,7 +5,7 @@ import json
 import uuid
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from datasets import load_dataset
@@ -160,14 +160,14 @@ class Dataset:
         Returns:
             Number of images added.
         """
-        directory = Path(directory)
-        if not directory.exists():
-            raise ValueError(f"Directory does not exist: {directory}")
+        directory_path = Path(directory)
+        if not directory_path.exists():
+            raise ValueError(f"Directory does not exist: {directory_path}")
 
         samples = []
         pattern = "**/*" if recursive else "*"
 
-        for path in directory.glob(pattern):
+        for path in directory_path.glob(pattern):
             if path.is_file() and path.suffix.lower() in extensions:
                 label = path.parent.name if label_from_folder else None
                 sample_id = hashlib.md5(str(path).encode()).hexdigest()[:12]
@@ -234,7 +234,7 @@ class Dataset:
         except ImportError:
             tqdm = None
 
-        ds = load_dataset(dataset_name, split=split)
+        ds = cast(Any, load_dataset(dataset_name, split=split))
 
         # Get label names if available
         label_names = None
@@ -274,7 +274,7 @@ class Dataset:
             if isinstance(image, Image.Image):
                 pil_image = image
             else:
-                pil_image = Image.fromarray(image)
+                pil_image = Image.fromarray(np.asarray(image))
 
             # Get label
             label = None
@@ -370,23 +370,36 @@ class Dataset:
 
     def compute_embeddings(
         self,
-        model: str = "clip",
+        model: str = "openai/clip-vit-base-patch32",
         batch_size: int = 32,
         show_progress: bool = True,
     ) -> None:
         """Compute embeddings for samples that don't have them yet.
 
         Args:
-            model: Embedding model to use.
+            model: EmbedAnything HuggingFace `model_id` to use.
             batch_size: Batch size for processing.
             show_progress: Whether to show progress bar.
         """
         from hyperview.embeddings.compute import EmbeddingComputer
 
+        all_samples = self._storage.get_all_samples()
+
         if self._embedding_computer is None:
             self._embedding_computer = EmbeddingComputer(model=model)
+        else:
+            existing_model_id = getattr(self._embedding_computer, "model_id", None)
+            if existing_model_id and existing_model_id != model:
+                if any(s.embedding is not None for s in all_samples):
+                    raise ValueError(
+                        "Embeddings already exist for this dataset, but "
+                        "compute_embeddings() was called with a different model_id. "
+                        f"Existing model_id={existing_model_id!r}, requested model_id={model!r}. "
+                        "Create a new Dataset or clear existing embeddings before recomputing."
+                    )
 
-        all_samples = self._storage.get_all_samples()
+                # No existing embeddings yet: allow switching models.
+                self._embedding_computer = EmbeddingComputer(model=model)
         # Only compute for samples without embeddings
         samples_needing_embeddings = [s for s in all_samples if s.embedding is None]
 

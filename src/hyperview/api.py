@@ -128,7 +128,7 @@ class Session:
 
             try:
                 health = _read_health(self._health_url, timeout_s=0.2)
-            except (URLError, Exception) as exc:
+            except (URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as exc:
                 last_health_error = exc
                 time.sleep(0.05)
                 continue
@@ -290,16 +290,11 @@ def _is_notebook() -> bool:
     """Check if running in a notebook environment."""
     try:
         from IPython import get_ipython
+    except ImportError:
+        return False
 
-        shell = get_ipython().__class__.__name__
-        if shell == "ZMQInteractiveShell":
-            return True  # Jupyter notebook or qtconsole
-        elif shell == "TerminalInteractiveShell":
-            return False  # Terminal running IPython
-        else:
-            return False  # Other type (?)
-    except (ImportError, NameError):
-        return False  # Probably standard Python interpreter
+    shell = get_ipython()
+    return shell is not None and shell.__class__.__name__ == "ZMQInteractiveShell"
 
 
 def _is_colab() -> bool:

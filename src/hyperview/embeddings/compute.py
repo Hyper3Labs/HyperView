@@ -1,101 +1,96 @@
-"""Embedding computation using EmbedAnything."""
+"""Image embedding computation via EmbedAnything.
+
+This module is intentionally minimal:
+- Callers pass a HuggingFace `model_id` string.
+- We delegate model loading + inference to EmbedAnything.
+
+"""
 
 import os
 import tempfile
+from pathlib import Path
+from typing import Any
 
-import embed_anything
 import numpy as np
-from embed_anything import EmbeddingModel, WhichModel
+from embed_anything import EmbeddingModel
 from PIL import Image
-
-try:
-    from tqdm import tqdm
-except ImportError:
-    tqdm = None
 
 from hyperview.core.sample import Sample
 
+tqdm: Any | None = None
+try:
+    from tqdm import tqdm as tqdm_impl
+except ImportError:  # pragma: no cover
+    pass
+else:
+    tqdm = tqdm_impl
+
 
 class EmbeddingComputer:
-    """Compute embeddings for images using EmbedAnything."""
+    """Compute embeddings for image samples using EmbedAnything."""
 
-    def __init__(self, model: str = "clip"):
+    def __init__(self, model: str):
         """Initialize the embedding computer.
 
         Args:
-            model: Model to use for embeddings.
+            model: HuggingFace model ID to load via EmbedAnything.
         """
-        self.model_name = model
-        self._model = None
-        self._initialized = False
+        if not model or not model.strip():
+            raise ValueError("model must be a non-empty HuggingFace model_id")
 
-    def _init_model(self) -> None:
-        """Lazily initialize the model."""
-        if self._initialized:
-            return
-        # Use CLIP model by default
-        self._model = EmbeddingModel.from_pretrained_hf(
-            WhichModel.Clip,
-            model_id="openai/clip-vit-base-patch32",
-        )
-        self._embed_anything = embed_anything
-        self._initialized = True
+        self.model_id = model
+        self._model: EmbeddingModel | None = None
+
+    def _get_model(self) -> EmbeddingModel:
+        """Lazily initialize the EmbedAnything model."""
+        if self._model is None:
+            self._model = EmbeddingModel.from_pretrained_hf(model_id=self.model_id)
+        return self._model
 
     def _load_rgb_image(self, sample: Sample) -> Image.Image:
-        """Load an image and ensure it is in RGB mode."""
-        image = sample.load_image()
-        if image.mode != "RGB":
-            image = image.convert("RGB")
-        return image
+        """Load an image and normalize it to RGB.
 
-    def _embed_with_model(
-        self,
-        sample: Sample,
-        image: Image.Image | None = None,
-    ) -> np.ndarray | None:
-        """Attempt to embed a sample via embed_anything, handling memory-backed files."""
-        path = sample.filepath
-        temp_path: str | None = None
+        For file-backed samples, returns an in-memory copy and closes the file
+        handle immediately to avoid leaking descriptors during batch processing.
+        """
+        with sample.load_image() as img:
+            img.load()
+            if img.mode != "RGB":
+                return img.convert("RGB")
+            return img.copy()
 
+    def _embed_file(self, file_path: str) -> np.ndarray:
+        model = self._get_model()
+        result = model.embed_file(file_path)
+
+        if not result:
+            raise RuntimeError(f"EmbedAnything returned no embeddings for: {file_path}")
+        if len(result) != 1:
+            raise RuntimeError(
+                f"Expected 1 embedding for an image file, got {len(result)}: {file_path}"
+            )
+
+        return np.asarray(result[0].embedding, dtype=np.float32)
+
+    def _embed_pil_image(self, image: Image.Image) -> np.ndarray:
+        temp_fd, temp_path = tempfile.mkstemp(suffix=".png")
+        os.close(temp_fd)
         try:
-            if path.startswith("memory://"):
-                if image is None:
-                    image = self._load_rgb_image(sample)
-                temp_file = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-                image.save(temp_file, format="PNG")
-                temp_file.close()
-                temp_path = temp_file.name
-                path = temp_path
-
-            result = self._embed_anything.embed_file(path, embedder=self._model)
-            if result:
-                return np.array(result[0].embedding, dtype=np.float32)
+            image.save(temp_path, format="PNG")
+            return self._embed_file(temp_path)
         finally:
-            if temp_path and os.path.exists(temp_path):
-                os.remove(temp_path)
-
-        return None
+            Path(temp_path).unlink(missing_ok=True)
 
     def compute_single(self, sample: Sample) -> np.ndarray:
-        """Compute embedding for a single sample.
-
-        Args:
-            sample: Sample to compute embedding for.
-
-        Returns:
-            Embedding as numpy array.
-        """
-        self._init_model()
-
-        pil_image = None
-        if sample.filepath.startswith("memory://"):
-            pil_image = self._load_rgb_image(sample)
-
-        embedding = self._embed_with_model(sample, image=pil_image)
-        if embedding is None:
-            raise RuntimeError(f"Failed to compute embedding for sample {sample.id}")
-
-        return embedding
+        """Compute embedding for a single sample."""
+        try:
+            image = self._load_rgb_image(sample)
+            return self._embed_pil_image(image)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to compute embedding for sample {sample.id} "
+                f"(filepath={sample.filepath}, model_id={self.model_id})"
+            ) from exc
 
     def compute_batch(
         self,
@@ -103,46 +98,21 @@ class EmbeddingComputer:
         batch_size: int = 32,
         show_progress: bool = True,
     ) -> list[np.ndarray]:
-        """Compute embeddings for a batch of samples.
+        """Compute embeddings for a list of samples."""
+        if batch_size <= 0:
+            raise ValueError("batch_size must be > 0")
 
-        Args:
-            samples: List of samples to compute embeddings for.
-            batch_size: Number of samples to process at once.
-            show_progress: Whether to show a progress bar.
+        # Prime model init so download errors happen before work starts.
+        self._get_model()
 
-        Returns:
-            List of embeddings as numpy arrays.
-        """
-        self._init_model()
-
-        embeddings = []
         total = len(samples)
+        iterator = samples
 
-        if show_progress and tqdm is not None:
-            iterator = tqdm(range(0, total, batch_size), desc="Computing embeddings")
-        else:
-            if show_progress and tqdm is None:
+        if show_progress:
+            if tqdm is not None:
+                iterator = tqdm(samples, total=total, desc="Computing embeddings")
+            else:
                 print(f"Computing embeddings for {total} samples...")
-            iterator = range(0, total, batch_size)
 
-        for i in iterator:
-            batch = samples[i : i + batch_size]
-            batch_embeddings = []
-
-            for sample in batch:
-                pil_image = None
-                if sample.filepath.startswith("memory://"):
-                    pil_image = self._load_rgb_image(sample)
-
-                embedding = self._embed_with_model(sample, image=pil_image)
-                if embedding is None:
-                    raise RuntimeError(
-                        f"Failed to compute embedding for sample {sample.id}"
-                    )
-
-                batch_embeddings.append(embedding)
-
-            embeddings.extend(batch_embeddings)
-
-        return embeddings
+        return [self.compute_single(sample) for sample in iterator]
 
