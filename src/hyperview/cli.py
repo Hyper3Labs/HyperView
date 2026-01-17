@@ -39,6 +39,14 @@ def main():
         action="store_true",
         help="Do not open a browser window automatically",
     )
+    demo_parser.add_argument(
+        "--reuse-server",
+        action="store_true",
+        help=(
+            "If the port is already serving HyperView, attach instead of failing. "
+            "For safety, this only attaches when the existing server reports the same dataset name."
+        ),
+    )
 
     # Serve command
     serve_parser = subparsers.add_parser("serve", help="Serve a saved dataset")
@@ -60,13 +68,33 @@ def main():
         action="store_true",
         help="Do not open a browser window automatically",
     )
+    serve_parser.add_argument(
+        "--reuse-server",
+        action="store_true",
+        help=(
+            "If the port is already serving HyperView, attach instead of failing. "
+            "For safety, this only attaches when the existing server reports the same dataset name."
+        ),
+    )
 
     args = parser.parse_args()
 
     if args.command == "demo":
-        run_demo(args.samples, args.port, host=args.host, open_browser=not args.no_browser)
+        run_demo(
+            args.samples,
+            args.port,
+            host=args.host,
+            open_browser=not args.no_browser,
+            reuse_server=args.reuse_server,
+        )
     elif args.command == "serve":
-        serve_dataset(args.dataset, args.port, host=args.host, open_browser=not args.no_browser)
+        serve_dataset(
+            args.dataset,
+            args.port,
+            host=args.host,
+            open_browser=not args.no_browser,
+            reuse_server=args.reuse_server,
+        )
     else:
         parser.print_help()
         sys.exit(1)
@@ -78,6 +106,7 @@ def run_demo(
     *,
     host: str = "127.0.0.1",
     open_browser: bool = True,
+    reuse_server: bool = False,
 ):
     """Run a demo with CIFAR-100 data."""
     print("Loading CIFAR-100 dataset...")
@@ -108,7 +137,7 @@ def run_demo(
     dataset.compute_visualization()
     print("Visualizations ready")
 
-    launch(dataset, port=port, host=host, open_browser=open_browser)
+    launch(dataset, port=port, host=host, open_browser=open_browser, reuse_server=reuse_server)
 
 
 def serve_dataset(
@@ -117,6 +146,7 @@ def serve_dataset(
     *,
     host: str = "127.0.0.1",
     open_browser: bool = True,
+    reuse_server: bool = False,
 ):
     """Serve a saved dataset."""
     from hyperview import Dataset, launch
@@ -125,7 +155,7 @@ def serve_dataset(
     dataset = Dataset.load(filepath)
     print(f"Loaded {len(dataset)} samples")
 
-    launch(dataset, port=port, host=host, open_browser=open_browser)
+    launch(dataset, port=port, host=host, open_browser=open_browser, reuse_server=reuse_server)
 
 
 if __name__ == "__main__":

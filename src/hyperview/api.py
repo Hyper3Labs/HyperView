@@ -23,6 +23,8 @@ __all__ = ["Dataset", "launch", "Session"]
 class _HealthResponse:
     name: str | None
     session_id: str | None
+    dataset: str | None
+    pid: int | None
 
 
 def _can_connect(host: str, port: int, timeout_s: float) -> bool:
@@ -48,6 +50,8 @@ def _read_health(url: str, timeout_s: float) -> _HealthResponse:
     return _HealthResponse(
         name=data.get("name"),
         session_id=data.get("session_id"),
+        dataset=data.get("dataset"),
+        pid=data.get("pid") if isinstance(data.get("pid"), int) else None,
     )
 
 
@@ -219,8 +223,14 @@ def launch(
     open_browser: bool = True,
     notebook: bool | None = None,
     height: int = 800,
+    reuse_server: bool = False,
 ) -> Session:
     """Launch the HyperView visualization server.
+
+    Note:
+        HyperView's UI requires 2D projections (`embedding_2d` and
+        `embedding_2d_hyperbolic`). If they are missing but high-dimensional
+        embeddings exist, this function will compute them automatically.
 
     Args:
         dataset: The dataset to visualize.
@@ -229,6 +239,10 @@ def launch(
         open_browser: Whether to open a browser window.
         notebook: Whether to display in a notebook. If None, auto-detects.
         height: Height of the iframe in the notebook.
+        reuse_server: If True, and the requested port is already serving HyperView,
+            attach to the existing server instead of starting a new one. For safety,
+            this will only attach when the existing server reports the same dataset
+            name (via `/__hyperview__/health`).
 
     Returns:
         A Session object.
@@ -249,6 +263,81 @@ def launch(
         # Colab port forwarding/proxying is most reliable when the server binds
         # to all interfaces.
         host = "0.0.0.0"
+
+    # Preflight: avoid doing expensive work if the port is already in use.
+    # If it's already serving HyperView and reuse_server=True, we can safely attach.
+    connect_host = "127.0.0.1" if host == "0.0.0.0" else host
+    health_url = f"http://{connect_host}:{port}/__hyperview__/health"
+
+    if _can_connect(connect_host, port, timeout_s=0.2):
+        health = _try_read_health(health_url, timeout_s=0.2)
+        if health is not None and health.name == "hyperview":
+            if not reuse_server:
+                raise RuntimeError(
+                    "HyperView failed to start because the port is already serving "
+                    f"HyperView (port={port}, dataset={health.dataset}, "
+                    f"session_id={health.session_id}, pid={health.pid}). "
+                    "Choose a different port, stop the existing server, or pass "
+                    "reuse_server=True to attach."
+                )
+
+            if health.dataset is not None and health.dataset != dataset.name:
+                raise RuntimeError(
+                    "HyperView refused to attach to the existing server because it is "
+                    f"serving a different dataset (port={port}, dataset={health.dataset}). "
+                    f"Requested dataset={dataset.name}. Stop the existing server or "
+                    "choose a different port."
+                )
+
+            session = Session(dataset, host, port)
+            if health.session_id is not None:
+                session.session_id = health.session_id
+
+            if notebook:
+                if _is_colab():
+                    print(
+                        f"\nHyperView is already running (Colab, port={session.port}). "
+                        "Use the link below to open it."
+                    )
+                else:
+                    print(
+                        f"\nHyperView is already running at {session.url} (port={session.port}). "
+                        "Opening a new tab..."
+                    )
+                session.show(height=height)
+            else:
+                print(f"\nHyperView is already running at {session.url} (port={session.port}).")
+                if open_browser:
+                    session.open_browser()
+
+            return session
+
+        raise RuntimeError(
+            "HyperView failed to start because the port is already in use "
+            f"by a non-HyperView service (port={port}). Choose a different "
+            "port or stop the process listening on that port."
+        )
+
+    # The frontend requires both euclidean + hyperbolic 2D coords from /api/embeddings.
+    # If they're missing, proactively compute them so the first page load doesn't fail.
+    try:
+        ids, _, _, _ = dataset._storage.get_visualization_embeddings()
+    except Exception:
+        ids = []
+
+    if not ids:
+        has_any_embeddings = any(s.embedding is not None for s in dataset._storage)
+        if has_any_embeddings:
+            print("No 2D projections found. Computing visualizations...")
+            dataset.compute_visualization()
+        else:
+            raise ValueError(
+                "HyperView launch requires 2D projections for the UI. "
+                "No projections were found, and no high-dimensional embeddings are present. "
+                "Call `dataset.compute_embeddings()` and `dataset.compute_visualization()` "
+                "before `hv.launch()`, or prepopulate both `embedding_2d` and "
+                "`embedding_2d_hyperbolic` on your samples."
+            )
 
     session = Session(dataset, host, port)
 
