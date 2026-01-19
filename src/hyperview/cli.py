@@ -134,7 +134,9 @@ def run_demo(
     print("Embeddings computed")
 
     print("Computing visualizations...")
-    dataset.compute_visualization()
+    # Compute both euclidean and poincare layouts
+    dataset.compute_visualization(geometry="euclidean")
+    dataset.compute_visualization(geometry="poincare")
     print("Visualizations ready")
 
     launch(dataset, port=port, host=host, open_browser=open_browser, reuse_server=reuse_server)

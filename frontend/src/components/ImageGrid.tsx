@@ -23,6 +23,7 @@ export function ImageGrid({ samples, onLoadMore, hasMore }: ImageGridProps) {
   const {
     selectedIds,
     isLassoSelection,
+    selectionSource,
     lassoTotal,
     toggleSelection,
     addToSelection,
@@ -96,6 +97,21 @@ export function ImageGrid({ samples, onLoadMore, hasMore }: ImageGridProps) {
     virtualizer.measure();
   }, [selectedIds, isLassoSelection, virtualizer]);
 
+  // If a selection was made in the scatter plot, jump the image grid to the top
+  // so the selected sample(s) are immediately visible.
+  useEffect(() => {
+    if (isLassoSelection) return;
+    if (selectionSource !== "scatter") return;
+    if (selectedIds.size === 0) return;
+
+    try {
+      virtualizer.scrollToIndex(0, { align: "start" });
+    } catch {
+      // Fallback if the virtualizer isn't ready yet.
+      containerRef.current?.scrollTo({ top: 0 });
+    }
+  }, [isLassoSelection, selectedIds, selectionSource, virtualizer]);
+
   const handleClick = useCallback(
     (sample: Sample, event: React.MouseEvent) => {
       if (event.metaKey || event.ctrlKey) {
@@ -118,7 +134,7 @@ export function ImageGrid({ samples, onLoadMore, hasMore }: ImageGridProps) {
         // Single select
         const newSet = new Set<string>();
         newSet.add(sample.id);
-        useStore.getState().setSelectedIds(newSet);
+        useStore.getState().setSelectedIds(newSet, "grid");
       }
     },
     [samples, selectedIds, toggleSelection, addToSelection]

@@ -5,8 +5,15 @@ export interface Sample {
   label: string | null;
   thumbnail: string | null;
   metadata: Record<string, unknown>;
-  embedding_2d?: [number, number];
-  embedding_2d_hyperbolic?: [number, number];
+}
+
+export type Geometry = "euclidean" | "poincare";
+
+export interface SpaceInfo {
+  space_key: string;
+  model_id: string;
+  dim: number;
+  count: number;
 }
 
 export interface DatasetInfo {
@@ -14,13 +21,15 @@ export interface DatasetInfo {
   num_samples: number;
   labels: string[];
   label_colors: Record<string, string>;
+  spaces: SpaceInfo[];
+  layouts: string[];
 }
 
 export interface EmbeddingsData {
+  layout_key: string;
   ids: string[];
   labels: (string | null)[];
-  euclidean: [number, number][];
-  hyperbolic: [number, number][];
+  coords: [number, number][];
   label_colors: Record<string, string>;
 }
 
@@ -30,5 +39,3 @@ export interface SamplesResponse {
   limit: number;
   samples: Sample[];
 }
-
-export type ViewMode = "euclidean" | "hyperbolic";

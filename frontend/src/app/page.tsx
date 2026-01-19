@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useCallback, useState } from "react";
+import { useEffect, useCallback, useMemo, useState } from "react";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/resizable";
 import { Header, ImageGrid, ScatterPanel } from "@/components";
 import { useStore } from "@/store/useStore";
+import type { Sample } from "@/types";
 import {
   fetchDataset,
   fetchSamples,
@@ -15,13 +16,16 @@ import {
   fetchSamplesBatch,
   fetchLassoSelection,
 } from "@/lib/api";
+import { getLayoutGeometry } from "@/lib/layouts";
 
 const SAMPLES_PER_PAGE = 100;
 
 export default function Home() {
   const {
+    datasetInfo,
     samples,
     totalSamples,
+    samplesLoaded,
     setSamples,
     appendSamples,
     addSamplesIfMissing,
@@ -33,14 +37,17 @@ export default function Home() {
     setError,
     selectedIds,
     isLassoSelection,
+    selectionSource,
     lassoQuery,
     lassoSamples,
     lassoTotal,
     lassoIsLoading,
     setLassoResults,
+    geometry,
   } = useStore();
 
   const [loadingMore, setLoadingMore] = useState(false);
+  const [geometryLoading, setGeometryLoading] = useState(false);
 
   // Initial data load - runs once on mount
   // Store setters are stable and don't need to be in deps
@@ -71,6 +78,33 @@ export default function Home() {
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Fetch new embeddings when geometry changes
+  useEffect(() => {
+    if (!datasetInfo) return;
+
+    // Find layout key for current geometry
+    const targetLayout = datasetInfo.layouts.find((l) => getLayoutGeometry(l) === geometry);
+    if (!targetLayout) return;
+
+    // Skip if already showing this layout
+    const currentLayout = useStore.getState().currentLayoutKey;
+    if (currentLayout === targetLayout) return;
+
+    const loadGeometry = async () => {
+      setGeometryLoading(true);
+      try {
+        const embeddingsData = await fetchEmbeddings(targetLayout);
+        setEmbeddings(embeddingsData);
+      } catch (err) {
+        console.error("Failed to load geometry:", err);
+      } finally {
+        setGeometryLoading(false);
+      }
+    };
+
+    loadGeometry();
+  }, [geometry, datasetInfo, setEmbeddings]);
 
   // Fetch selected samples that aren't already loaded
   useEffect(() => {
@@ -106,7 +140,7 @@ export default function Home() {
     const run = async () => {
       try {
         const res = await fetchLassoSelection({
-          viewMode: lassoQuery.viewMode,
+          layoutKey: lassoQuery.layoutKey,
           polygon: lassoQuery.polygon,
           offset: 0,
           limit: SAMPLES_PER_PAGE,
@@ -139,7 +173,7 @@ export default function Home() {
       setLoadingMore(true);
       try {
         const res = await fetchLassoSelection({
-          viewMode: lassoQuery.viewMode,
+          layoutKey: lassoQuery.layoutKey,
           polygon: lassoQuery.polygon,
           offset: lassoSamples.length,
           limit: SAMPLES_PER_PAGE,
@@ -153,11 +187,11 @@ export default function Home() {
       return;
     }
 
-    if (samples.length >= totalSamples) return;
+    if (samplesLoaded >= totalSamples) return;
 
     setLoadingMore(true);
     try {
-      const res = await fetchSamples(samples.length, SAMPLES_PER_PAGE);
+      const res = await fetchSamples(samplesLoaded, SAMPLES_PER_PAGE);
       appendSamples(res.samples);
     } catch (err) {
       console.error("Failed to load more samples:", err);
@@ -172,14 +206,37 @@ export default function Home() {
     lassoQuery,
     lassoSamples.length,
     lassoTotal,
-    samples.length,
+    samplesLoaded,
     totalSamples,
     setLassoResults,
   ]);
 
-  const displayedSamples = isLassoSelection ? lassoSamples : samples;
+  const displayedSamples = useMemo(() => {
+    if (isLassoSelection) return lassoSamples;
+
+    // When a selection comes from the scatter plot, bring selected samples to the top
+    // so the user immediately sees what they clicked.
+    if (selectionSource === "scatter" && selectedIds.size > 0) {
+      const byId = new Map<string, Sample>();
+      for (const s of samples) byId.set(s.id, s);
+
+      const pinned: Sample[] = [];
+      for (const id of selectedIds) {
+        const s = byId.get(id);
+        if (s) pinned.push(s);
+      }
+
+      if (pinned.length > 0) {
+        const rest = samples.filter((s) => !selectedIds.has(s.id));
+        return [...pinned, ...rest];
+      }
+    }
+
+    return samples;
+  }, [isLassoSelection, lassoSamples, samples, selectedIds, selectionSource]);
+
   const displayedTotal = isLassoSelection ? lassoTotal : totalSamples;
-  const displayedHasMore = displayedSamples.length < displayedTotal;
+  const displayedHasMore = isLassoSelection ? displayedSamples.length < displayedTotal : samplesLoaded < totalSamples;
 
   if (error) {
     return (

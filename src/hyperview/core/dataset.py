@@ -13,6 +13,7 @@ from PIL import Image
 
 from hyperview.core.sample import Sample, SampleFromArray
 from hyperview.storage.backend import StorageBackend
+from hyperview.storage.schema import make_layout_key, make_space_key
 
 
 class Dataset:
@@ -22,6 +23,9 @@ class Dataset:
     - Automatic persistence (no need to call save())
     - Vector similarity search
     - Efficient storage and retrieval
+
+    Embeddings are stored separately from samples, keyed by model_id.
+    Layouts (2D projections) are stored per layout_key (space + method).
 
     Examples:
         # Create a new dataset (auto-persisted)
@@ -40,7 +44,6 @@ class Dataset:
         name: str | None = None,
         persist: bool = True,
         storage: StorageBackend | None = None,
-        embedding_dim: int = 512,
     ):
         """Initialize a new dataset.
 
@@ -49,10 +52,8 @@ class Dataset:
             persist: If True (default), use LanceDB for persistence.
                     If False, use in-memory storage.
             storage: Optional custom storage backend. If provided, persist is ignored.
-            embedding_dim: Dimension of embeddings (default 512 for CLIP).
         """
         self.name = name or f"dataset_{uuid.uuid4().hex[:8]}"
-        self._embedding_dim = embedding_dim
         self._embedding_computer = None
         self._projection_engine = None
 
@@ -62,7 +63,7 @@ class Dataset:
         elif persist:
             from hyperview.storage import LanceDBBackend, StorageConfig
 
-            config = StorageConfig.default(embedding_dim=embedding_dim)
+            config = StorageConfig.default()
             self._storage = LanceDBBackend(self.name, config)
         else:
             from hyperview.storage import MemoryBackend
@@ -373,40 +374,46 @@ class Dataset:
         model: str = "openai/clip-vit-base-patch32",
         batch_size: int = 32,
         show_progress: bool = True,
-    ) -> None:
+    ) -> str:
         """Compute embeddings for samples that don't have them yet.
+
+        Embeddings are stored in a dedicated space keyed by model_id.
 
         Args:
             model: EmbedAnything HuggingFace `model_id` to use.
             batch_size: Batch size for processing.
             show_progress: Whether to show progress bar.
+
+        Returns:
+            space_key for the embedding space.
         """
         from hyperview.embeddings.compute import EmbeddingComputer
 
-        all_samples = self._storage.get_all_samples()
-
-        if self._embedding_computer is None:
+        if self._embedding_computer is None or self._embedding_computer.model_id != model:
             self._embedding_computer = EmbeddingComputer(model=model)
-        else:
-            existing_model_id = getattr(self._embedding_computer, "model_id", None)
-            if existing_model_id and existing_model_id != model:
-                if any(s.embedding is not None for s in all_samples):
-                    raise ValueError(
-                        "Embeddings already exist for this dataset, but "
-                        "compute_embeddings() was called with a different model_id. "
-                        f"Existing model_id={existing_model_id!r}, requested model_id={model!r}. "
-                        "Create a new Dataset or clear existing embeddings before recomputing."
-                    )
 
-                # No existing embeddings yet: allow switching models.
-                self._embedding_computer = EmbeddingComputer(model=model)
-        # Only compute for samples without embeddings
-        samples_needing_embeddings = [s for s in all_samples if s.embedding is None]
+        # Get embedding dimension from a test computation
+        all_samples = self._storage.get_all_samples()
+        if not all_samples:
+            raise ValueError("No samples in dataset")
 
-        if not samples_needing_embeddings:
+        # Compute one embedding to get dimension
+        test_embedding = self._embedding_computer.compute_single(all_samples[0])
+        dim = len(test_embedding)
+
+        # Ensure space exists
+        space_key = make_space_key(model)
+        self._storage.ensure_space(model, dim)
+
+        # Find samples needing embeddings
+        missing_ids = self._storage.get_missing_embedding_ids(space_key)
+
+        if not missing_ids:
             if show_progress:
-                print(f"All {len(all_samples)} samples already have embeddings")
-            return
+                print(f"All {len(all_samples)} samples already have embeddings in space '{space_key}'")
+            return space_key
+
+        samples_needing_embeddings = self._storage.get_samples_by_ids(missing_ids)
 
         if show_progress:
             skipped = len(all_samples) - len(samples_needing_embeddings)
@@ -417,119 +424,142 @@ class Dataset:
             samples_needing_embeddings, batch_size=batch_size, show_progress=show_progress
         )
 
-        # Update samples with embeddings
-        for sample, embedding in zip(samples_needing_embeddings, embeddings):
-            sample.embedding = embedding.tolist()
+        # Store embeddings
+        ids = [s.id for s in samples_needing_embeddings]
+        vectors = np.array(embeddings, dtype=np.float32)
+        self._storage.add_embeddings(space_key, ids, vectors)
 
-        # Batch update in storage
-        self._storage.update_samples_batch(samples_needing_embeddings)
+        return space_key
 
     def compute_visualization(
         self,
+        space_key: str | None = None,
         method: str = "umap",
+        geometry: str = "euclidean",
         n_neighbors: int = 15,
         min_dist: float = 0.1,
         metric: str = "cosine",
         force: bool = False,
-    ) -> None:
+    ) -> str:
         """Compute 2D projections for visualization.
 
         Args:
+            space_key: Embedding space to project. If None, uses the first available.
             method: Projection method ('umap' supported).
+            geometry: Geometry type ('euclidean' or 'poincare').
             n_neighbors: Number of neighbors for UMAP.
             min_dist: Minimum distance for UMAP.
             metric: Distance metric for UMAP.
-            force: Force recomputation even if projections exist.
+            force: Force recomputation even if layout exists.
+
+        Returns:
+            layout_key for the computed layout.
         """
         from hyperview.embeddings.projection import ProjectionEngine
+
+        if geometry not in ("euclidean", "poincare"):
+            raise ValueError(f"Invalid geometry: {geometry}. Must be 'euclidean' or 'poincare'.")
 
         if self._projection_engine is None:
             self._projection_engine = ProjectionEngine()
 
-        samples_with_embeddings = [s for s in self._storage if s.embedding is not None]
-        if not samples_with_embeddings:
-            raise ValueError("No embeddings computed. Call compute_embeddings() first.")
+        # Get space
+        if space_key is None:
+            spaces = self._storage.list_spaces()
+            if not spaces:
+                raise ValueError("No embedding spaces. Call compute_embeddings() first.")
+            space_key = spaces[0].space_key
 
-        # Check if projections already exist (unless forced)
-        if not force:
-            samples_needing_projection = [
-                s for s in samples_with_embeddings if s.embedding_2d is None
-            ]
-            if not samples_needing_projection:
-                print(f"All {len(samples_with_embeddings)} samples already have projections")
-                return
-            # UMAP needs consistent projections, so if any samples need it, recompute all
-            # (can't mix old and new UMAP projections)
-            if len(samples_needing_projection) < len(samples_with_embeddings):
-                print(
-                    f"Some samples missing projections - recomputing all "
-                    f"({len(samples_needing_projection)} new, "
-                    f"{len(samples_with_embeddings) - len(samples_needing_projection)} existing)"
-                )
+        space = self._storage.get_space(space_key)
+        if space is None:
+            raise ValueError(f"Space not found: {space_key}")
 
-        samples = samples_with_embeddings
-        embeddings = np.array([s.embedding for s in samples])
+        # Get all embeddings from this space
+        ids, vectors = self._storage.get_embeddings(space_key)
+        if len(ids) == 0:
+            raise ValueError(f"No embeddings in space '{space_key}'. Call compute_embeddings() first.")
 
-        # Compute Euclidean 2D projection
-        coords_euclidean = self._projection_engine.project_umap(
-            embeddings,
-            n_neighbors=n_neighbors,
-            min_dist=min_dist,
-            metric=metric,
-        )
+        # Generate layout key (includes geometry)
+        layout_key = make_layout_key(space_key, method, geometry)
 
-        # Compute Hyperbolic (Poincaré) 2D projection
-        coords_hyperbolic = self._projection_engine.project_to_poincare(
-            embeddings,
-            n_neighbors=n_neighbors,
-            min_dist=min_dist,
-        )
+        # Check if layout exists
+        if not force and layout_key in self._storage.list_layouts():
+            existing_ids, _ = self._storage.get_layout_coords(layout_key)
+            if set(existing_ids) == set(ids):
+                print(f"Layout '{layout_key}' already exists with {len(ids)} points")
+                return layout_key
+            else:
+                print(f"Layout exists but has different samples, recomputing...")
 
-        for sample, coord_e, coord_h in zip(samples, coords_euclidean, coords_hyperbolic):
-            sample.embedding_2d = coord_e.tolist()
-            sample.embedding_2d_hyperbolic = coord_h.tolist()
+        if len(ids) < 3:
+            raise ValueError(f"Need at least 3 samples for visualization, have {len(ids)}")
 
-        # Batch update in storage
-        self._storage.update_samples_batch(samples)
+        print(f"Computing {geometry} {method} layout for {len(ids)} samples...")
+
+        # Compute projection based on geometry
+        if geometry == "poincare":
+            coords = self._projection_engine.project_to_poincare(
+                vectors,
+                n_neighbors=n_neighbors,
+                min_dist=min_dist,
+                metric=metric,
+            )
+        else:
+            coords = self._projection_engine.project_umap(
+                vectors,
+                n_neighbors=n_neighbors,
+                min_dist=min_dist,
+                metric=metric,
+            )
+
+        # Store layout
+        self._storage.add_layout_coords(layout_key, ids, coords)
+
+        return layout_key
+
+    def list_spaces(self) -> list[Any]:
+        """List all embedding spaces in this dataset."""
+        return self._storage.list_spaces()
+
+    def list_layouts(self) -> list[str]:
+        """List all layouts in this dataset."""
+        return self._storage.list_layouts()
 
     def find_similar(
         self,
         sample_id: str,
         k: int = 10,
-        use_hyperbolic: bool = False,
+        space_key: str | None = None,
     ) -> list[tuple[Sample, float]]:
         """Find k most similar samples to a given sample.
 
         Args:
             sample_id: ID of the query sample.
             k: Number of neighbors to return.
-            use_hyperbolic: If True, search in hyperbolic embedding space.
-                           If False (default), search in high-dimensional embedding space.
+            space_key: Embedding space to search in. If None, uses first available.
 
         Returns:
             List of (sample, distance) tuples, sorted by distance ascending.
         """
-        vector_column = "embedding_2d_hyperbolic" if use_hyperbolic else "embedding"
-        return self._storage.find_similar(sample_id, k, vector_column)
+        return self._storage.find_similar(sample_id, k, space_key)
 
     def find_similar_by_vector(
         self,
         vector: list[float],
         k: int = 10,
-        use_hyperbolic: bool = False,
+        space_key: str | None = None,
     ) -> list[tuple[Sample, float]]:
         """Find k most similar samples to a given vector.
 
         Args:
             vector: Query vector.
             k: Number of neighbors to return.
-            use_hyperbolic: If True, search in hyperbolic embedding space.
+            space_key: Embedding space to search in. If None, uses first available.
 
         Returns:
             List of (sample, distance) tuples, sorted by distance ascending.
         """
-        vector_column = "embedding_2d_hyperbolic" if use_hyperbolic else "embedding"
-        return self._storage.find_similar_by_vector(vector, k, vector_column)
+        return self._storage.find_similar_by_vector(vector, k, space_key)
 
     def _assign_label_color(self, label: str, colors: dict[str, str]) -> None:
         """Assign a color to a label."""
@@ -545,6 +575,46 @@ class Dataset:
     def get_label_colors(self) -> dict[str, str]:
         """Get the color mapping for labels."""
         return self._storage.label_colors.copy()
+
+    def set_coords(
+        self,
+        geometry: str,
+        ids: list[str],
+        coords: np.ndarray | list[list[float]],
+    ) -> str:
+        """Set precomputed 2D coordinates for visualization.
+
+        Use this when you have precomputed 2D projections and want to skip
+        embedding computation. Useful for smoke tests or external projections.
+
+        Args:
+            geometry: "euclidean" or "poincare".
+            ids: List of sample IDs.
+            coords: (N, 2) array of coordinates.
+
+        Returns:
+            The layout_key for the stored coordinates.
+
+        Example:
+            >>> dataset.set_coords("euclidean", ["s0", "s1"], [[0.1, 0.2], [0.3, 0.4]])
+            >>> dataset.set_coords("poincare", ["s0", "s1"], [[0.1, 0.2], [0.3, 0.4]])
+            >>> hv.launch(dataset)
+        """
+        if geometry not in ("euclidean", "poincare"):
+            raise ValueError(f"geometry must be 'euclidean' or 'poincare', got '{geometry}'")
+
+        coords_arr = np.asarray(coords, dtype=np.float32)
+        if coords_arr.ndim != 2 or coords_arr.shape[1] != 2:
+            raise ValueError(f"coords must be (N, 2), got shape {coords_arr.shape}")
+
+        # Ensure a synthetic space exists (required by launch())
+        space_key = "precomputed"
+        if not any(s.space_key == space_key for s in self._storage.list_spaces()):
+            self._storage.ensure_space(space_key, dim=2)
+
+        layout_key = make_layout_key(space_key, method="precomputed", geometry=geometry)
+        self._storage.add_layout_coords(layout_key, list(ids), coords_arr)
+        return layout_key
 
     @property
     def samples(self) -> list[Sample]:
@@ -595,9 +665,6 @@ class Dataset:
                     "filepath": s.filepath,
                     "label": s.label,
                     "metadata": s.metadata,
-                    "embedding": s.embedding,
-                    "embedding_2d": s.embedding_2d,
-                    "embedding_2d_hyperbolic": s.embedding_2d_hyperbolic,
                     "thumbnail_base64": s.thumbnail_base64 if include_thumbnails else None,
                 }
                 for s in samples
@@ -635,9 +702,6 @@ class Dataset:
                 filepath=s_data["filepath"],
                 label=s_data.get("label"),
                 metadata=s_data.get("metadata", {}),
-                embedding=s_data.get("embedding"),
-                embedding_2d=s_data.get("embedding_2d"),
-                embedding_2d_hyperbolic=s_data.get("embedding_2d_hyperbolic"),
                 thumbnail_base64=s_data.get("thumbnail_base64"),
             )
             samples.append(sample)
@@ -646,12 +710,11 @@ class Dataset:
         return dataset
 
     @classmethod
-    def open(cls, name: str, embedding_dim: int = 512) -> "Dataset":
+    def open(cls, name: str) -> "Dataset":
         """Open an existing persistent dataset.
 
         Args:
             name: Name of the dataset to open.
-            embedding_dim: Embedding dimension (must match original).
 
         Returns:
             Dataset instance connected to existing data.
@@ -667,7 +730,7 @@ class Dataset:
                 f"Available datasets: {cls.list_datasets()}"
             )
 
-        return cls(name=name, persist=True, embedding_dim=embedding_dim)
+        return cls(name=name, persist=True)
 
     @classmethod
     def list_datasets(cls) -> list[str]:

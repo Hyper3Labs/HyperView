@@ -5,12 +5,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
-def get_default_database_dir() -> Path:
-    """Get the default database directory.
+def get_default_datasets_dir() -> Path:
+    """Get the default datasets directory.
 
-    Uses HYPERVIEW_DATABASE_DIR env var if set, otherwise ~/.hyperview/datasets/
+    Uses HYPERVIEW_DATASETS_DIR env var if set, otherwise ~/.hyperview/datasets/
+    Each dataset gets its own subdirectory with isolated LanceDB tables.
     """
-    env_dir = os.environ.get("HYPERVIEW_DATABASE_DIR")
+    env_dir = os.environ.get("HYPERVIEW_DATASETS_DIR")
     if env_dir:
         return Path(env_dir)
     return Path.home() / ".hyperview" / "datasets"
@@ -32,23 +33,20 @@ def get_default_media_dir() -> Path:
 class StorageConfig:
     """Configuration for storage backend."""
 
-    database_dir: Path = field(default_factory=get_default_database_dir)
+    datasets_dir: Path = field(default_factory=get_default_datasets_dir)
     media_dir: Path = field(default_factory=get_default_media_dir)
-    embedding_dim: int = 512  # Default CLIP dimension
-    embedding_2d_dim: int = 2
 
     @classmethod
-    def default(cls, embedding_dim: int = 512) -> "StorageConfig":
-        """Create a default configuration with optional custom embedding dimension."""
+    def default(cls) -> "StorageConfig":
+        """Create a default configuration."""
         return cls(
-            database_dir=get_default_database_dir(),
+            datasets_dir=get_default_datasets_dir(),
             media_dir=get_default_media_dir(),
-            embedding_dim=embedding_dim,
         )
 
     def ensure_dir_exists(self) -> None:
-        """Ensure the database directory exists."""
-        self.database_dir.mkdir(parents=True, exist_ok=True)
+        """Ensure the datasets directory exists."""
+        self.datasets_dir.mkdir(parents=True, exist_ok=True)
 
     def ensure_media_dir_exists(self) -> None:
         """Ensure the media directory exists."""

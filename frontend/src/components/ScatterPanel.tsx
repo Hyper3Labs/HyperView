@@ -4,9 +4,11 @@ import { useMemo } from "react";
 import { useStore } from "@/store/useStore";
 import { Panel, PanelFooter } from "./Panel";
 import { PanelHeader } from "./PanelHeader";
-import { ScatterIcon } from "./icons";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { EuclideanIcon, PoincareIcon, ScatterIcon } from "./icons";
 import { type ScatterLabelsInfo, useHyperScatter } from "./useHyperScatter";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import type { Geometry } from "@/types";
+import { getLayoutSpaceKey, listAvailableGeometries } from "@/lib/layouts";
 
 interface ScatterPanelProps {
   className?: string;
@@ -14,15 +16,34 @@ interface ScatterPanelProps {
 
 export function ScatterPanel({ className = "" }: ScatterPanelProps) {
   const {
+    datasetInfo,
     embeddings,
-    viewMode,
-    setViewMode,
     selectedIds,
     setSelectedIds,
     beginLassoSelection,
     hoveredId,
     setHoveredId,
+    geometry,
+    setGeometry,
   } = useStore();
+
+  // Check which geometries are available
+  const availableGeometries = useMemo(() => {
+    return listAvailableGeometries(datasetInfo?.layouts ?? []);
+  }, [datasetInfo?.layouts]);
+
+  const embeddingModelName = useMemo(() => {
+    if (!embeddings) return null;
+
+    const layoutKey = embeddings.layout_key;
+    const spaceKey = getLayoutSpaceKey(layoutKey);
+
+    const space =
+      datasetInfo?.spaces.find((s) => s.space_key === spaceKey) ??
+      datasetInfo?.spaces.find((s) => layoutKey.startsWith(`${s.space_key}__`));
+
+    return space?.model_id ?? space?.space_key ?? spaceKey;
+  }, [datasetInfo?.spaces, embeddings]);
 
   const labelsInfo = useMemo<ScatterLabelsInfo | null>(() => {
     if (!embeddings) return null;
@@ -58,9 +79,9 @@ export function ScatterPanel({ className = "" }: ScatterPanelProps) {
     handlePointerUp,
     handlePointerLeave,
     handleDoubleClick,
+    rendererError,
   } = useHyperScatter({
     embeddings,
-    viewMode,
     labelsInfo,
     selectedIds,
     hoveredId,
@@ -76,24 +97,36 @@ export function ScatterPanel({ className = "" }: ScatterPanelProps) {
       <PanelHeader
         icon={<ScatterIcon />}
         title="Embeddings"
-        subtitle={embeddings ? `${embeddings.ids.length} points` : "Loading..."}
+        subtitle={embeddings ? embeddingModelName ?? "" : "Loading..."}
       >
-        {/* View mode toggle using shadcn ToggleGroup */}
-        <ToggleGroup
-          type="single"
-          value={viewMode}
-          onValueChange={(val) => val && setViewMode(val as "euclidean" | "hyperbolic")}
-          variant="outline"
-          size="sm"
-          className="h-6"
-        >
-          <ToggleGroupItem value="euclidean" className="text-[11px] px-2.5 h-6">
-            Euclidean
-          </ToggleGroupItem>
-          <ToggleGroupItem value="hyperbolic" className="text-[11px] px-2.5 h-6">
-            Hyperbolic
-          </ToggleGroupItem>
-        </ToggleGroup>
+        {/* Geometry toggle */}
+        {availableGeometries.length > 1 && (
+          <ToggleGroup
+            type="single"
+            value={geometry}
+            onValueChange={(value) => value && setGeometry(value as Geometry)}
+            size="sm"
+            variant="outline"
+            className="bg-muted/50 rounded-md p-0.5 gap-0.5"
+          >
+            <ToggleGroupItem
+              value="euclidean"
+              aria-label="Euclidean geometry"
+              className="h-6 px-2 gap-1.5 text-[11px] border-0 data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm data-[state=off]:bg-transparent data-[state=off]:text-muted-foreground"
+            >
+              <EuclideanIcon />
+              <span className="hidden sm:inline">Euclidean</span>
+            </ToggleGroupItem>
+            <ToggleGroupItem
+              value="poincare"
+              aria-label="Poincaré disk (hyperbolic)"
+              className="h-6 px-2 gap-1.5 text-[11px] border-0 data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm data-[state=off]:bg-transparent data-[state=off]:text-muted-foreground"
+            >
+              <PoincareIcon />
+              <span className="hidden sm:inline">Poincaré</span>
+            </ToggleGroupItem>
+          </ToggleGroup>
+        )}
       </PanelHeader>
 
       {/* Main content area */}
@@ -120,10 +153,19 @@ export function ScatterPanel({ className = "" }: ScatterPanelProps) {
           />
 
           {/* Loading overlay */}
-          {!embeddings && (
-            <div className="absolute inset-0 flex items-center justify-center bg-card/80 z-10">
-              <div className="text-muted-foreground">Loading embeddings...</div>
+          {rendererError ? (
+            <div className="absolute inset-0 flex items-center justify-center bg-card/85 z-10 p-6">
+              <div className="max-w-md text-center">
+                <div className="text-sm font-semibold text-foreground mb-2">Browser not supported</div>
+                <div className="text-sm text-muted-foreground">{rendererError}</div>
+              </div>
             </div>
+          ) : (
+            !embeddings && (
+              <div className="absolute inset-0 flex items-center justify-center bg-card/80 z-10">
+                <div className="text-muted-foreground">Loading embeddings...</div>
+              </div>
+            )
           )}
         </div>
 

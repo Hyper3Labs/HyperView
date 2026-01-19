@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,7 +29,7 @@ class SelectionRequest(BaseModel):
 class LassoSelectionRequest(BaseModel):
     """Request model for lasso selection queries."""
 
-    space: str
+    layout_key: str  # e.g., "openai_clip-vit-base-patch32__umap"
     # Polygon vertices in data space, interleaved: [x0, y0, x1, y1, ...]
     polygon: list[float]
     offset: int = 0
@@ -45,8 +46,6 @@ class SampleResponse(BaseModel):
     label: str | None
     thumbnail: str | None
     metadata: dict
-    embedding_2d: list[float] | None = None
-    embedding_2d_hyperbolic: list[float] | None = None
 
 
 class DatasetResponse(BaseModel):
@@ -56,16 +55,27 @@ class DatasetResponse(BaseModel):
     num_samples: int
     labels: list[str]
     label_colors: dict[str, str]
+    spaces: list[dict[str, Any]]
+    layouts: list[str]
 
 
 class EmbeddingsResponse(BaseModel):
-    """Response model for embeddings data."""
+    """Response model for embeddings data (for scatter plot)."""
 
+    layout_key: str
     ids: list[str]
     labels: list[str | None]
-    euclidean: list[list[float]]
-    hyperbolic: list[list[float]]
+    coords: list[list[float]]  # [[x, y], ...]
     label_colors: dict[str, str]
+
+
+class SpaceInfo(BaseModel):
+    """Response model for embedding space info."""
+
+    space_key: str
+    model_id: str
+    dim: int
+    count: int
 
 
 class SimilarSampleResponse(BaseModel):
@@ -78,8 +88,6 @@ class SimilarSampleResponse(BaseModel):
     thumbnail: str | None
     distance: float
     metadata: dict
-    embedding_2d: list[float] | None = None
-    embedding_2d_hyperbolic: list[float] | None = None
 
 
 class SimilaritySearchResponse(BaseModel):
@@ -136,11 +144,24 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
         if _current_dataset is None:
             raise HTTPException(status_code=404, detail="No dataset loaded")
 
+        spaces = _current_dataset.list_spaces()
+        space_dicts = [
+            {
+                "space_key": s.space_key,
+                "model_id": s.model_id,
+                "dim": s.dim,
+                "count": s.count,
+            }
+            for s in spaces
+        ]
+
         return DatasetResponse(
             name=_current_dataset.name,
             num_samples=len(_current_dataset),
             labels=_current_dataset.labels,
             label_colors=_current_dataset.get_label_colors(),
+            spaces=space_dicts,
+            layouts=_current_dataset.list_layouts(),
         )
 
     @app.get("/api/samples")
@@ -188,24 +209,65 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
         return {"samples": [s.to_api_dict(include_thumbnail=True) for s in samples]}
 
     @app.get("/api/embeddings", response_model=EmbeddingsResponse)
-    async def get_embeddings():
-        """Get all embeddings for visualization."""
+    async def get_embeddings(layout_key: str | None = None):
+        """Get embedding coordinates for visualization."""
         if _current_dataset is None:
             raise HTTPException(status_code=404, detail="No dataset loaded")
 
-        ids, labels, euclidean, hyperbolic = _current_dataset._storage.get_visualization_embeddings()
+        # Get available layouts
+        layouts = _current_dataset.list_layouts()
+        if not layouts:
+            raise HTTPException(
+                status_code=400, detail="No layouts computed. Call compute_visualization() first."
+            )
+
+        # Use specified layout or first available
+        if layout_key is None:
+            layout_key = layouts[0]
+        elif layout_key not in layouts:
+            raise HTTPException(status_code=404, detail=f"Layout not found: {layout_key}")
+
+        ids, labels, coords = _current_dataset._storage.get_visualization_data(layout_key)
+
         if not ids:
             raise HTTPException(
-                status_code=400, detail="No embeddings computed. Call compute_visualization() first."
+                status_code=400, detail=f"No data in layout '{layout_key}'."
             )
 
         return EmbeddingsResponse(
+            layout_key=layout_key,
             ids=ids,
             labels=labels,
-            euclidean=euclidean,
-            hyperbolic=hyperbolic,
+            coords=coords.tolist(),
             label_colors=_current_dataset.get_label_colors(),
         )
+
+    @app.get("/api/spaces")
+    async def get_spaces():
+        """Get all embedding spaces."""
+        if _current_dataset is None:
+            raise HTTPException(status_code=404, detail="No dataset loaded")
+
+        spaces = _current_dataset.list_spaces()
+        return {
+            "spaces": [
+                {
+                    "space_key": s.space_key,
+                    "model_id": s.model_id,
+                    "dim": s.dim,
+                    "count": s.count,
+                }
+                for s in spaces
+            ]
+        }
+
+    @app.get("/api/layouts")
+    async def get_layouts():
+        """Get all available layouts."""
+        if _current_dataset is None:
+            raise HTTPException(status_code=404, detail="No dataset loaded")
+
+        return {"layouts": _current_dataset.list_layouts()}
 
     @app.post("/api/selection")
     async def sync_selection(request: SelectionRequest):
@@ -247,10 +309,9 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
         y_min = float(np.min(poly[:, 1]))
         y_max = float(np.max(poly[:, 1]))
 
-
         try:
             candidate_ids, candidate_coords = _current_dataset._storage.get_lasso_candidates_aabb(
-                space=request.space,
+                layout_key=request.layout_key,
                 x_min=x_min,
                 x_max=x_max,
                 y_min=y_min,
@@ -288,7 +349,7 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
     async def search_similar(
         sample_id: str,
         k: int = Query(10, ge=1, le=100),
-        use_hyperbolic: bool = Query(False),
+        space_key: str | None = None,
     ):
         """Return k nearest neighbors for a given sample."""
         if _current_dataset is None:
@@ -296,7 +357,7 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
 
         try:
             similar = _current_dataset.find_similar(
-                sample_id, k=k, use_hyperbolic=use_hyperbolic
+                sample_id, k=k, space_key=space_key
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -319,8 +380,6 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
                     thumbnail=thumbnail,
                     distance=distance,
                     metadata=sample.metadata,
-                    embedding_2d=sample.embedding_2d,
-                    embedding_2d_hyperbolic=sample.embedding_2d_hyperbolic,
                 )
             )
 

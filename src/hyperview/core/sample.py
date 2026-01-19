@@ -11,17 +11,16 @@ from pydantic import BaseModel, Field
 
 
 class Sample(BaseModel):
-    """A single sample in a HyperView dataset."""
+    """A single sample in a HyperView dataset.
+
+    Samples are pure metadata containers. Embeddings and layouts are stored
+    separately in dedicated tables (per embedding space / per layout).
+    """
 
     id: str = Field(..., description="Unique identifier for the sample")
     filepath: str = Field(..., description="Path to the image file")
     label: str | None = Field(default=None, description="Label for the sample")
     metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
-    embedding: list[float] | None = Field(default=None, description="High-dimensional embedding")
-    embedding_2d: list[float] | None = Field(default=None, description="2D projected embedding")
-    embedding_2d_hyperbolic: list[float] | None = Field(
-        default=None, description="2D hyperbolic (Poincaré) embedding"
-    )
     thumbnail_base64: str | None = Field(default=None, description="Cached thumbnail as base64")
 
     model_config = {"arbitrary_types_allowed": True}
@@ -76,10 +75,6 @@ class Sample(BaseModel):
         }
         if include_thumbnail:
             data["thumbnail"] = self.get_thumbnail_base64()
-        if self.embedding_2d:
-            data["embedding_2d"] = self.embedding_2d
-        if self.embedding_2d_hyperbolic:
-            data["embedding_2d_hyperbolic"] = self.embedding_2d_hyperbolic
         return data
 
 

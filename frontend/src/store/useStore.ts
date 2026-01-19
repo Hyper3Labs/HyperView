@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { DatasetInfo, EmbeddingsData, Sample, ViewMode } from "@/types";
+import type { DatasetInfo, EmbeddingsData, Geometry, Sample } from "@/types";
 
 interface AppState {
   // Dataset info
@@ -9,6 +9,8 @@ interface AppState {
   // Samples
   samples: Sample[];
   totalSamples: number;
+  // Number of samples loaded via offset/limit pagination (excludes ad-hoc fetched samples)
+  samplesLoaded: number;
   setSamples: (samples: Sample[], total: number) => void;
   appendSamples: (samples: Sample[]) => void;
   addSamplesIfMissing: (samples: Sample[]) => void;
@@ -17,24 +19,28 @@ interface AppState {
   embeddings: EmbeddingsData | null;
   setEmbeddings: (data: EmbeddingsData) => void;
 
-  // View mode (euclidean or hyperbolic)
-  viewMode: ViewMode;
-  setViewMode: (mode: ViewMode) => void;
+  // Current layout key (from embeddings)
+  currentLayoutKey: string | null;
+
+  // Geometry mode
+  geometry: Geometry;
+  setGeometry: (geometry: Geometry) => void;
 
   // Selection
   selectedIds: Set<string>;
   isLassoSelection: boolean;
-  setSelectedIds: (ids: Set<string>) => void;
+  selectionSource: "scatter" | "grid" | "lasso" | null;
+  setSelectedIds: (ids: Set<string>, source?: "scatter" | "grid") => void;
   toggleSelection: (id: string) => void;
   addToSelection: (ids: string[]) => void;
   clearSelection: () => void;
 
   // Lasso selection (server-driven)
-  lassoQuery: { viewMode: ViewMode; polygon: number[] } | null;
+  lassoQuery: { layoutKey: string; polygon: number[] } | null;
   lassoSamples: Sample[];
   lassoTotal: number;
   lassoIsLoading: boolean;
-  beginLassoSelection: (query: { viewMode: ViewMode; polygon: number[] }) => void;
+  beginLassoSelection: (query: { layoutKey: string; polygon: number[] }) => void;
   setLassoResults: (samples: Sample[], total: number, append?: boolean) => void;
   clearLassoSelection: () => void;
 
@@ -59,11 +65,19 @@ export const useStore = create<AppState>((set, get) => ({
   // Samples
   samples: [],
   totalSamples: 0,
-  setSamples: (samples, total) => set({ samples, totalSamples: total }),
+  samplesLoaded: 0,
+  setSamples: (samples, total) => set({ samples, totalSamples: total, samplesLoaded: samples.length }),
   appendSamples: (newSamples) =>
-    set((state) => ({
-      samples: [...state.samples, ...newSamples],
-    })),
+    set((state) => {
+      const existingIds = new Set(state.samples.map((s) => s.id));
+      const toAdd = newSamples.filter((s) => !existingIds.has(s.id));
+
+      // Advance pagination cursor by what the API returned (even if some IDs were prefetched).
+      const samplesLoaded = state.samplesLoaded + newSamples.length;
+
+      if (toAdd.length === 0) return { samplesLoaded };
+      return { samples: [...state.samples, ...toAdd], samplesLoaded };
+    }),
   addSamplesIfMissing: (newSamples) =>
     set((state) => {
       const existingIds = new Set(state.samples.map((s) => s.id));
@@ -74,18 +88,23 @@ export const useStore = create<AppState>((set, get) => ({
 
   // Embeddings
   embeddings: null,
-  setEmbeddings: (data) => set({ embeddings: data }),
+  setEmbeddings: (data) => set({ embeddings: data, currentLayoutKey: data?.layout_key ?? null }),
 
-  // View mode
-  viewMode: "hyperbolic",
-  setViewMode: (mode) => set({ viewMode: mode }),
+  // Current layout key
+  currentLayoutKey: null,
+
+  // Geometry mode
+  geometry: "euclidean",
+  setGeometry: (geometry) => set({ geometry }),
 
   // Selection
   selectedIds: new Set<string>(),
   isLassoSelection: false,
-  setSelectedIds: (ids) =>
+  selectionSource: null,
+  setSelectedIds: (ids, source = "grid") =>
     set({
       selectedIds: ids,
+      selectionSource: ids.size > 0 ? source : null,
       isLassoSelection: false,
       lassoQuery: null,
       lassoSamples: [],
@@ -103,6 +122,7 @@ export const useStore = create<AppState>((set, get) => ({
       // Manual selection from image grid, not lasso
       return {
         selectedIds: newSet,
+        selectionSource: newSet.size > 0 ? "grid" : null,
         isLassoSelection: false,
         lassoQuery: null,
         lassoSamples: [],
@@ -117,6 +137,7 @@ export const useStore = create<AppState>((set, get) => ({
       // Manual selection from image grid, not lasso
       return {
         selectedIds: newSet,
+        selectionSource: newSet.size > 0 ? "grid" : null,
         isLassoSelection: false,
         lassoQuery: null,
         lassoSamples: [],
@@ -127,6 +148,7 @@ export const useStore = create<AppState>((set, get) => ({
   clearSelection: () =>
     set({
       selectedIds: new Set<string>(),
+      selectionSource: null,
       isLassoSelection: false,
       lassoQuery: null,
       lassoSamples: [],
@@ -143,6 +165,7 @@ export const useStore = create<AppState>((set, get) => ({
     set({
       isLassoSelection: true,
       selectedIds: new Set<string>(),
+      selectionSource: "lasso",
       lassoQuery: query,
       lassoSamples: [],
       lassoTotal: 0,
@@ -157,6 +180,7 @@ export const useStore = create<AppState>((set, get) => ({
   clearLassoSelection: () =>
     set({
       isLassoSelection: false,
+      selectionSource: null,
       lassoQuery: null,
       lassoSamples: [],
       lassoTotal: 0,

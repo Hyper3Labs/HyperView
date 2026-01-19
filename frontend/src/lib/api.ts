@@ -1,4 +1,4 @@
-import type { DatasetInfo, EmbeddingsData, Sample, SamplesResponse, ViewMode } from "@/types";
+import type { DatasetInfo, EmbeddingsData, Sample, SamplesResponse } from "@/types";
 
 const API_BASE = process.env.NODE_ENV === "development" ? "http://127.0.0.1:6262" : "";
 
@@ -30,8 +30,13 @@ export async function fetchSamples(
   return res.json();
 }
 
-export async function fetchEmbeddings(): Promise<EmbeddingsData> {
-  const res = await fetch(`${API_BASE}/api/embeddings`);
+export async function fetchEmbeddings(layoutKey?: string): Promise<EmbeddingsData> {
+  const params = new URLSearchParams();
+  if (layoutKey) {
+    params.set("layout_key", layoutKey);
+  }
+  const query = params.toString();
+  const res = await fetch(`${API_BASE}/api/embeddings${query ? `?${query}` : ""}`);
   if (!res.ok) {
     throw new Error(`Failed to fetch embeddings: ${res.statusText}`);
   }
@@ -70,7 +75,7 @@ export interface LassoSelectionResponse {
 }
 
 export async function fetchLassoSelection(args: {
-  viewMode: ViewMode;
+  layoutKey: string;
   polygon: ArrayLike<number>;
   offset?: number;
   limit?: number;
@@ -83,7 +88,7 @@ export async function fetchLassoSelection(args: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      space: args.viewMode === "euclidean" ? "euclidean" : "hyperbolic",
+      layout_key: args.layoutKey,
       polygon: Array.from(args.polygon),
       offset: args.offset ?? 0,
       limit: args.limit ?? 100,

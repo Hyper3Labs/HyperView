@@ -31,10 +31,20 @@ def main():
         "--no-persist", action="store_true", help="Don't persist to database (use in-memory)"
     )
     parser.add_argument(
+        "--model",
+        type=str,
+        default="openai/clip-vit-base-patch32",
+        help=(
+            "Embedding model_id to use (default: openai/clip-vit-base-patch32). "
+            "This is passed to Dataset.compute_embeddings(model=...)."
+        ),
+    )
+    parser.add_argument(
+        "--datasets-dir",
         "--database-dir",
         type=str,
         default=None,
-        help="Override persistence directory (sets HYPERVIEW_DATABASE_DIR)",
+        help="Override persistence directory (sets HYPERVIEW_DATASETS_DIR)",
     )
     parser.add_argument(
         "--no-server",
@@ -43,8 +53,8 @@ def main():
     )
     args = parser.parse_args()
 
-    if args.database_dir:
-        os.environ["HYPERVIEW_DATABASE_DIR"] = args.database_dir
+    if args.datasets_dir:
+        os.environ["HYPERVIEW_DATASETS_DIR"] = args.datasets_dir
 
     import hyperview as hv
 
@@ -58,9 +68,11 @@ def main():
         max_samples=args.samples,
     )
 
-    dataset.compute_embeddings(show_progress=True)
+    dataset.compute_embeddings(model=args.model, show_progress=True)
 
-    dataset.compute_visualization()
+    # Compute both euclidean and poincare layouts
+    dataset.compute_visualization(geometry="euclidean")
+    dataset.compute_visualization(geometry="poincare")
 
     if args.no_server:
         return

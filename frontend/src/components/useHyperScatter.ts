@@ -1,7 +1,8 @@
 import type React from "react";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { EmbeddingsData, ViewMode } from "@/types";
+import type { EmbeddingsData } from "@/types";
+import { getLayoutGeometry } from "@/lib/layouts";
 import type { Dataset, GeometryMode, Modifiers, Renderer } from "hyper-scatter";
 
 type HyperScatterModule = typeof import("hyper-scatter");
@@ -13,6 +14,16 @@ export interface ScatterLabelsInfo {
 }
 
 const MAX_LASSO_VERTS = 512;
+
+function supportsWebGL2(): boolean {
+  try {
+    if (typeof document === "undefined") return false;
+    const canvas = document.createElement("canvas");
+    return !!canvas.getContext("webgl2");
+  } catch {
+    return false;
+  }
+}
 
 function capInterleavedXY(points: ArrayLike<number>, maxVerts: number): number[] {
   const n = Math.floor(points.length / 2);
@@ -27,14 +38,14 @@ function capInterleavedXY(points: ArrayLike<number>, maxVerts: number): number[]
   return out;
 }
 
+
 interface UseHyperScatterArgs {
   embeddings: EmbeddingsData | null;
-  viewMode: ViewMode;
   labelsInfo: ScatterLabelsInfo | null;
   selectedIds: Set<string>;
   hoveredId: string | null;
-  setSelectedIds: (ids: Set<string>, isLasso?: boolean) => void;
-  beginLassoSelection: (query: { viewMode: ViewMode; polygon: number[] }) => void;
+  setSelectedIds: (ids: Set<string>, source?: "scatter" | "grid") => void;
+  beginLassoSelection: (query: { layoutKey: string; polygon: number[] }) => void;
   setHoveredId: (id: string | null) => void;
 }
 
@@ -79,13 +90,8 @@ function drawLassoOverlay(canvas: HTMLCanvasElement | null, points: number[]): v
   ctx.restore();
 }
 
-function viewModeToGeometry(mode: ViewMode): GeometryMode {
-  return mode === "euclidean" ? "euclidean" : "poincare";
-}
-
 export function useHyperScatter({
   embeddings,
-  viewMode,
   labelsInfo,
   selectedIds,
   hoveredId,
@@ -99,11 +105,15 @@ export function useHyperScatter({
 
   const rendererRef = useRef<Renderer | null>(null);
 
+  const [rendererError, setRendererError] = useState<string | null>(null);
+
   const rafPendingRef = useRef(false);
 
   // Interaction state (refs to avoid rerender churn)
   const isPanningRef = useRef(false);
   const isLassoingRef = useRef(false);
+  const pointerDownXRef = useRef(0);
+  const pointerDownYRef = useRef(0);
   const lastPointerXRef = useRef(0);
   const lastPointerYRef = useRef(0);
   const lassoPointsRef = useRef<number[]>([]);
@@ -128,7 +138,23 @@ export function useHyperScatter({
       const renderer = rendererRef.current;
       if (!renderer) return;
 
-      renderer.render();
+      try {
+        renderer.render();
+      } catch (err) {
+        // Avoid an exception storm that would permanently prevent the UI from updating.
+        console.error("hyper-scatter renderer.render() failed:", err);
+        try {
+          renderer.destroy();
+        } catch {
+          // ignore
+        }
+        rendererRef.current = null;
+        setRendererError(
+          "This browser can't render the scatter plot (WebGL2 is required). Please use Chrome/Edge/Firefox."
+        );
+        clearOverlay(overlayCanvasRef.current);
+        return;
+      }
 
       if (isLassoingRef.current) {
         drawLassoOverlay(overlayCanvasRef.current, lassoPointsRef.current);
@@ -153,7 +179,7 @@ export function useHyperScatter({
     clearOverlay(overlayCanvasRef.current);
   }, []);
 
-  // Initialize renderer when embeddings/viewMode change.
+  // Initialize renderer when embeddings change.
   useEffect(() => {
     if (!embeddings || !labelsInfo) return;
     if (!canvasRef.current || !containerRef.current) return;
@@ -161,6 +187,16 @@ export function useHyperScatter({
     let cancelled = false;
 
     const init = async () => {
+      // Clear any previous renderer errors when we attempt to re-init.
+      setRendererError(null);
+
+      if (!supportsWebGL2()) {
+        setRendererError(
+          "This browser doesn't support WebGL2, so the scatter plot can't be displayed. Please use Chrome/Edge/Firefox."
+        );
+        return;
+      }
+
       try {
         const viz = (await import("hyper-scatter")) as HyperScatterModule;
         if (cancelled) return;
@@ -186,33 +222,51 @@ export function useHyperScatter({
           clearOverlay(overlayCanvasRef.current);
         }
 
-        const coords = viewMode === "euclidean" ? embeddings.euclidean : embeddings.hyperbolic;
+        // Use coords from embeddings response directly
+        const coords = embeddings.coords;
         const positions = new Float32Array(coords.length * 2);
         for (let i = 0; i < coords.length; i++) {
           positions[i * 2] = coords[i][0];
           positions[i * 2 + 1] = coords[i][1];
         }
 
-        const geometry = viewModeToGeometry(viewMode);
+        // Determine geometry from layout key
+        const geometry = (getLayoutGeometry(embeddings.layout_key) ?? "euclidean") as GeometryMode;
         const dataset: Dataset = viz.createDataset(geometry, positions, labelsInfo.categories);
 
-        const renderer: Renderer =
-          viewMode === "euclidean" ? new viz.EuclideanWebGLCandidate() : new viz.HyperbolicWebGLCandidate();
-
-        // Match HyperView theme: --card is #161b22
-        const backgroundColor = "#161b22";
-
-        renderer.init(canvas, {
+        const opts = {
           width,
           height,
           devicePixelRatio: window.devicePixelRatio,
           pointRadius: 4,
           colors: labelsInfo.palette,
-          backgroundColor,
-        });
+          backgroundColor: "#161b22", // Match HyperView theme: --card is #161b22
+        };
+
+        const renderer: Renderer =
+          geometry === "euclidean" ? new viz.EuclideanWebGLCandidate() : new viz.HyperbolicWebGLCandidate();
+
+        renderer.init(canvas, opts);
 
         renderer.setDataset(dataset);
         rendererRef.current = renderer;
+
+        // Force a first render to surface WebGL2 context creation failures early.
+        try {
+          renderer.render();
+        } catch (err) {
+          console.error("hyper-scatter initial render failed:", err);
+          rendererRef.current = null;
+          try {
+            renderer.destroy();
+          } catch {
+            // ignore
+          }
+          setRendererError(
+            "This browser can't render the scatter plot (WebGL2 is required). Please use Chrome/Edge/Firefox."
+          );
+          return;
+        }
 
         hoveredIndexRef.current = -1;
         renderer.setHovered(-1);
@@ -220,6 +274,9 @@ export function useHyperScatter({
         requestRender();
       } catch (err) {
         console.error("Failed to initialize hyper-scatter renderer:", err);
+        setRendererError(
+          "Failed to initialize the scatter renderer in this browser. Please use Chrome/Edge/Firefox."
+        );
       }
     };
 
@@ -233,7 +290,7 @@ export function useHyperScatter({
         rendererRef.current = null;
       }
     };
-  }, [embeddings, labelsInfo, requestRender, stopInteraction, viewMode]);
+  }, [embeddings, labelsInfo, requestRender, stopInteraction]);
 
   // Store -> renderer sync
   useEffect(() => {
@@ -317,6 +374,8 @@ export function useHyperScatter({
       if (typeof e.button === "number" && e.button !== 0) return;
 
       const pos = getCanvasPos(e);
+      pointerDownXRef.current = pos.x;
+      pointerDownYRef.current = pos.y;
       lastPointerXRef.current = pos.x;
       lastPointerYRef.current = pos.y;
 
@@ -396,7 +455,7 @@ export function useHyperScatter({
   );
 
   const handlePointerUp = useCallback(
-    async (_e: React.PointerEvent<HTMLCanvasElement>) => {
+    async (e: React.PointerEvent<HTMLCanvasElement>) => {
       const renderer = rendererRef.current;
       if (!renderer || !embeddings) {
         stopInteraction();
@@ -424,7 +483,7 @@ export function useHyperScatter({
             const polygon = capInterleavedXY(dataCoords, MAX_LASSO_VERTS);
             if (polygon.length < 6) return;
 
-            beginLassoSelection({ viewMode, polygon });
+            beginLassoSelection({ layoutKey: embeddings.layout_key, polygon });
           } catch (err) {
             console.error("Lasso selection failed:", err);
           }
@@ -434,10 +493,36 @@ export function useHyperScatter({
         return;
       }
 
+      // Click-to-select (scatter -> image grid)
+      // Only treat as a click if the pointer didn't move much (otherwise it's a pan).
+      const pos = getCanvasPos(e);
+      const dx = pos.x - pointerDownXRef.current;
+      const dy = pos.y - pointerDownYRef.current;
+      const CLICK_MAX_DIST_SQ = 36; // ~6px
+      const isClick = dx * dx + dy * dy <= CLICK_MAX_DIST_SQ;
+
+      if (isClick) {
+        const hit = renderer.hitTest(pos.x, pos.y);
+        const idx = hit ? hit.index : -1;
+
+        if (idx >= 0 && idx < embeddings.ids.length) {
+          const id = embeddings.ids[idx];
+
+          if (e.metaKey || e.ctrlKey) {
+            const next = new Set(selectedIds);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            setSelectedIds(next, "scatter");
+          } else {
+            setSelectedIds(new Set([id]), "scatter");
+          }
+        }
+      }
+
       stopInteraction();
       requestRender();
     },
-    [beginLassoSelection, embeddings, requestRender, stopInteraction, viewMode]
+    [beginLassoSelection, embeddings, getCanvasPos, requestRender, selectedIds, setSelectedIds, stopInteraction]
   );
 
   const handlePointerLeave = useCallback(
@@ -461,7 +546,7 @@ export function useHyperScatter({
       stopInteraction();
 
       renderer.setSelection(new Set());
-      setSelectedIds(new Set<string>());
+      setSelectedIds(new Set<string>(), "scatter");
 
       requestRender();
     },
@@ -477,5 +562,6 @@ export function useHyperScatter({
     handlePointerUp,
     handlePointerLeave,
     handleDoubleClick,
+    rendererError,
   };
 }
