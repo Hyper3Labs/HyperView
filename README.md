@@ -1,6 +1,6 @@
 # HyperView
 
-> **Open-source dataset curation with hyperbolic embeddings visualization - a FiftyOne alternative.**
+> **Open-source dataset curation with hyperbolic embeddings visualization**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/HackerRoomAI/HyperView)
 
