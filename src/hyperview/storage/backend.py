@@ -10,26 +10,15 @@ from hyperview.core.sample import Sample
 
 
 class StorageBackend(ABC):
-    """Abstract base class for storage backends.
-
-    Storage architecture:
-    - Samples: Core metadata (id, filepath, label, metadata, thumbnail)
-    - Spaces: Registry of embedding spaces (one per model)
-    - Embeddings: Per-space tables with vectors
-    - Layouts: Per-layout tables with 2D coordinates
-    """
-
-    # =========================================================================
-    # Sample CRUD
-    # =========================================================================
+    """Abstract base class for storage backends."""
 
     @abstractmethod
     def add_sample(self, sample: Sample) -> None:
-        """Add a single sample to storage."""
+        """Add a single sample (idempotent upsert)."""
 
     @abstractmethod
     def add_samples_batch(self, samples: list[Sample]) -> None:
-        """Add multiple samples efficiently."""
+        """Add multiple samples (idempotent upsert)."""
 
     @abstractmethod
     def get_sample(self, sample_id: str) -> Sample | None:
@@ -46,7 +35,7 @@ class StorageBackend(ABC):
 
     @abstractmethod
     def get_all_samples(self) -> list[Sample]:
-        """Get all samples (use with caution for large datasets)."""
+        """Get all samples."""
 
     @abstractmethod
     def update_sample(self, sample: Sample) -> None:
@@ -58,7 +47,7 @@ class StorageBackend(ABC):
 
     @abstractmethod
     def delete_sample(self, sample_id: str) -> bool:
-        """Delete a sample by ID. Returns True if deleted."""
+        """Delete a sample by ID."""
 
     @abstractmethod
     def __len__(self) -> int:
@@ -85,69 +74,52 @@ class StorageBackend(ABC):
         """Retrieve multiple samples by ID."""
 
     @abstractmethod
+    def get_labels_by_ids(self, sample_ids: list[str]) -> dict[str, str | None]:
+        """Get labels for sample IDs. Missing IDs not included in result."""
+
+    @abstractmethod
     def filter(self, predicate: Callable[[Sample], bool]) -> list[Sample]:
         """Filter samples based on a predicate function."""
 
-    # =========================================================================
-    # Spaces (embedding space registry)
-    # =========================================================================
-
     @abstractmethod
     def list_spaces(self) -> list[Any]:
-        """List all embedding spaces. Returns list of SpaceInfo."""
+        """List all embedding spaces."""
 
     @abstractmethod
     def get_space(self, space_key: str) -> Any | None:
-        """Get info for a specific embedding space. Returns SpaceInfo or None."""
+        """Get info for a specific embedding space."""
 
     @abstractmethod
     def ensure_space(self, model_id: str, dim: int, config: dict | None = None) -> Any:
-        """Ensure an embedding space exists, creating if needed. Returns SpaceInfo."""
+        """Ensure an embedding space exists, creating if needed."""
 
     @abstractmethod
     def delete_space(self, space_key: str) -> bool:
         """Delete an embedding space and its embeddings."""
 
-    # =========================================================================
-    # Embeddings
-    # =========================================================================
-
     @abstractmethod
-    def add_embeddings(
-        self,
-        space_key: str,
-        ids: list[str],
-        vectors: np.ndarray,
-    ) -> None:
+    def add_embeddings(self, space_key: str, ids: list[str], vectors: np.ndarray) -> None:
         """Add embeddings to a space."""
 
     @abstractmethod
-    def get_embeddings(
-        self,
-        space_key: str,
-        ids: list[str] | None = None,
-    ) -> tuple[list[str], np.ndarray]:
+    def get_embeddings(self, space_key: str, ids: list[str] | None = None) -> tuple[list[str], np.ndarray]:
         """Get embeddings from a space. Returns (ids, vectors)."""
 
     @abstractmethod
     def get_embedded_ids(self, space_key: str) -> set[str]:
-        """Get the set of sample IDs that have embeddings in a space."""
+        """Get sample IDs that have embeddings in a space."""
 
     @abstractmethod
     def get_missing_embedding_ids(self, space_key: str) -> list[str]:
-        """Get sample IDs that don't have embeddings in a space."""
-
-    # =========================================================================
-    # Layouts (2D projections)
-    # =========================================================================
+        """Get sample IDs without embeddings in a space."""
 
     @abstractmethod
     def list_layouts(self) -> list[Any]:
-        """List all layouts. Returns list of LayoutInfo."""
+        """List all layouts."""
 
     @abstractmethod
     def get_layout(self, layout_key: str) -> Any | None:
-        """Get layout info. Returns LayoutInfo or None."""
+        """Get layout info."""
 
     @abstractmethod
     def ensure_layout(
@@ -158,19 +130,14 @@ class StorageBackend(ABC):
         geometry: str,
         params: dict | None = None,
     ) -> Any:
-        """Ensure a layout exists. Returns LayoutInfo."""
+        """Ensure a layout exists."""
 
     @abstractmethod
     def delete_layout(self, layout_key: str) -> bool:
         """Delete a layout."""
 
     @abstractmethod
-    def add_layout_coords(
-        self,
-        layout_key: str,
-        ids: list[str],
-        coords: np.ndarray,
-    ) -> None:
+    def add_layout_coords(self, layout_key: str, ids: list[str], coords: np.ndarray) -> None:
         """Add layout coordinates (N x 2)."""
 
     @abstractmethod
@@ -180,17 +147,6 @@ class StorageBackend(ABC):
         ids: list[str] | None = None,
     ) -> tuple[list[str], np.ndarray]:
         """Get layout coordinates. Returns (ids, coords)."""
-
-    @abstractmethod
-    def get_visualization_data(
-        self,
-        layout_key: str,
-    ) -> tuple[list[str], list[str | None], np.ndarray]:
-        """Get visualization data for scatter plot.
-
-        Returns:
-            (ids, labels, coords) where coords is (N x 2).
-        """
 
     @abstractmethod
     def get_lasso_candidates_aabb(
@@ -204,10 +160,6 @@ class StorageBackend(ABC):
     ) -> tuple[list[str], np.ndarray]:
         """Return candidate (id, xy) rows within an axis-aligned bounding box."""
 
-    # =========================================================================
-    # Similarity search
-    # =========================================================================
-
     @abstractmethod
     def find_similar(
         self,
@@ -215,7 +167,7 @@ class StorageBackend(ABC):
         k: int = 10,
         space_key: str | None = None,
     ) -> list[tuple[Sample, float]]:
-        """Find k nearest neighbors. Returns [(sample, distance), ...]."""
+        """Find k nearest neighbors."""
 
     @abstractmethod
     def find_similar_by_vector(
@@ -226,20 +178,6 @@ class StorageBackend(ABC):
     ) -> list[tuple[Sample, float]]:
         """Find k nearest neighbors to a query vector."""
 
-    # =========================================================================
-    # Lifecycle and metadata
-    # =========================================================================
-
     @abstractmethod
     def close(self) -> None:
         """Close the storage connection."""
-
-    @property
-    @abstractmethod
-    def label_colors(self) -> dict[str, str]:
-        """Get label color mapping."""
-
-    @label_colors.setter
-    @abstractmethod
-    def label_colors(self, colors: dict[str, str]) -> None:
-        """Set label color mapping."""

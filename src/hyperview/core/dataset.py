@@ -11,9 +11,9 @@ import numpy as np
 from datasets import load_dataset
 from PIL import Image
 
-from hyperview.core.sample import Sample, SampleFromArray
+from hyperview.core.sample import Sample
 from hyperview.storage.backend import StorageBackend
-from hyperview.storage.schema import make_layout_key, make_space_key
+from hyperview.storage.schema import make_layout_key
 
 
 class Dataset:
@@ -31,9 +31,6 @@ class Dataset:
         # Create a new dataset (auto-persisted)
         dataset = hv.Dataset("my_dataset")
         dataset.add_images_dir("/path/to/images")
-
-        # Open an existing dataset
-        dataset = hv.Dataset.open("my_dataset")
 
         # Create an in-memory dataset (for testing)
         dataset = hv.Dataset("temp", persist=False)
@@ -54,8 +51,6 @@ class Dataset:
             storage: Optional custom storage backend. If provided, persist is ignored.
         """
         self.name = name or f"dataset_{uuid.uuid4().hex[:8]}"
-        self._embedding_computer = None
-        self._projection_engine = None
 
         # Initialize storage backend
         if storage is not None:
@@ -67,28 +62,15 @@ class Dataset:
             self._storage = LanceDBBackend(self.name, config)
         else:
             from hyperview.storage import MemoryBackend
-
             self._storage = MemoryBackend(self.name)
 
-        # Initialize label colors from storage
-        self._sync_label_colors()
-
-    def _sync_label_colors(self) -> None:
-        """Sync label colors from storage and assign colors to new labels."""
-        # Get existing colors from storage
-        existing_colors = self._storage.label_colors
-
-        # Get all unique labels
-        all_labels = self._storage.get_unique_labels()
-
-        # Assign colors to any labels without colors
-        for label in all_labels:
-            if label not in existing_colors:
-                self._assign_label_color(label, existing_colors)
-
-        # Save back if we added new colors
-        if existing_colors != self._storage.label_colors:
-            self._storage.label_colors = existing_colors
+    # Color palette for deterministic label color assignment
+    _COLOR_PALETTE = [
+        "#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231",
+        "#911eb4", "#46f0f0", "#f032e6", "#bcf60c", "#fabebe",
+        "#008080", "#e6beff", "#9a6324", "#fffac8", "#800000",
+        "#aaffc3", "#808000", "#ffd8b1", "#000075", "#808080",
+    ]
 
     def __len__(self) -> int:
         return len(self._storage)
@@ -103,15 +85,43 @@ class Dataset:
         return sample
 
     def add_sample(self, sample: Sample) -> None:
-        """Add a sample to the dataset."""
+        """Add a sample to the dataset (idempotent)."""
         self._storage.add_sample(sample)
 
-        # Assign color to label if needed
-        if sample.label:
-            colors = self._storage.label_colors
-            if sample.label not in colors:
-                self._assign_label_color(sample.label, colors)
-                self._storage.label_colors = colors
+    def _ingest_samples(
+        self,
+        samples: list[Sample],
+        *,
+        skip_existing: bool = True,
+    ) -> tuple[int, int]:
+        """Shared ingestion helper for batch sample insertion.
+
+        Handles deduplication uniformly.
+
+        Args:
+            samples: List of samples to ingest.
+            skip_existing: If True, skip samples that already exist in storage.
+
+        Returns:
+            Tuple of (num_added, num_skipped).
+        """
+        if not samples:
+            return 0, 0
+
+        skipped = 0
+        if skip_existing:
+            all_ids = [s.id for s in samples]
+            existing_ids = self._storage.get_existing_ids(all_ids)
+            if existing_ids:
+                samples = [s for s in samples if s.id not in existing_ids]
+                skipped = len(all_ids) - len(samples)
+
+        if not samples:
+            return 0, skipped
+
+        self._storage.add_samples_batch(samples)
+
+        return len(samples), skipped
 
     def add_image(
         self,
@@ -149,7 +159,8 @@ class Dataset:
         extensions: tuple[str, ...] = (".jpg", ".jpeg", ".png", ".webp"),
         label_from_folder: bool = False,
         recursive: bool = True,
-    ) -> int:
+        skip_existing: bool = True,
+    ) -> tuple[int, int]:
         """Add all images from a directory.
 
         Args:
@@ -157,9 +168,10 @@ class Dataset:
             extensions: Tuple of valid file extensions.
             label_from_folder: If True, use parent folder name as label.
             recursive: If True, search subdirectories.
+            skip_existing: If True (default), skip samples that already exist.
 
         Returns:
-            Number of images added.
+            Tuple of (num_added, num_skipped).
         """
         directory_path = Path(directory)
         if not directory_path.exists():
@@ -180,16 +192,8 @@ class Dataset:
                 )
                 samples.append(sample)
 
-                # Track label colors
-                if label:
-                    colors = self._storage.label_colors
-                    if label not in colors:
-                        self._assign_label_color(label, colors)
-                        self._storage.label_colors = colors
-
-        # Batch add for efficiency
-        self._storage.add_samples_batch(samples)
-        return len(samples)
+        # Use shared ingestion helper
+        return self._ingest_samples(samples, skip_existing=skip_existing)
 
     def add_from_huggingface(
         self,
@@ -199,7 +203,6 @@ class Dataset:
         label_key: str | None = "fine_label",
         label_names_key: str | None = None,
         max_samples: int | None = None,
-        download_images: bool = True,
         show_progress: bool = True,
         skip_existing: bool = True,
         image_format: str = "auto",
@@ -217,11 +220,8 @@ class Dataset:
             label_key: Key for the label column (can be None).
             label_names_key: Key for label names in dataset info.
             max_samples: Maximum number of samples to load.
-            download_images: If True (default), download images to local disk.
-                            If False, use in-memory storage (won't persist).
-            show_progress: Whether to show progress bar.
+            show_progress: Whether to print progress.
             skip_existing: If True (default), skip samples that already exist in storage.
-                          If False, allow duplicate samples (not recommended).
             image_format: Image format to save: "auto" (detect from source, fallback PNG),
                          "png" (lossless), or "jpeg" (smaller files).
 
@@ -229,11 +229,6 @@ class Dataset:
             Tuple of (num_added, num_skipped).
         """
         from hyperview.storage import StorageConfig
-
-        try:
-            from tqdm import tqdm
-        except ImportError:
-            tqdm = None
 
         ds = cast(Any, load_dataset(dataset_name, split=split))
 
@@ -257,15 +252,11 @@ class Dataset:
 
         samples = []
         total = len(ds) if max_samples is None else min(len(ds), max_samples)
-        colors = self._storage.label_colors
 
-        # Setup progress bar
-        if show_progress and tqdm is not None:
-            iterator = tqdm(range(total), desc=f"Loading {dataset_name}")
-        else:
-            if show_progress:
-                print(f"Loading {total} samples from {dataset_name}...")
-            iterator = range(total)
+        if show_progress:
+            print(f"Loading {total} samples from {dataset_name}...")
+
+        iterator = range(total)
 
         for i in iterator:
             item = ds[i]
@@ -317,57 +308,30 @@ class Dataset:
                 "version": version,
             }
 
-            if download_images:
-                # Save image to disk (FiftyOne pattern)
-                image_path = media_dir / f"{sample_id}{ext}"
-                if not image_path.exists():
-                    # Convert to RGB if necessary (for JPEG or non-RGB images)
-                    if save_format == "JPEG" or pil_image.mode in ("RGBA", "P", "L"):
-                        pil_image = pil_image.convert("RGB")
-                    pil_image.save(image_path, format=save_format)
+            image_path = media_dir / f"{sample_id}{ext}"
+            if not image_path.exists():
+                if save_format == "JPEG" or pil_image.mode in ("RGBA", "P", "L"):
+                    pil_image = pil_image.convert("RGB")
+                pil_image.save(image_path, format=save_format)
 
-                sample = Sample(
-                    id=sample_id,
-                    filepath=str(image_path),
-                    label=label,
-                    metadata=metadata,
-                )
-            else:
-                # Use in-memory storage (legacy behavior, won't persist)
-                image_array = np.array(pil_image)
-                sample = SampleFromArray.from_array(
-                    id=sample_id,
-                    image_array=image_array,
-                    label=label,
-                    metadata=metadata,
-                )
+            sample = Sample(
+                id=sample_id,
+                filepath=str(image_path),
+                label=label,
+                metadata=metadata,
+            )
 
             samples.append(sample)
 
-            # Track label colors
-            if label and label not in colors:
-                self._assign_label_color(label, colors)
+        # Use shared ingestion helper
+        num_added, skipped = self._ingest_samples(samples, skip_existing=skip_existing)
 
-        # Check for existing samples and skip duplicates
-        skipped = 0
-        if skip_existing and samples:
-            all_ids = [s.id for s in samples]
-            existing_ids = self._storage.get_existing_ids(all_ids)
-            if existing_ids:
-                samples = [s for s in samples if s.id not in existing_ids]
-                skipped = len(all_ids) - len(samples)
-
-        # Batch add for efficiency
-        if samples:
-            self._storage.add_samples_batch(samples)
-        self._storage.label_colors = colors
-
-        if download_images and show_progress:
+        if show_progress:
             print(f"Images saved to: {media_dir}")
             if skipped > 0:
                 print(f"Skipped {skipped} existing samples")
 
-        return len(samples), skipped
+        return num_added, skipped
 
     def compute_embeddings(
         self,
@@ -387,52 +351,14 @@ class Dataset:
         Returns:
             space_key for the embedding space.
         """
-        from hyperview.embeddings.compute import EmbeddingComputer
+        from hyperview.embeddings.pipelines import compute_missing_embeddings
 
-        if self._embedding_computer is None or self._embedding_computer.model_id != model:
-            self._embedding_computer = EmbeddingComputer(model=model)
-
-        # Get embedding dimension from a test computation
-        all_samples = self._storage.get_all_samples()
-        if not all_samples:
-            raise ValueError("No samples in dataset")
-
-        # Compute one embedding to get dimension
-        test_embedding = self._embedding_computer.compute_single(all_samples[0])
-        dim = len(test_embedding)
-
-        # Ensure space exists with provider metadata
-        space_key = make_space_key(model)
-        provider_config = {
-            "provider": "embed_anything",
-            "geometry": "euclidean",  # EmbedAnything models produce Euclidean embeddings
-        }
-        self._storage.ensure_space(model, dim, config=provider_config)
-
-        # Find samples needing embeddings
-        missing_ids = self._storage.get_missing_embedding_ids(space_key)
-
-        if not missing_ids:
-            if show_progress:
-                print(f"All {len(all_samples)} samples already have embeddings in space '{space_key}'")
-            return space_key
-
-        samples_needing_embeddings = self._storage.get_samples_by_ids(missing_ids)
-
-        if show_progress:
-            skipped = len(all_samples) - len(samples_needing_embeddings)
-            if skipped > 0:
-                print(f"Skipped {skipped} samples with existing embeddings")
-
-        embeddings = self._embedding_computer.compute_batch(
-            samples_needing_embeddings, batch_size=batch_size, show_progress=show_progress
+        space_key, _num_computed, _num_skipped = compute_missing_embeddings(
+            storage=self._storage,
+            model_id=model,
+            batch_size=batch_size,
+            show_progress=show_progress,
         )
-
-        # Store embeddings
-        ids = [s.id for s in samples_needing_embeddings]
-        vectors = np.array(embeddings, dtype=np.float32)
-        self._storage.add_embeddings(space_key, ids, vectors)
-
         return space_key
 
     def compute_visualization(
@@ -459,82 +385,19 @@ class Dataset:
         Returns:
             layout_key for the computed layout.
         """
-        from hyperview.embeddings.projection import ProjectionEngine
+        from hyperview.embeddings.pipelines import compute_layout
 
-        if geometry not in ("euclidean", "poincare"):
-            raise ValueError(f"Invalid geometry: {geometry}. Must be 'euclidean' or 'poincare'.")
-
-        if self._projection_engine is None:
-            self._projection_engine = ProjectionEngine()
-
-        # Get space
-        if space_key is None:
-            spaces = self._storage.list_spaces()
-            if not spaces:
-                raise ValueError("No embedding spaces. Call compute_embeddings() first.")
-            space_key = spaces[0].space_key
-
-        space = self._storage.get_space(space_key)
-        if space is None:
-            raise ValueError(f"Space not found: {space_key}")
-
-        # Get all embeddings from this space
-        ids, vectors = self._storage.get_embeddings(space_key)
-        if len(ids) == 0:
-            raise ValueError(f"No embeddings in space '{space_key}'. Call compute_embeddings() first.")
-
-        if len(ids) < 3:
-            raise ValueError(f"Need at least 3 samples for visualization, have {len(ids)}")
-
-        # Build params dict and generate layout key (includes params hash)
-        layout_params = {
-            "n_neighbors": n_neighbors,
-            "min_dist": min_dist,
-            "metric": metric,
-        }
-        layout_key = make_layout_key(space_key, method, geometry, layout_params)
-
-        # Check if layout exists with same params
-        if not force:
-            existing_layout = self._storage.get_layout(layout_key)
-            if existing_layout is not None:
-                existing_ids, _ = self._storage.get_layout_coords(layout_key)
-                if set(existing_ids) == set(ids):
-                    print(f"Layout '{layout_key}' already exists with {len(ids)} points")
-                    return layout_key
-                print("Layout exists but has different samples, recomputing...")
-
-        print(f"Computing {geometry} {method} layout for {len(ids)} samples...")
-
-        # Ensure layout registry entry exists
-        self._storage.ensure_layout(
-            layout_key=layout_key,
+        return compute_layout(
+            storage=self._storage,
             space_key=space_key,
             method=method,
             geometry=geometry,
-            params=layout_params,
+            n_neighbors=n_neighbors,
+            min_dist=min_dist,
+            metric=metric,
+            force=force,
+            show_progress=True,
         )
-
-        # Compute projection based on geometry
-        if geometry == "poincare":
-            coords = self._projection_engine.project_to_poincare(
-                vectors,
-                n_neighbors=n_neighbors,
-                min_dist=min_dist,
-                metric=metric,
-            )
-        else:
-            coords = self._projection_engine.project_umap(
-                vectors,
-                n_neighbors=n_neighbors,
-                min_dist=min_dist,
-                metric=metric,
-            )
-
-        # Store layout coordinates
-        self._storage.add_layout_coords(layout_key, ids, coords)
-
-        return layout_key
 
     def list_spaces(self) -> list[Any]:
         """List all embedding spaces in this dataset."""
@@ -580,20 +443,17 @@ class Dataset:
         """
         return self._storage.find_similar_by_vector(vector, k, space_key)
 
-    def _assign_label_color(self, label: str, colors: dict[str, str]) -> None:
-        """Assign a color to a label."""
-        color_palette = [
-            "#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231",
-            "#911eb4", "#46f0f0", "#f032e6", "#bcf60c", "#fabebe",
-            "#008080", "#e6beff", "#9a6324", "#fffac8", "#800000",
-            "#aaffc3", "#808000", "#ffd8b1", "#000075", "#808080",
-        ]
-        idx = len(colors) % len(color_palette)
-        colors[label] = color_palette[idx]
+    @staticmethod
+    def _compute_label_color(label: str, palette: list[str]) -> str:
+        """Compute a deterministic color for a label."""
+        digest = hashlib.md5(label.encode("utf-8")).digest()
+        idx = int.from_bytes(digest[:4], "big") % len(palette)
+        return palette[idx]
 
     def get_label_colors(self) -> dict[str, str]:
-        """Get the color mapping for labels."""
-        return self._storage.label_colors.copy()
+        """Get the color mapping for labels (computed deterministically)."""
+        labels = self._storage.get_unique_labels()
+        return {label: self._compute_label_color(label, self._COLOR_PALETTE) for label in labels}
 
     def set_coords(
         self,
@@ -688,7 +548,27 @@ class Dataset:
         layout_key: str,
     ) -> tuple[list[str], list[str | None], np.ndarray]:
         """Get visualization data (ids, labels, coords) for a layout."""
-        return self._storage.get_visualization_data(layout_key)
+        layout_ids, layout_coords = self._storage.get_layout_coords(layout_key)
+        if not layout_ids:
+            return [], [], np.empty((0, 2), dtype=np.float32)
+
+        labels_by_id = self._storage.get_labels_by_ids(layout_ids)
+
+        ids: list[str] = []
+        labels: list[str | None] = []
+        coords: list[np.ndarray] = []
+
+        for i, sample_id in enumerate(layout_ids):
+            if sample_id in labels_by_id:
+                ids.append(sample_id)
+                labels.append(labels_by_id[sample_id])
+                coords.append(layout_coords[i])
+
+        if not coords:
+            return [], [], np.empty((0, 2), dtype=np.float32)
+
+        return ids, labels, np.asarray(coords, dtype=np.float32)
+
 
     def get_lasso_candidates_aabb(
         self,
@@ -707,15 +587,6 @@ class Dataset:
             y_min=y_min,
             y_max=y_max,
         )
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert dataset to dictionary for serialization."""
-        return {
-            "name": self.name,
-            "num_samples": len(self),
-            "labels": self.labels,
-            "label_colors": self._storage.label_colors,
-        }
 
     def save(self, filepath: str, include_thumbnails: bool = True) -> None:
         """Export dataset to a JSON file.
@@ -736,7 +607,6 @@ class Dataset:
 
         data = {
             "name": self.name,
-            "label_colors": self._storage.label_colors,
             "samples": [
                 {
                     "id": s.id,
@@ -768,10 +638,6 @@ class Dataset:
 
         dataset = cls(name=data["name"], persist=persist)
 
-        # Set label colors
-        label_colors = data.get("label_colors", {})
-        dataset._storage.label_colors = label_colors
-
         # Add samples
         samples = []
         for s_data in data["samples"]:
@@ -786,139 +652,3 @@ class Dataset:
 
         dataset._storage.add_samples_batch(samples)
         return dataset
-
-    @classmethod
-    def open(cls, name: str) -> "Dataset":
-        """Open an existing persistent dataset.
-
-        Args:
-            name: Name of the dataset to open.
-
-        Returns:
-            Dataset instance connected to existing data.
-
-        Raises:
-            ValueError: If dataset does not exist.
-        """
-        from hyperview.storage import LanceDBBackend
-
-        if not LanceDBBackend.dataset_exists(name):
-            raise ValueError(
-                f"Dataset '{name}' does not exist. "
-                f"Available datasets: {cls.list_datasets()}"
-            )
-
-        return cls(name=name, persist=True)
-
-    @classmethod
-    def list_datasets(cls) -> list[str]:
-        """List all available persistent datasets.
-
-        Returns:
-            List of dataset names.
-        """
-        from hyperview.storage import LanceDBBackend
-
-        return LanceDBBackend.list_datasets()
-
-    @classmethod
-    def delete(cls, name: str, delete_media: bool = False) -> bool:
-        """Delete a persistent dataset.
-
-        Args:
-            name: Name of the dataset to delete.
-            delete_media: If True, also delete associated media files from disk.
-                         Default is False (safe, preserves media files).
-
-        Returns:
-            True if dataset was deleted, False if it didn't exist.
-        """
-        import os
-
-        from hyperview.storage import LanceDBBackend
-
-        if delete_media:
-            try:
-                dataset = cls.open(name)
-            except Exception:
-                dataset = None
-
-            if dataset is not None:
-                for fp in (s.filepath for s in dataset.samples):
-                    if os.path.exists(fp):
-                        try:
-                            os.remove(fp)
-                        except OSError:
-                            continue
-
-        return LanceDBBackend.delete_dataset(name)
-
-    @classmethod
-    def cleanup_orphaned_media(
-        cls,
-        delete: bool = False,
-    ) -> tuple[int, list[str]]:
-        """Find media files not referenced by any dataset.
-
-        Scans the media directory for image files and checks if they are
-        referenced by any existing dataset. Useful for cleaning up disk space
-        after deleting datasets without the delete_media=True flag.
-
-        Args:
-            delete: If True, actually delete the orphaned files.
-                   If False (default), just report them.
-
-        Returns:
-            Tuple of (count, list_of_orphaned_paths).
-        """
-        import os
-
-        from hyperview.storage import StorageConfig
-
-        config = StorageConfig.default()
-        media_dir = config.media_dir
-
-        if not media_dir.exists():
-            return 0, []
-
-        # Get all filepaths from all datasets
-        referenced: set[str] = set()
-        for dataset_name in cls.list_datasets():
-            try:
-                ds = cls.open(dataset_name)
-                referenced.update(s.filepath for s in ds.samples)
-            except Exception:
-                continue
-
-        # Find orphaned files (images not referenced by any dataset)
-        orphaned: list[str] = []
-        image_extensions = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
-
-        for img_path in media_dir.rglob("*"):
-            if img_path.is_file() and img_path.suffix.lower() in image_extensions:
-                if str(img_path) not in referenced:
-                    orphaned.append(str(img_path))
-
-        # Optionally delete orphaned files
-        if delete:
-            for path in orphaned:
-                try:
-                    os.remove(path)
-                except OSError:
-                    continue
-
-        return len(orphaned), orphaned
-
-    @classmethod
-    def exists(cls, name: str) -> bool:
-        """Check if a persistent dataset exists.
-
-        Args:
-            name: Name of the dataset to check.
-
-        Returns:
-            True if dataset exists.
-        """
-        from hyperview.storage import LanceDBBackend
-
-        return LanceDBBackend.dataset_exists(name)
