@@ -401,9 +401,13 @@ class Dataset:
         test_embedding = self._embedding_computer.compute_single(all_samples[0])
         dim = len(test_embedding)
 
-        # Ensure space exists
+        # Ensure space exists with provider metadata
         space_key = make_space_key(model)
-        self._storage.ensure_space(model, dim)
+        provider_config = {
+            "provider": "embed_anything",
+            "geometry": "euclidean",  # EmbedAnything models produce Euclidean embeddings
+        }
+        self._storage.ensure_space(model, dim, config=provider_config)
 
         # Find samples needing embeddings
         missing_ids = self._storage.get_missing_embedding_ids(space_key)
@@ -446,7 +450,7 @@ class Dataset:
         Args:
             space_key: Embedding space to project. If None, uses the first available.
             method: Projection method ('umap' supported).
-            geometry: Geometry type ('euclidean' or 'poincare').
+            geometry: Output geometry type ('euclidean' or 'poincare').
             n_neighbors: Number of neighbors for UMAP.
             min_dist: Minimum distance for UMAP.
             metric: Distance metric for UMAP.
@@ -479,22 +483,37 @@ class Dataset:
         if len(ids) == 0:
             raise ValueError(f"No embeddings in space '{space_key}'. Call compute_embeddings() first.")
 
-        # Generate layout key (includes geometry)
-        layout_key = make_layout_key(space_key, method, geometry)
-
-        # Check if layout exists
-        if not force and layout_key in self._storage.list_layouts():
-            existing_ids, _ = self._storage.get_layout_coords(layout_key)
-            if set(existing_ids) == set(ids):
-                print(f"Layout '{layout_key}' already exists with {len(ids)} points")
-                return layout_key
-            else:
-                print(f"Layout exists but has different samples, recomputing...")
-
         if len(ids) < 3:
             raise ValueError(f"Need at least 3 samples for visualization, have {len(ids)}")
 
+        # Build params dict and generate layout key (includes params hash)
+        layout_params = {
+            "n_neighbors": n_neighbors,
+            "min_dist": min_dist,
+            "metric": metric,
+        }
+        layout_key = make_layout_key(space_key, method, geometry, layout_params)
+
+        # Check if layout exists with same params
+        if not force:
+            existing_layout = self._storage.get_layout(layout_key)
+            if existing_layout is not None:
+                existing_ids, _ = self._storage.get_layout_coords(layout_key)
+                if set(existing_ids) == set(ids):
+                    print(f"Layout '{layout_key}' already exists with {len(ids)} points")
+                    return layout_key
+                print("Layout exists but has different samples, recomputing...")
+
         print(f"Computing {geometry} {method} layout for {len(ids)} samples...")
+
+        # Ensure layout registry entry exists
+        self._storage.ensure_layout(
+            layout_key=layout_key,
+            space_key=space_key,
+            method=method,
+            geometry=geometry,
+            params=layout_params,
+        )
 
         # Compute projection based on geometry
         if geometry == "poincare":
@@ -512,7 +531,7 @@ class Dataset:
                 metric=metric,
             )
 
-        # Store layout
+        # Store layout coordinates
         self._storage.add_layout_coords(layout_key, ids, coords)
 
         return layout_key
@@ -521,8 +540,8 @@ class Dataset:
         """List all embedding spaces in this dataset."""
         return self._storage.list_spaces()
 
-    def list_layouts(self) -> list[str]:
-        """List all layouts in this dataset."""
+    def list_layouts(self) -> list[Any]:
+        """List all layouts in this dataset (returns LayoutInfo objects)."""
         return self._storage.list_layouts()
 
     def find_similar(
@@ -610,9 +629,23 @@ class Dataset:
         # Ensure a synthetic space exists (required by launch())
         space_key = "precomputed"
         if not any(s.space_key == space_key for s in self._storage.list_spaces()):
-            self._storage.ensure_space(space_key, dim=2)
+            precomputed_config = {
+                "provider": "precomputed",
+                "geometry": "unknown",  # Precomputed coords don't have a source embedding geometry
+            }
+            self._storage.ensure_space(space_key, dim=2, config=precomputed_config)
 
         layout_key = make_layout_key(space_key, method="precomputed", geometry=geometry)
+
+        # Ensure layout registry entry exists
+        self._storage.ensure_layout(
+            layout_key=layout_key,
+            space_key=space_key,
+            method="precomputed",
+            geometry=geometry,
+            params=None,
+        )
+
         self._storage.add_layout_coords(layout_key, list(ids), coords_arr)
         return layout_key
 
@@ -629,6 +662,51 @@ class Dataset:
     def filter(self, predicate: Callable[[Sample], bool]) -> list[Sample]:
         """Filter samples based on a predicate function."""
         return self._storage.filter(predicate)
+
+    def get_samples_paginated(
+        self,
+        offset: int = 0,
+        limit: int = 100,
+        label: str | None = None,
+    ) -> tuple[list[Sample], int]:
+        """Get paginated samples.
+
+        This avoids loading all samples into memory and is used by the server
+        API for efficient pagination.
+        """
+        return self._storage.get_samples_paginated(offset=offset, limit=limit, label=label)
+
+    def get_samples_by_ids(self, sample_ids: list[str]) -> list[Sample]:
+        """Retrieve multiple samples by ID.
+
+        The returned list is aligned to the input order and skips missing IDs.
+        """
+        return self._storage.get_samples_by_ids(sample_ids)
+
+    def get_visualization_data(
+        self,
+        layout_key: str,
+    ) -> tuple[list[str], list[str | None], np.ndarray]:
+        """Get visualization data (ids, labels, coords) for a layout."""
+        return self._storage.get_visualization_data(layout_key)
+
+    def get_lasso_candidates_aabb(
+        self,
+        *,
+        layout_key: str,
+        x_min: float,
+        x_max: float,
+        y_min: float,
+        y_max: float,
+    ) -> tuple[list[str], np.ndarray]:
+        """Return candidate (id, xy) rows within an AABB for a layout."""
+        return self._storage.get_lasso_candidates_aabb(
+            layout_key=layout_key,
+            x_min=x_min,
+            x_max=x_max,
+            y_min=y_min,
+            y_max=y_max,
+        )
 
     def to_dict(self) -> dict[str, Any]:
         """Convert dataset to dictionary for serialization."""

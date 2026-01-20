@@ -2,7 +2,6 @@ import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { EmbeddingsData } from "@/types";
-import { getLayoutGeometry } from "@/lib/layouts";
 import type { Dataset, GeometryMode, Modifiers, Renderer } from "hyper-scatter";
 
 type HyperScatterModule = typeof import("hyper-scatter");
@@ -230,8 +229,7 @@ export function useHyperScatter({
           positions[i * 2 + 1] = coords[i][1];
         }
 
-        // Determine geometry from layout key
-        const geometry = (getLayoutGeometry(embeddings.layout_key) ?? "euclidean") as GeometryMode;
+        const geometry = embeddings.geometry as GeometryMode;
         const dataset: Dataset = viz.createDataset(geometry, positions, labelsInfo.categories);
 
         const opts = {

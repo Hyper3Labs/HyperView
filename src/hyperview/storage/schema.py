@@ -102,8 +102,15 @@ class SpaceInfo:
     updated_at: int
     config: dict[str, Any] | None = None
 
+    @property
+    def provider(self) -> str:
+        return (self.config or {}).get("provider", "unknown")
+
+    @property
+    def geometry(self) -> str:
+        return (self.config or {}).get("geometry", "euclidean")
+
     def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for storage."""
         return {
             "space_key": self.space_key,
             "model_id": self.model_id,
@@ -114,15 +121,21 @@ class SpaceInfo:
             "config_json": json.dumps(self.config) if self.config else None,
         }
 
+    def to_api_dict(self) -> dict[str, Any]:
+        return {
+            "space_key": self.space_key,
+            "model_id": self.model_id,
+            "dim": self.dim,
+            "count": self.count,
+            "provider": self.provider,
+            "geometry": self.geometry,
+            "config": self.config,
+        }
+
     @classmethod
     def from_dict(cls, row: dict[str, Any]) -> "SpaceInfo":
-        """Create from storage dictionary."""
-        config = None
-        if row.get("config_json"):
-            try:
-                config = json.loads(row["config_json"])
-            except (json.JSONDecodeError, TypeError):
-                pass
+        config_json = row.get("config_json")
+        config = json.loads(config_json) if config_json else None
         return cls(
             space_key=row["space_key"],
             model_id=row["model_id"],
@@ -131,6 +144,72 @@ class SpaceInfo:
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             config=config,
+        )
+
+
+def create_layouts_registry_schema() -> pa.Schema:
+    """Create the PyArrow schema for the layouts registry.
+
+    Each row represents a layout (2D projection of an embedding space).
+    """
+    return pa.schema(
+        [
+            pa.field("layout_key", pa.utf8(), nullable=False),
+            pa.field("space_key", pa.utf8(), nullable=False),
+            pa.field("method", pa.utf8(), nullable=False),
+            pa.field("geometry", pa.utf8(), nullable=False),
+            pa.field("count", pa.int64(), nullable=False),
+            pa.field("created_at", pa.int64(), nullable=False),
+            pa.field("params_json", pa.utf8(), nullable=True),
+        ]
+    )
+
+
+@dataclass
+class LayoutInfo:
+    """Metadata for a layout (2D projection)."""
+
+    layout_key: str
+    space_key: str
+    method: str
+    geometry: str
+    count: int
+    created_at: int
+    params: dict[str, Any] | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "layout_key": self.layout_key,
+            "space_key": self.space_key,
+            "method": self.method,
+            "geometry": self.geometry,
+            "count": self.count,
+            "created_at": self.created_at,
+            "params_json": json.dumps(self.params) if self.params else None,
+        }
+
+    def to_api_dict(self) -> dict[str, Any]:
+        return {
+            "layout_key": self.layout_key,
+            "space_key": self.space_key,
+            "method": self.method,
+            "geometry": self.geometry,
+            "count": self.count,
+            "params": self.params,
+        }
+
+    @classmethod
+    def from_dict(cls, row: dict[str, Any]) -> "LayoutInfo":
+        params_json = row.get("params_json")
+        params = json.loads(params_json) if params_json else None
+        return cls(
+            layout_key=row["layout_key"],
+            space_key=row["space_key"],
+            method=row["method"],
+            geometry=row["geometry"],
+            count=row["count"],
+            created_at=row["created_at"],
+            params=params,
         )
 
 
@@ -162,20 +241,20 @@ def make_layout_key(
     space_key: str,
     method: str = "umap",
     geometry: str = "euclidean",
+    params: dict | None = None,
 ) -> str:
-    """Generate a layout_key from space, method, and geometry.
+    """Generate a layout_key from space, method, geometry, and params.
 
-    Args:
-        space_key: The embedding space key.
-        method: Layout method (e.g., "umap").
-        geometry: Geometry type ("euclidean" or "poincare").
-
-    Returns:
-        Layout key like "clip__poincare_umap" or "clip__euclidean_umap".
+    The params are hashed to ensure different parameter sets get different keys.
     """
-    # Format: {space}__{geometry}_{method}
-    # Frontend parses for "poincare" or "hyperbolic" to auto-detect geometry
-    return f"{space_key}__{geometry}_{method}"
+    base = f"{space_key}__{geometry}_{method}"
+    if params:
+        # Create a stable hash of params
+        import hashlib
+        params_str = "_".join(f"{k}={v}" for k, v in sorted(params.items()))
+        params_hash = hashlib.md5(params_str.encode()).hexdigest()[:8]
+        return f"{base}_{params_hash}"
+    return base
 
 
 def sample_to_dict(sample: Sample) -> dict[str, Any]:
@@ -191,12 +270,8 @@ def sample_to_dict(sample: Sample) -> dict[str, Any]:
 
 def dict_to_sample(row: dict[str, Any]) -> Sample:
     """Convert a LanceDB row to a Sample object."""
-    metadata = {}
-    if row.get("metadata_json"):
-        try:
-            metadata = json.loads(row["metadata_json"])
-        except (json.JSONDecodeError, TypeError):
-            metadata = {}
+    metadata_json = row.get("metadata_json")
+    metadata = json.loads(metadata_json) if metadata_json else {}
 
     return Sample(
         id=row["id"],

@@ -14,6 +14,18 @@ export interface SpaceInfo {
   model_id: string;
   dim: number;
   count: number;
+  provider: string;
+  geometry: Geometry | string;
+  config: Record<string, unknown> | null;
+}
+
+export interface LayoutInfo {
+  layout_key: string;
+  space_key: string;
+  method: string;
+  geometry: Geometry;
+  count: number;
+  params: Record<string, unknown> | null;
 }
 
 export interface DatasetInfo {
@@ -22,11 +34,12 @@ export interface DatasetInfo {
   labels: string[];
   label_colors: Record<string, string>;
   spaces: SpaceInfo[];
-  layouts: string[];
+  layouts: LayoutInfo[];
 }
 
 export interface EmbeddingsData {
   layout_key: string;
+  geometry: Geometry;
   ids: string[];
   labels: (string | null)[];
   coords: [number, number][];

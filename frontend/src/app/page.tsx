@@ -16,7 +16,6 @@ import {
   fetchSamplesBatch,
   fetchLassoSelection,
 } from "@/lib/api";
-import { getLayoutGeometry } from "@/lib/layouts";
 
 const SAMPLES_PER_PAGE = 100;
 
@@ -83,18 +82,18 @@ export default function Home() {
   useEffect(() => {
     if (!datasetInfo) return;
 
-    // Find layout key for current geometry
-    const targetLayout = datasetInfo.layouts.find((l) => getLayoutGeometry(l) === geometry);
+    // Find layout for current geometry (using LayoutInfo.geometry directly)
+    const targetLayout = datasetInfo.layouts.find((l) => l.geometry === geometry);
     if (!targetLayout) return;
 
     // Skip if already showing this layout
     const currentLayout = useStore.getState().currentLayoutKey;
-    if (currentLayout === targetLayout) return;
+    if (currentLayout === targetLayout.layout_key) return;
 
     const loadGeometry = async () => {
       setGeometryLoading(true);
       try {
-        const embeddingsData = await fetchEmbeddings(targetLayout);
+        const embeddingsData = await fetchEmbeddings(targetLayout.layout_key);
         setEmbeddings(embeddingsData);
       } catch (err) {
         console.error("Failed to load geometry:", err);

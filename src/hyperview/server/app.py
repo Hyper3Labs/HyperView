@@ -48,6 +48,29 @@ class SampleResponse(BaseModel):
     metadata: dict
 
 
+class LayoutInfoResponse(BaseModel):
+    """Response model for layout info."""
+
+    layout_key: str
+    space_key: str
+    method: str
+    geometry: str
+    count: int
+    params: dict[str, Any] | None
+
+
+class SpaceInfoResponse(BaseModel):
+    """Response model for embedding space info."""
+
+    space_key: str
+    model_id: str
+    dim: int
+    count: int
+    provider: str
+    geometry: str
+    config: dict[str, Any] | None
+
+
 class DatasetResponse(BaseModel):
     """Response model for dataset info."""
 
@@ -55,27 +78,19 @@ class DatasetResponse(BaseModel):
     num_samples: int
     labels: list[str]
     label_colors: dict[str, str]
-    spaces: list[dict[str, Any]]
-    layouts: list[str]
+    spaces: list[SpaceInfoResponse]
+    layouts: list[LayoutInfoResponse]
 
 
 class EmbeddingsResponse(BaseModel):
     """Response model for embeddings data (for scatter plot)."""
 
     layout_key: str
+    geometry: str
     ids: list[str]
     labels: list[str | None]
-    coords: list[list[float]]  # [[x, y], ...]
+    coords: list[list[float]]
     label_colors: dict[str, str]
-
-
-class SpaceInfo(BaseModel):
-    """Response model for embedding space info."""
-
-    space_key: str
-    model_id: str
-    dim: int
-    count: int
 
 
 class SimilarSampleResponse(BaseModel):
@@ -145,15 +160,10 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
             raise HTTPException(status_code=404, detail="No dataset loaded")
 
         spaces = _current_dataset.list_spaces()
-        space_dicts = [
-            {
-                "space_key": s.space_key,
-                "model_id": s.model_id,
-                "dim": s.dim,
-                "count": s.count,
-            }
-            for s in spaces
-        ]
+        space_dicts = [s.to_api_dict() for s in spaces]
+
+        layouts = _current_dataset.list_layouts()
+        layout_dicts = [l.to_api_dict() for l in layouts]
 
         return DatasetResponse(
             name=_current_dataset.name,
@@ -161,7 +171,7 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
             labels=_current_dataset.labels,
             label_colors=_current_dataset.get_label_colors(),
             spaces=space_dicts,
-            layouts=_current_dataset.list_layouts(),
+            layouts=layout_dicts,
         )
 
     @app.get("/api/samples")
@@ -174,8 +184,8 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
         if _current_dataset is None:
             raise HTTPException(status_code=404, detail="No dataset loaded")
 
-        # Use storage backend's native pagination (avoids loading all samples)
-        samples, total = _current_dataset._storage.get_samples_paginated(
+        # Use backend-native pagination (avoids loading all samples)
+        samples, total = _current_dataset.get_samples_paginated(
             offset=offset, limit=limit, label=label
         )
 
@@ -204,7 +214,7 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
         if _current_dataset is None:
             raise HTTPException(status_code=404, detail="No dataset loaded")
 
-        samples = _current_dataset._storage.get_samples_by_ids(request.sample_ids)
+        samples = _current_dataset.get_samples_by_ids(request.sample_ids)
 
         return {"samples": [s.to_api_dict(include_thumbnail=True) for s in samples]}
 
@@ -214,28 +224,30 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
         if _current_dataset is None:
             raise HTTPException(status_code=404, detail="No dataset loaded")
 
-        # Get available layouts
         layouts = _current_dataset.list_layouts()
         if not layouts:
             raise HTTPException(
                 status_code=400, detail="No layouts computed. Call compute_visualization() first."
             )
 
-        # Use specified layout or first available
+        # Find the requested layout
+        layout_info = None
         if layout_key is None:
-            layout_key = layouts[0]
-        elif layout_key not in layouts:
-            raise HTTPException(status_code=404, detail=f"Layout not found: {layout_key}")
+            layout_info = layouts[0]
+            layout_key = layout_info.layout_key
+        else:
+            layout_info = next((l for l in layouts if l.layout_key == layout_key), None)
+            if layout_info is None:
+                raise HTTPException(status_code=404, detail=f"Layout not found: {layout_key}")
 
-        ids, labels, coords = _current_dataset._storage.get_visualization_data(layout_key)
+        ids, labels, coords = _current_dataset.get_visualization_data(layout_key)
 
         if not ids:
-            raise HTTPException(
-                status_code=400, detail=f"No data in layout '{layout_key}'."
-            )
+            raise HTTPException(status_code=400, detail=f"No data in layout '{layout_key}'.")
 
         return EmbeddingsResponse(
             layout_key=layout_key,
+            geometry=layout_info.geometry,
             ids=ids,
             labels=labels,
             coords=coords.tolist(),
@@ -249,17 +261,7 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
             raise HTTPException(status_code=404, detail="No dataset loaded")
 
         spaces = _current_dataset.list_spaces()
-        return {
-            "spaces": [
-                {
-                    "space_key": s.space_key,
-                    "model_id": s.model_id,
-                    "dim": s.dim,
-                    "count": s.count,
-                }
-                for s in spaces
-            ]
-        }
+        return {"spaces": [s.to_api_dict() for s in spaces]}
 
     @app.get("/api/layouts")
     async def get_layouts():
@@ -267,7 +269,8 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
         if _current_dataset is None:
             raise HTTPException(status_code=404, detail="No dataset loaded")
 
-        return {"layouts": _current_dataset.list_layouts()}
+        layouts = _current_dataset.list_layouts()
+        return {"layouts": [l.to_api_dict() for l in layouts]}
 
     @app.post("/api/selection")
     async def sync_selection(request: SelectionRequest):
@@ -309,16 +312,13 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
         y_min = float(np.min(poly[:, 1]))
         y_max = float(np.max(poly[:, 1]))
 
-        try:
-            candidate_ids, candidate_coords = _current_dataset._storage.get_lasso_candidates_aabb(
-                layout_key=request.layout_key,
-                x_min=x_min,
-                x_max=x_max,
-                y_min=y_min,
-                y_max=y_max,
-            )
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+        candidate_ids, candidate_coords = _current_dataset.get_lasso_candidates_aabb(
+            layout_key=request.layout_key,
+            x_min=x_min,
+            x_max=x_max,
+            y_min=y_min,
+            y_max=y_max,
+        )
 
         if candidate_coords.size == 0:
             return {"total": 0, "offset": request.offset, "limit": request.limit, "sample_ids": [], "samples": []}
@@ -334,7 +334,7 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
         end = int(request.offset + request.limit)
         sample_ids = selected_ids[start:end]
 
-        samples = _current_dataset._storage.get_samples_by_ids(sample_ids)
+        samples = _current_dataset.get_samples_by_ids(sample_ids)
         sample_dicts = [s.to_api_dict(include_thumbnail=request.include_thumbnails) for s in samples]
 
         return {

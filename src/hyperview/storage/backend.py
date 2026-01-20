@@ -142,12 +142,23 @@ class StorageBackend(ABC):
     # =========================================================================
 
     @abstractmethod
-    def list_layouts(self) -> list[str]:
-        """List all layout keys."""
+    def list_layouts(self) -> list[Any]:
+        """List all layouts. Returns list of LayoutInfo."""
 
     @abstractmethod
-    def ensure_layout(self, layout_key: str) -> None:
-        """Ensure a layout exists."""
+    def get_layout(self, layout_key: str) -> Any | None:
+        """Get layout info. Returns LayoutInfo or None."""
+
+    @abstractmethod
+    def ensure_layout(
+        self,
+        layout_key: str,
+        space_key: str,
+        method: str,
+        geometry: str,
+        params: dict | None = None,
+    ) -> Any:
+        """Ensure a layout exists. Returns LayoutInfo."""
 
     @abstractmethod
     def delete_layout(self, layout_key: str) -> bool:

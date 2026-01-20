@@ -5,8 +5,9 @@ Storage architecture (per-dataset directory):
         - samples table: core sample metadata
         - metadata table: key-value config
         - spaces table: registry of embedding spaces
+        - layouts_registry table: registry of layouts
         - embeddings__<space_key> tables: one per embedding model
-        - layouts__<layout_key> tables: one per layout
+        - layouts__<layout_key> tables: one per layout (coordinates)
 """
 
 import json
@@ -22,8 +23,10 @@ from hyperview.core.sample import Sample
 from hyperview.storage.backend import StorageBackend
 from hyperview.storage.config import StorageConfig, get_default_datasets_dir
 from hyperview.storage.schema import (
+    LayoutInfo,
     SpaceInfo,
     create_embeddings_schema,
+    create_layouts_registry_schema,
     create_layouts_schema,
     create_metadata_schema,
     create_sample_schema,
@@ -518,35 +521,104 @@ class LanceDBBackend(StorageBackend):
         return list(all_ids - embedded_ids)
 
     # =========================================================================
-    # Layouts operations
+    # Layouts registry operations
     # =========================================================================
 
+    def _get_layouts_registry_table(self) -> lancedb.table.Table | None:
+        """Get or create layouts registry table."""
+        if "layouts_registry" not in self._db.table_names():
+            return None
+        return self._db.open_table("layouts_registry")
+
+    def _ensure_layouts_registry_table(self) -> lancedb.table.Table:
+        """Ensure layouts registry table exists."""
+        if "layouts_registry" not in self._db.table_names():
+            schema = create_layouts_registry_schema()
+            self._db.create_table("layouts_registry", schema=schema)
+        return self._db.open_table("layouts_registry")
+
     def get_layout_table_name(self, layout_key: str) -> str:
-        """Get the table name for a layout."""
         return f"layouts__{layout_key}"
 
-    def list_layouts(self) -> list[str]:
-        """List all layout keys."""
-        layouts = []
-        for name in self._db.table_names():
-            if name.startswith("layouts__"):
-                layouts.append(name[len("layouts__") :])
-        return layouts
+    def list_layouts(self) -> list[LayoutInfo]:
+        table = self._get_layouts_registry_table()
+        if table is None:
+            return []
+        rows = table.search().to_list()
+        return [LayoutInfo.from_dict(row) for row in rows]
 
-    def ensure_layout(self, layout_key: str) -> None:
-        """Ensure a layout table exists."""
+    def get_layout(self, layout_key: str) -> LayoutInfo | None:
+        table = self._get_layouts_registry_table()
+        if table is None:
+            return None
+        safe_key = layout_key.replace("'", "''")
+        rows = table.search().where(f"layout_key = '{safe_key}'").limit(1).to_list()
+        return LayoutInfo.from_dict(rows[0]) if rows else None
+
+    def ensure_layout(
+        self,
+        layout_key: str,
+        space_key: str,
+        method: str,
+        geometry: str,
+        params: dict | None = None,
+    ) -> LayoutInfo:
+        """Ensure a layout exists, creating registry entry if needed."""
+        # Check if registry entry exists
+        existing = self.get_layout(layout_key)
+        if existing is not None:
+            return existing
+
+        # Create registry entry
+        now = int(time.time())
+        layout_info = LayoutInfo(
+            layout_key=layout_key,
+            space_key=space_key,
+            method=method,
+            geometry=geometry,
+            count=0,
+            created_at=now,
+            params=params,
+        )
+
+        registry_table = self._ensure_layouts_registry_table()
+        schema = create_layouts_registry_schema()
+        arrow = pa.Table.from_pylist([layout_info.to_dict()], schema=schema)
+        registry_table.add(arrow)
+
+        # Create coordinates table
         table_name = self.get_layout_table_name(layout_key)
         if table_name not in self._db.table_names():
-            schema = create_layouts_schema()
-            self._db.create_table(table_name, schema=schema)
+            coords_schema = create_layouts_schema()
+            self._db.create_table(table_name, schema=coords_schema)
+
+        return layout_info
 
     def delete_layout(self, layout_key: str) -> bool:
-        """Delete a layout table."""
+        """Delete a layout (both registry entry and coordinates)."""
+        deleted = False
+
+        # Delete coordinates table
         table_name = self.get_layout_table_name(layout_key)
         if table_name in self._db.table_names():
             self._db.drop_table(table_name)
-            return True
-        return False
+            deleted = True
+
+        # Delete registry entry
+        registry_table = self._get_layouts_registry_table()
+        if registry_table is not None:
+            safe_key = layout_key.replace("'", "''")
+            registry_table.delete(f"layout_key = '{safe_key}'")
+            deleted = True
+
+        return deleted
+
+    def _update_layout_count(self, layout_key: str, count: int) -> None:
+        registry_table = self._get_layouts_registry_table()
+        if registry_table is None:
+            return
+        safe_key = layout_key.replace("'", "''")
+        registry_table.update(where=f"layout_key = '{safe_key}'", values={"count": count})
 
     def add_layout_coords(
         self,
@@ -554,21 +626,20 @@ class LanceDBBackend(StorageBackend):
         ids: list[str],
         coords: np.ndarray,
     ) -> None:
-        """Add layout coordinates.
-
-        Args:
-            layout_key: The layout key.
-            ids: Sample IDs.
-            coords: 2D coordinates (N x 2).
-        """
         if len(ids) != len(coords):
             raise ValueError("ids and coords must have same length")
         if len(ids) == 0:
             return
 
-        self.ensure_layout(layout_key)
+        # Require registry entry exists (call ensure_layout first)
+        if self.get_layout(layout_key) is None:
+            raise ValueError(f"Layout '{layout_key}' not registered. Call ensure_layout() first.")
 
         table_name = self.get_layout_table_name(layout_key)
+        if table_name not in self._db.table_names():
+            coords_schema = create_layouts_schema()
+            self._db.create_table(table_name, schema=coords_schema)
+
         table = self._db.open_table(table_name)
 
         data = [
@@ -585,6 +656,9 @@ class LanceDBBackend(StorageBackend):
             .when_not_matched_insert_all()
             .execute(arrow)
         )
+
+        # Update count in registry
+        self._update_layout_count(layout_key, table.count_rows())
 
     def get_layout_coords(
         self,

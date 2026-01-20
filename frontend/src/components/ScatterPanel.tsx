@@ -8,7 +8,7 @@ import { EuclideanIcon, PoincareIcon, ScatterIcon } from "./icons";
 import { type ScatterLabelsInfo, useHyperScatter } from "./useHyperScatter";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import type { Geometry } from "@/types";
-import { getLayoutSpaceKey, listAvailableGeometries } from "@/lib/layouts";
+import { listAvailableGeometries } from "@/lib/layouts";
 
 interface ScatterPanelProps {
   className?: string;
@@ -33,17 +33,18 @@ export function ScatterPanel({ className = "" }: ScatterPanelProps) {
   }, [datasetInfo?.layouts]);
 
   const embeddingModelName = useMemo(() => {
-    if (!embeddings) return null;
+    if (!embeddings || !datasetInfo) return null;
 
     const layoutKey = embeddings.layout_key;
-    const spaceKey = getLayoutSpaceKey(layoutKey);
 
-    const space =
-      datasetInfo?.spaces.find((s) => s.space_key === spaceKey) ??
-      datasetInfo?.spaces.find((s) => layoutKey.startsWith(`${s.space_key}__`));
+    // Find the LayoutInfo for current layout to get space_key directly
+    const layoutInfo = datasetInfo.layouts.find((l) => l.layout_key === layoutKey);
+    const spaceKey = layoutInfo?.space_key ?? layoutKey.split("__")[0];
+
+    const space = datasetInfo.spaces.find((s) => s.space_key === spaceKey);
 
     return space?.model_id ?? space?.space_key ?? spaceKey;
-  }, [datasetInfo?.spaces, embeddings]);
+  }, [datasetInfo, embeddings]);
 
   const labelsInfo = useMemo<ScatterLabelsInfo | null>(() => {
     if (!embeddings) return null;

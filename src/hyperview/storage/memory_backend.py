@@ -9,7 +9,7 @@ import numpy as np
 
 from hyperview.core.sample import Sample
 from hyperview.storage.backend import StorageBackend
-from hyperview.storage.schema import SpaceInfo, make_space_key
+from hyperview.storage.schema import LayoutInfo, SpaceInfo, make_space_key
 
 
 class MemoryBackend(StorageBackend):
@@ -34,7 +34,10 @@ class MemoryBackend(StorageBackend):
         # Embeddings: space_key -> {sample_id -> vector}
         self._embeddings: dict[str, dict[str, np.ndarray]] = {}
 
-        # Layouts: layout_key -> {sample_id -> (x, y)}
+        # Layouts registry
+        self._layout_registry: dict[str, LayoutInfo] = {}
+
+        # Layout coordinates: layout_key -> {sample_id -> (x, y)}
         self._layouts: dict[str, dict[str, tuple[float, float]]] = {}
 
     # =========================================================================
@@ -237,21 +240,49 @@ class MemoryBackend(StorageBackend):
     # Layouts
     # =========================================================================
 
-    def list_layouts(self) -> list[str]:
-        """List all layout keys."""
-        return list(self._layouts.keys())
+    def list_layouts(self) -> list[LayoutInfo]:
+        return list(self._layout_registry.values())
 
-    def ensure_layout(self, layout_key: str) -> None:
-        """Ensure a layout exists."""
-        if layout_key not in self._layouts:
-            self._layouts[layout_key] = {}
+    def get_layout(self, layout_key: str) -> LayoutInfo | None:
+        return self._layout_registry.get(layout_key)
+
+    def ensure_layout(
+        self,
+        layout_key: str,
+        space_key: str,
+        method: str,
+        geometry: str,
+        params: dict | None = None,
+    ) -> LayoutInfo:
+        if layout_key in self._layout_registry:
+            return self._layout_registry[layout_key]
+
+        layout_info = LayoutInfo(
+            layout_key=layout_key,
+            space_key=space_key,
+            method=method,
+            geometry=geometry,
+            count=0,
+            created_at=int(time.time()),
+            params=params,
+        )
+        self._layout_registry[layout_key] = layout_info
+        self._layouts[layout_key] = {}
+        return layout_info
 
     def delete_layout(self, layout_key: str) -> bool:
-        """Delete a layout."""
+        deleted = False
         if layout_key in self._layouts:
             del self._layouts[layout_key]
-            return True
-        return False
+            deleted = True
+        if layout_key in self._layout_registry:
+            del self._layout_registry[layout_key]
+            deleted = True
+        return deleted
+
+    def _update_layout_count(self, layout_key: str) -> None:
+        if layout_key in self._layout_registry:
+            self._layout_registry[layout_key].count = len(self._layouts.get(layout_key, {}))
 
     def add_layout_coords(
         self,
@@ -259,15 +290,21 @@ class MemoryBackend(StorageBackend):
         ids: list[str],
         coords: np.ndarray,
     ) -> None:
-        """Add layout coordinates."""
         if len(ids) != len(coords):
             raise ValueError("ids and coords must have same length")
 
-        self.ensure_layout(layout_key)
+        # Require registry entry exists (call ensure_layout first)
+        if layout_key not in self._layout_registry:
+            raise ValueError(f"Layout '{layout_key}' not registered. Call ensure_layout() first.")
+
+        if layout_key not in self._layouts:
+            self._layouts[layout_key] = {}
         layout_store = self._layouts[layout_key]
 
         for id_, coord in zip(ids, coords):
             layout_store[id_] = (float(coord[0]), float(coord[1]))
+
+        self._update_layout_count(layout_key)
 
     def get_layout_coords(
         self,
