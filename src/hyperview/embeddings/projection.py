@@ -38,12 +38,15 @@ class ProjectionEngine:
         if n_neighbors < 2:
             n_neighbors = 2
 
+        n_jobs = 1 if random_state is not None else -1
+
         reducer = umap.UMAP(
             n_neighbors=n_neighbors,
             min_dist=min_dist,
             n_components=n_components,
             metric=metric,
             random_state=random_state,
+            n_jobs=n_jobs,
         )
 
         coords = reducer.fit_transform(embeddings)
@@ -81,6 +84,8 @@ class ProjectionEngine:
         n_neighbors = min(n_neighbors, len(embeddings) - 1)
         if n_neighbors < 2:
             n_neighbors = 2
+
+        n_jobs = 1 if random_state is not None else -1
         # The time-like coordinate t is implicit: t = sqrt(1 + x^2 + y^2).
         reducer = umap.UMAP(
             n_neighbors=n_neighbors,
@@ -89,6 +94,7 @@ class ProjectionEngine:
             metric=metric,
             output_metric="hyperboloid",
             random_state=random_state,
+            n_jobs=n_jobs,
         )
 
         # These are spatial coordinates (x, y) in the Hyperboloid model

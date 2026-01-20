@@ -112,29 +112,26 @@ def run_demo(
     print("Loading CIFAR-100 dataset...")
     dataset = Dataset("cifar100_demo")
 
-    try:
-        added, skipped = dataset.add_from_huggingface(
-            "uoft-cs/cifar100",
-            split="train",
-            image_key="img",
-            label_key="fine_label",
-            max_samples=num_samples,
-        )
-        if skipped > 0:
-            print(f"Loaded {added} samples ({skipped} already present)")
-        else:
-            print(f"Loaded {added} samples")
-    except Exception as e:
-        print(f"Failed to load HuggingFace dataset: {e}")
-        print("Please ensure 'datasets' is installed: pip install datasets")
-        sys.exit(1)
+    added, skipped = dataset.add_from_huggingface(
+        "uoft-cs/cifar100",
+        split="train",
+        image_key="img",
+        label_key="fine_label",
+        max_samples=num_samples,
+    )
+    if skipped > 0:
+        print(f"Loaded {added} samples ({skipped} already present)")
+    else:
+        print(f"Loaded {added} samples")
 
     print("Computing embeddings...")
     dataset.compute_embeddings(show_progress=True)
     print("Embeddings computed")
 
     print("Computing visualizations...")
-    dataset.compute_visualization()
+    # Compute both euclidean and poincare layouts
+    dataset.compute_visualization(geometry="euclidean")
+    dataset.compute_visualization(geometry="poincare")
     print("Visualizations ready")
 
     launch(dataset, port=port, host=host, open_browser=open_browser, reuse_server=reuse_server)

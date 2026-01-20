@@ -9,21 +9,12 @@ This module is intentionally minimal:
 import os
 import tempfile
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 from embed_anything import EmbeddingModel
 from PIL import Image
 
 from hyperview.core.sample import Sample
-
-tqdm: Any | None = None
-try:
-    from tqdm import tqdm as tqdm_impl
-except ImportError:  # pragma: no cover
-    pass
-else:
-    tqdm = tqdm_impl
 
 
 class EmbeddingComputer:
@@ -105,14 +96,8 @@ class EmbeddingComputer:
         # Prime model init so download errors happen before work starts.
         self._get_model()
 
-        total = len(samples)
-        iterator = samples
-
         if show_progress:
-            if tqdm is not None:
-                iterator = tqdm(samples, total=total, desc="Computing embeddings")
-            else:
-                print(f"Computing embeddings for {total} samples...")
+            print(f"Computing embeddings for {len(samples)} samples...")
 
-        return [self.compute_single(sample) for sample in iterator]
+        return [self.compute_single(sample) for sample in samples]
 

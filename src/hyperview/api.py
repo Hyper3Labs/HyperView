@@ -228,9 +228,9 @@ def launch(
     """Launch the HyperView visualization server.
 
     Note:
-        HyperView's UI requires 2D projections (`embedding_2d` and
-        `embedding_2d_hyperbolic`). If they are missing but high-dimensional
-        embeddings exist, this function will compute them automatically.
+        HyperView's UI requires 2D layouts (Euclidean + Poincare). If they are
+        missing but high-dimensional embeddings exist, this function will compute
+        them automatically.
 
     Args:
         dataset: The dataset to visualize.
@@ -318,26 +318,23 @@ def launch(
             "port or stop the process listening on that port."
         )
 
-    # The frontend requires both euclidean + hyperbolic 2D coords from /api/embeddings.
-    # If they're missing, proactively compute them so the first page load doesn't fail.
-    try:
-        ids, _, _, _ = dataset._storage.get_visualization_embeddings()
-    except Exception:
-        ids = []
+    # The frontend requires 2D coords from /api/embeddings.
+    # Ensure at least one layout exists; do not auto-generate optional geometries.
+    layouts = dataset.list_layouts()
+    spaces = dataset.list_spaces()
 
-    if not ids:
-        has_any_embeddings = any(s.embedding is not None for s in dataset._storage)
-        if has_any_embeddings:
-            print("No 2D projections found. Computing visualizations...")
-            dataset.compute_visualization()
-        else:
-            raise ValueError(
-                "HyperView launch requires 2D projections for the UI. "
-                "No projections were found, and no high-dimensional embeddings are present. "
-                "Call `dataset.compute_embeddings()` and `dataset.compute_visualization()` "
-                "before `hv.launch()`, or prepopulate both `embedding_2d` and "
-                "`embedding_2d_hyperbolic` on your samples."
-            )
+    if not spaces:
+        raise ValueError(
+            "HyperView launch requires 2D projections for the UI. "
+            "No projections or embedding spaces were found. "
+            "Call `dataset.compute_embeddings()` and `dataset.compute_visualization()` "
+            "before `hv.launch()`."
+        )
+
+    if not layouts:
+        default_space_key = spaces[0].space_key
+        print("No layouts found. Computing euclidean visualization...")
+        dataset.compute_visualization(space_key=default_space_key, geometry="euclidean")
 
     session = Session(dataset, host, port)
 
