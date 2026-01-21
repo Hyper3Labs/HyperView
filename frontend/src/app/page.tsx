@@ -148,8 +148,7 @@ export default function Home() {
         if (abort.signal.aborted) return;
         setLassoResults(res.samples, res.total, false);
       } catch (err) {
-        // Ignore cancellation.
-        if ((err as any)?.name === "AbortError") return;
+        if (err instanceof DOMException && err.name === "AbortError") return;
         console.error("Failed to fetch lasso selection:", err);
         setLassoResults([], 0, false);
       }

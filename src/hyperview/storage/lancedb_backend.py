@@ -24,6 +24,11 @@ from hyperview.storage.schema import (
 )
 
 
+def _sql_escape(value: str) -> str:
+    """Escape single quotes for SQL WHERE clauses."""
+    return value.replace("'", "''")
+
+
 class LanceDBBackend(StorageBackend):
     """LanceDB-based storage backend for HyperView datasets."""
 
@@ -75,8 +80,7 @@ class LanceDBBackend(StorageBackend):
     def get_sample(self, sample_id: str) -> Sample | None:
         if self._samples_table is None:
             return None
-        safe_id = sample_id.replace("'", "''")
-        results = self._samples_table.search().where(f"id = '{safe_id}'").limit(1).to_list()
+        results = self._samples_table.search().where(f"id = '{_sql_escape(sample_id)}'").limit(1).to_list()
         return dict_to_sample(results[0]) if results else None
 
     def get_samples_paginated(
@@ -94,8 +98,7 @@ class LanceDBBackend(StorageBackend):
             arrow_table = self._samples_table.search().select(["label"]).to_arrow()
             mask = pc.fill_null(pc.equal(arrow_table.column("label"), pa.scalar(label)), False)
             total = pc.sum(pc.cast(mask, pa.int64())).as_py()
-            safe_label = label.replace("'", "''")
-            results = self._samples_table.search().where(f"label = '{safe_label}'").offset(offset).limit(limit).to_list()
+            results = self._samples_table.search().where(f"label = '{_sql_escape(label)}'").offset(offset).limit(limit).to_list()
         else:
             total = self._samples_table.count_rows()
             results = self._samples_table.search().offset(offset).limit(limit).to_list()
@@ -116,8 +119,7 @@ class LanceDBBackend(StorageBackend):
     def delete_sample(self, sample_id: str) -> bool:
         if self._samples_table is None:
             return False
-        safe_id = sample_id.replace("'", "''")
-        self._samples_table.delete(f"id = '{safe_id}'")
+        self._samples_table.delete(f"id = '{_sql_escape(sample_id)}'")
         return True
 
     def __len__(self) -> int:
@@ -134,8 +136,7 @@ class LanceDBBackend(StorageBackend):
     def __contains__(self, sample_id: str) -> bool:
         if self._samples_table is None:
             return False
-        safe_id = sample_id.replace("'", "''")
-        return len(self._samples_table.search().where(f"id = '{safe_id}'").limit(1).to_list()) > 0
+        return len(self._samples_table.search().where(f"id = '{_sql_escape(sample_id)}'").limit(1).to_list()) > 0
 
     def get_unique_labels(self) -> list[str]:
         if self._samples_table is None:
@@ -150,8 +151,7 @@ class LanceDBBackend(StorageBackend):
         existing: set[str] = set()
         for i in range(0, len(sample_ids), 1000):
             chunk = sample_ids[i : i + 1000]
-            escaped = [sid.replace("'", "''") for sid in chunk]
-            id_list = "', '".join(escaped)
+            id_list = "', '".join(_sql_escape(sid) for sid in chunk)
             results = self._samples_table.search().where(f"id IN ('{id_list}')").select(["id"]).to_list()
             existing.update(r["id"] for r in results)
         return existing
@@ -160,10 +160,9 @@ class LanceDBBackend(StorageBackend):
         if self._samples_table is None or not sample_ids:
             return []
         rows_by_id: dict[str, dict] = {}
-        for i in range(0, len(sample_ids), 500):
-            chunk = sample_ids[i : i + 500]
-            escaped = [sid.replace("'", "''") for sid in chunk]
-            id_list = "', '".join(escaped)
+        for i in range(0, len(sample_ids), 1000):
+            chunk = sample_ids[i : i + 1000]
+            id_list = "', '".join(_sql_escape(sid) for sid in chunk)
             for r in self._samples_table.search().where(f"id IN ('{id_list}')").to_list():
                 rows_by_id[r["id"]] = r
         return [dict_to_sample(rows_by_id[sid]) for sid in sample_ids if sid in rows_by_id]
@@ -174,8 +173,7 @@ class LanceDBBackend(StorageBackend):
         labels: dict[str, str | None] = {}
         for i in range(0, len(sample_ids), 1000):
             chunk = sample_ids[i : i + 1000]
-            escaped = [sid.replace("'", "''") for sid in chunk]
-            id_list = "', '".join(escaped)
+            id_list = "', '".join(_sql_escape(sid) for sid in chunk)
             for r in self._samples_table.search().select(["id", "label"]).where(f"id IN ('{id_list}')").to_list():
                 labels[r["id"]] = r.get("label")
         return labels
@@ -187,8 +185,7 @@ class LanceDBBackend(StorageBackend):
         return [SpaceInfo.from_dict(r) for r in self._spaces_table.to_arrow().to_pylist()]
 
     def get_space(self, space_key: str) -> SpaceInfo | None:
-        safe_key = space_key.replace("'", "''")
-        results = self._spaces_table.search().where(f"space_key = '{safe_key}'").limit(1).to_list()
+        results = self._spaces_table.search().where(f"space_key = '{_sql_escape(space_key)}'").limit(1).to_list()
         return SpaceInfo.from_dict(results[0]) if results else None
 
     def ensure_space(
@@ -216,8 +213,7 @@ class LanceDBBackend(StorageBackend):
         return space_info
 
     def delete_space(self, space_key: str) -> bool:
-        safe_key = space_key.replace("'", "''")
-        self._spaces_table.delete(f"space_key = '{safe_key}'")
+        self._spaces_table.delete(f"space_key = '{_sql_escape(space_key)}'")
         emb_table = f"embeddings__{space_key}"
         if emb_table in self._db.table_names():
             self._db.drop_table(emb_table)
@@ -241,8 +237,7 @@ class LanceDBBackend(StorageBackend):
         )
 
         # Update space count
-        safe_key = space_key.replace("'", "''")
-        self._spaces_table.update(where=f"space_key = '{safe_key}'", values={
+        self._spaces_table.update(where=f"space_key = '{_sql_escape(space_key)}'", values={
             "count": emb_table.count_rows(), "updated_at": int(time.time())
         })
 
@@ -257,8 +252,7 @@ class LanceDBBackend(StorageBackend):
 
         emb_table = self._db.open_table(emb_table_name)
         if ids is not None:
-            escaped = [sid.replace("'", "''") for sid in ids]
-            id_list = "', '".join(escaped)
+            id_list = "', '".join(_sql_escape(sid) for sid in ids)
             rows = emb_table.search().where(f"id IN ('{id_list}')").to_list()
         else:
             rows = emb_table.to_arrow().to_pylist()
@@ -295,8 +289,7 @@ class LanceDBBackend(StorageBackend):
         table = self._get_layouts_registry_table()
         if table is None:
             return None
-        safe_key = layout_key.replace("'", "''")
-        rows = table.search().where(f"layout_key = '{safe_key}'").limit(1).to_list()
+        rows = table.search().where(f"layout_key = '{_sql_escape(layout_key)}'").limit(1).to_list()
         return LayoutInfo.from_dict(rows[0]) if rows else None
 
     def ensure_layout(
@@ -329,7 +322,7 @@ class LanceDBBackend(StorageBackend):
             self._db.drop_table(table_name)
         registry = self._get_layouts_registry_table()
         if registry:
-            registry.delete(f"layout_key = '{layout_key.replace(chr(39), chr(39)+chr(39))}'")
+            registry.delete(f"layout_key = '{_sql_escape(layout_key)}'")
         return True
 
     def add_layout_coords(self, layout_key: str, ids: list[str], coords: np.ndarray) -> None:
@@ -351,7 +344,7 @@ class LanceDBBackend(StorageBackend):
         # Update count
         registry = self._get_layouts_registry_table()
         if registry:
-            registry.update(where=f"layout_key = '{layout_key.replace(chr(39), chr(39)+chr(39))}'", values={"count": table.count_rows()})
+            registry.update(where=f"layout_key = '{_sql_escape(layout_key)}'", values={"count": table.count_rows()})
 
     def get_layout_coords(self, layout_key: str, ids: list[str] | None = None) -> tuple[list[str], np.ndarray]:
         table_name = f"layouts__{layout_key}"
@@ -360,8 +353,7 @@ class LanceDBBackend(StorageBackend):
 
         table = self._db.open_table(table_name)
         if ids is not None:
-            escaped = [sid.replace("'", "''") for sid in ids]
-            id_list = "', '".join(escaped)
+            id_list = "', '".join(_sql_escape(sid) for sid in ids)
             rows = table.search().where(f"id IN ('{id_list}')").to_list()
         else:
             rows = table.to_arrow().to_pylist()

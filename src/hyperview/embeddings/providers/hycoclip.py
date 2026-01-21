@@ -32,21 +32,12 @@ from hyperview.embeddings.providers import (
 __all__ = ["HyCoCLIPProvider"]
 
 
-# -----------------------------------------------------------------------------
-# Known checkpoints (auto-download from HuggingFace)
-# -----------------------------------------------------------------------------
-
 HYCOCLIP_CHECKPOINTS: dict[str, str] = {
     "hycoclip_vit_s": "hf://avik-pal/hycoclip#hycoclip_vit_s.pth",
     "hycoclip_vit_b": "hf://avik-pal/hycoclip#hycoclip_vit_b.pth",
     "meru_vit_s": "hf://avik-pal/hycoclip#meru_vit_s.pth",
     "meru_vit_b": "hf://avik-pal/hycoclip#meru_vit_b.pth",
 }
-
-
-# -----------------------------------------------------------------------------
-# Hyperboloid math
-# -----------------------------------------------------------------------------
 
 
 def _exp_map_lorentz(x: "torch.Tensor", c: float) -> "torch.Tensor":
@@ -86,10 +77,6 @@ def _exp_map_lorentz(x: "torch.Tensor", c: float) -> "torch.Tensor":
 
     t = torch.sqrt((1.0 / c) + torch.sum(spatial * spatial, dim=-1, keepdim=True))
     return torch.cat([t, spatial], dim=-1)
-
-# -----------------------------------------------------------------------------
-# ViT Image Encoder
-# -----------------------------------------------------------------------------
 
 
 def _create_encoder(
@@ -154,11 +141,6 @@ def _load_encoder(checkpoint_path: str, device: str = "cpu") -> Any:
     return model.to(device).eval()
 
 
-# -----------------------------------------------------------------------------
-# Provider
-# -----------------------------------------------------------------------------
-
-
 class HyCoCLIPProvider(BaseEmbeddingProvider):
     """Clean HyCoCLIP provider (PyTorch) - no hycoclip package dependency.
 
@@ -201,13 +183,7 @@ class HyCoCLIPProvider(BaseEmbeddingProvider):
         """Resolve checkpoint path, downloading from HuggingFace if needed."""
         # Handle HuggingFace Hub URLs: hf://repo_id#filename
         if checkpoint.startswith("hf://"):
-            try:
-                from huggingface_hub import hf_hub_download
-            except ImportError as exc:
-                raise ImportError(
-                    "hf:// checkpoints require huggingface_hub. "
-                    "Install with: uv add huggingface-hub"
-                ) from exc
+            from huggingface_hub import hf_hub_download
 
             path = checkpoint[5:]
             if "#" not in path:

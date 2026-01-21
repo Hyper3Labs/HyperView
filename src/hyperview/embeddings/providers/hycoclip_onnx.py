@@ -34,36 +34,8 @@ from hyperview.embeddings.providers import (
 __all__ = ["HyCoCLIPOnnxProvider"]
 
 
-# ---------------------------------------------------------------------------
-# Dependency checking
-# ---------------------------------------------------------------------------
-
-
-def _check_onnxruntime() -> bool:
-    try:
-        import onnxruntime  # noqa: F401
-
-        return True
-    except ImportError:
-        return False
-
-
-def _require_dependencies() -> None:
-    if not _check_onnxruntime():
-        raise ImportError(
-            "HyCoCLIP ONNX provider requires onnxruntime.\n\n"
-            "It should already be installed via embed-anything.\n"
-            "If not, install with: uv add onnxruntime"
-        )
-
-
-# ---------------------------------------------------------------------------
-# Preprocessing (pure PIL+numpy)
-# ---------------------------------------------------------------------------
-
-
-def _preprocess_rgb_image_to_bchw_float01(img: Any, size: int = 224) -> np.ndarray:
-    """Resize shortest side to 224, center crop, return (1,3,H,W) float32 in [0,1]."""
+def _preprocess_rgb_image_to_chw_float01(img: Any, size: int = 224) -> np.ndarray:
+    """Resize shortest side to `size`, center crop, return (3,H,W) float32 in [0,1]."""
     from PIL import Image
 
     if not isinstance(img, Image.Image):
@@ -84,14 +56,9 @@ def _preprocess_rgb_image_to_bchw_float01(img: Any, size: int = 224) -> np.ndarr
     top = int(round((new_h - size) / 2.0))
     img = img.crop((left, top, left + size, top + size))
 
-    arr = np.asarray(img, dtype=np.float32) / 255.0  # HWC in [0,1]
-    arr = np.transpose(arr, (2, 0, 1))  # CHW
-    return arr[None, ...]  # BCHW
-
-
-# ---------------------------------------------------------------------------
-# Provider
-# ---------------------------------------------------------------------------
+    arr = np.asarray(img, dtype=np.float32) / 255.0
+    arr = np.transpose(arr, (2, 0, 1))
+    return arr
 
 
 class HyCoCLIPOnnxProvider(BaseEmbeddingProvider):
@@ -134,8 +101,6 @@ class HyCoCLIPOnnxProvider(BaseEmbeddingProvider):
         return path
 
     def _ensure_session(self, model_spec: ModelSpec) -> None:
-        _require_dependencies()
-
         if self._session is not None and self._model_spec == model_spec:
             return
 
@@ -144,8 +109,7 @@ class HyCoCLIPOnnxProvider(BaseEmbeddingProvider):
         onnx_path = self._resolve_onnx_path(model_spec)
 
         # Default to CPU for maximum compatibility.
-        get_available = getattr(ort, "get_available_providers", None)
-        available = get_available() if callable(get_available) else ["CPUExecutionProvider"]
+        available = ort.get_available_providers()
         providers = ["CPUExecutionProvider"] if "CPUExecutionProvider" in available else list(available)
 
         self._session = ort.InferenceSession(str(onnx_path), providers=providers)
@@ -175,7 +139,6 @@ class HyCoCLIPOnnxProvider(BaseEmbeddingProvider):
         emb_name = "embedding_hyperboloid" if "embedding_hyperboloid" in output_names else output_names[0]
         curv_name = "curvature" if "curvature" in output_names else None
 
-        # NOTE: Current torch.onnx export is only reliable for batch_size=1.
         if batch_size != 1 and show_progress:
             print("HyCoCLIP-ONNX export currently runs with batch_size=1; overriding")
         batch_size = 1
@@ -194,8 +157,8 @@ class HyCoCLIPOnnxProvider(BaseEmbeddingProvider):
                     img.load()
                     if img.mode != "RGB":
                         img = img.convert("RGB")
-                    bchw = _preprocess_rgb_image_to_bchw_float01(img.copy(), size=224)
-                    images.append(bchw[0])  # CHW
+                    chw = _preprocess_rgb_image_to_chw_float01(img.copy(), size=224)
+                    images.append(chw)
 
             batch_np = np.stack(images, axis=0).astype(np.float32)
 

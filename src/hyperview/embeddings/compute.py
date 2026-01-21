@@ -1,10 +1,4 @@
-"""Image embedding computation via EmbedAnything.
-
-This module is intentionally minimal:
-- Callers pass a HuggingFace `model_id` string.
-- We delegate model loading + inference to EmbedAnything.
-
-"""
+"""Image embedding computation via EmbedAnything."""
 
 import os
 import tempfile
@@ -74,14 +68,8 @@ class EmbeddingComputer:
 
     def compute_single(self, sample: Sample) -> np.ndarray:
         """Compute embedding for a single sample."""
-        try:
-            image = self._load_rgb_image(sample)
-            return self._embed_pil_image(image)
-        except Exception as exc:
-            raise RuntimeError(
-                f"Failed to compute embedding for sample {sample.id} "
-                f"(filepath={sample.filepath}, model_id={self.model_id})"
-            ) from exc
+        image = self._load_rgb_image(sample)
+        return self._embed_pil_image(image)
 
     def compute_batch(
         self,
@@ -92,8 +80,6 @@ class EmbeddingComputer:
         """Compute embeddings for a list of samples."""
         if batch_size <= 0:
             raise ValueError("batch_size must be > 0")
-
-        # Prime model init so download errors happen before work starts.
         self._get_model()
 
         if show_progress:

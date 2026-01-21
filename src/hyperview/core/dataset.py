@@ -598,16 +598,11 @@ class Dataset:
     def save(self, filepath: str, include_thumbnails: bool = True) -> None:
         """Export dataset to a JSON file.
 
-        Note: For persistent datasets (default), data is automatically saved.
-        This method is for exporting to JSON format for sharing or backup.
-
         Args:
             filepath: Path to save the JSON file.
             include_thumbnails: Whether to include cached thumbnails.
         """
         samples = self._storage.get_all_samples()
-
-        # Cache thumbnails before saving if requested
         if include_thumbnails:
             for s in samples:
                 s.cache_thumbnail()

@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -134,6 +134,12 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
         version="0.1.0",
     )
 
+    def get_dataset() -> Dataset:
+        """Dependency that returns the current dataset or raises 404."""
+        if _current_dataset is None:
+            raise HTTPException(status_code=404, detail="No dataset loaded")
+        return _current_dataset
+
     # CORS middleware for development
     app.add_middleware(
         CORSMiddleware,
@@ -154,38 +160,32 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
         }
 
     @app.get("/api/dataset", response_model=DatasetResponse)
-    async def get_dataset_info():
+    async def get_dataset_info(ds: Dataset = Depends(get_dataset)):
         """Get dataset metadata."""
-        if _current_dataset is None:
-            raise HTTPException(status_code=404, detail="No dataset loaded")
-
-        spaces = _current_dataset.list_spaces()
+        spaces = ds.list_spaces()
         space_dicts = [s.to_api_dict() for s in spaces]
 
-        layouts = _current_dataset.list_layouts()
+        layouts = ds.list_layouts()
         layout_dicts = [l.to_api_dict() for l in layouts]
 
         return DatasetResponse(
-            name=_current_dataset.name,
-            num_samples=len(_current_dataset),
-            labels=_current_dataset.labels,
-            label_colors=_current_dataset.get_label_colors(),
+            name=ds.name,
+            num_samples=len(ds),
+            labels=ds.labels,
+            label_colors=ds.get_label_colors(),
             spaces=space_dicts,
             layouts=layout_dicts,
         )
 
     @app.get("/api/samples")
     async def get_samples(
+        ds: Dataset = Depends(get_dataset),
         offset: int = Query(0, ge=0),
         limit: int = Query(100, ge=1, le=1000),
         label: str | None = None,
     ):
         """Get paginated samples with thumbnails."""
-        if _current_dataset is None:
-            raise HTTPException(status_code=404, detail="No dataset loaded")
-
-        # Use backend-native pagination (avoids loading all samples)
-        samples, total = _current_dataset.get_samples_paginated(
+        samples, total = ds.get_samples_paginated(
             offset=offset, limit=limit, label=label
         )
 
@@ -197,34 +197,24 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
         }
 
     @app.get("/api/samples/{sample_id}", response_model=SampleResponse)
-    async def get_sample(sample_id: str):
+    async def get_sample(sample_id: str, ds: Dataset = Depends(get_dataset)):
         """Get a single sample by ID."""
-        if _current_dataset is None:
-            raise HTTPException(status_code=404, detail="No dataset loaded")
-
         try:
-            sample = _current_dataset[sample_id]
+            sample = ds[sample_id]
             return SampleResponse(**sample.to_api_dict())
         except KeyError:
             raise HTTPException(status_code=404, detail=f"Sample not found: {sample_id}")
 
     @app.post("/api/samples/batch")
-    async def get_samples_batch(request: SelectionRequest):
+    async def get_samples_batch(request: SelectionRequest, ds: Dataset = Depends(get_dataset)):
         """Get multiple samples by their IDs."""
-        if _current_dataset is None:
-            raise HTTPException(status_code=404, detail="No dataset loaded")
-
-        samples = _current_dataset.get_samples_by_ids(request.sample_ids)
-
+        samples = ds.get_samples_by_ids(request.sample_ids)
         return {"samples": [s.to_api_dict(include_thumbnail=True) for s in samples]}
 
     @app.get("/api/embeddings", response_model=EmbeddingsResponse)
-    async def get_embeddings(layout_key: str | None = None):
+    async def get_embeddings(ds: Dataset = Depends(get_dataset), layout_key: str | None = None):
         """Get embedding coordinates for visualization."""
-        if _current_dataset is None:
-            raise HTTPException(status_code=404, detail="No dataset loaded")
-
-        layouts = _current_dataset.list_layouts()
+        layouts = ds.list_layouts()
         if not layouts:
             raise HTTPException(
                 status_code=400, detail="No layouts computed. Call compute_visualization() first."
@@ -240,7 +230,7 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
             if layout_info is None:
                 raise HTTPException(status_code=404, detail=f"Layout not found: {layout_key}")
 
-        ids, labels, coords = _current_dataset.get_visualization_data(layout_key)
+        ids, labels, coords = ds.get_visualization_data(layout_key)
 
         if not ids:
             raise HTTPException(status_code=400, detail=f"No data in layout '{layout_key}'.")
@@ -251,25 +241,19 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
             ids=ids,
             labels=labels,
             coords=coords.tolist(),
-            label_colors=_current_dataset.get_label_colors(),
+            label_colors=ds.get_label_colors(),
         )
 
     @app.get("/api/spaces")
-    async def get_spaces():
+    async def get_spaces(ds: Dataset = Depends(get_dataset)):
         """Get all embedding spaces."""
-        if _current_dataset is None:
-            raise HTTPException(status_code=404, detail="No dataset loaded")
-
-        spaces = _current_dataset.list_spaces()
+        spaces = ds.list_spaces()
         return {"spaces": [s.to_api_dict() for s in spaces]}
 
     @app.get("/api/layouts")
-    async def get_layouts():
+    async def get_layouts(ds: Dataset = Depends(get_dataset)):
         """Get all available layouts."""
-        if _current_dataset is None:
-            raise HTTPException(status_code=404, detail="No dataset loaded")
-
-        layouts = _current_dataset.list_layouts()
+        layouts = ds.list_layouts()
         return {"layouts": [l.to_api_dict() for l in layouts]}
 
     @app.post("/api/selection")
@@ -278,7 +262,7 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
         return {"status": "ok", "selected": request.sample_ids}
 
     @app.post("/api/selection/lasso")
-    async def lasso_selection(request: LassoSelectionRequest):
+    async def lasso_selection(request: LassoSelectionRequest, ds: Dataset = Depends(get_dataset)):
         """Compute a lasso selection over the current embeddings.
 
         Returns a total selected count and a paginated page of selected samples.
@@ -288,9 +272,6 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
           by /api/embeddings).
         - For now we use an in-memory scan with a tight AABB prefilter.
         """
-        if _current_dataset is None:
-            raise HTTPException(status_code=404, detail="No dataset loaded")
-
         if request.offset < 0:
             raise HTTPException(status_code=400, detail="offset must be >= 0")
         if request.limit < 1 or request.limit > 2000:
@@ -312,7 +293,7 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
         y_min = float(np.min(poly[:, 1]))
         y_max = float(np.max(poly[:, 1]))
 
-        candidate_ids, candidate_coords = _current_dataset.get_lasso_candidates_aabb(
+        candidate_ids, candidate_coords = ds.get_lasso_candidates_aabb(
             layout_key=request.layout_key,
             x_min=x_min,
             x_max=x_max,
@@ -334,7 +315,7 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
         end = int(request.offset + request.limit)
         sample_ids = selected_ids[start:end]
 
-        samples = _current_dataset.get_samples_by_ids(sample_ids)
+        samples = ds.get_samples_by_ids(sample_ids)
         sample_dicts = [s.to_api_dict(include_thumbnail=request.include_thumbnails) for s in samples]
 
         return {
@@ -348,15 +329,13 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
     @app.get("/api/search/similar/{sample_id}", response_model=SimilaritySearchResponse)
     async def search_similar(
         sample_id: str,
+        ds: Dataset = Depends(get_dataset),
         k: int = Query(10, ge=1, le=100),
         space_key: str | None = None,
     ):
         """Return k nearest neighbors for a given sample."""
-        if _current_dataset is None:
-            raise HTTPException(status_code=404, detail="No dataset loaded")
-
         try:
-            similar = _current_dataset.find_similar(
+            similar = ds.find_similar(
                 sample_id, k=k, space_key=space_key
             )
         except ValueError as e:
@@ -390,13 +369,10 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
         )
 
     @app.get("/api/thumbnail/{sample_id}")
-    async def get_thumbnail(sample_id: str):
+    async def get_thumbnail(sample_id: str, ds: Dataset = Depends(get_dataset)):
         """Get thumbnail image for a sample."""
-        if _current_dataset is None:
-            raise HTTPException(status_code=404, detail="No dataset loaded")
-
         try:
-            sample = _current_dataset[sample_id]
+            sample = ds[sample_id]
             thumbnail_b64 = sample.get_thumbnail_base64()
             return JSONResponse({"thumbnail": thumbnail_b64})
         except KeyError:

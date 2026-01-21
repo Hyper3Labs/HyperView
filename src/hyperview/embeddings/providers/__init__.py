@@ -1,19 +1,9 @@
-"""Embedding provider abstraction for HyperView.
-
-This module defines a pluggable provider interface for computing embeddings
-from different sources (EmbedAnything, HyCoCLIP, HuggingFace Transformers, etc.).
-
-Design principles:
-- Default path stays lightweight (EmbedAnything)
-- Heavy integrations are opt-in with clear dependency errors
-- Embedding geometry (euclidean, hyperboloid) is tracked explicitly
-- ModelSpec provides structured config that persists to SpaceInfo.config_json
-- Providers are singletons to preserve model state across calls
-"""
+"""Embedding provider abstraction for HyperView."""
 
 from __future__ import annotations
 
 import hashlib
+from importlib import import_module
 import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -22,11 +12,6 @@ from typing import Any
 import numpy as np
 
 from hyperview.core.sample import Sample
-
-
-# ---------------------------------------------------------------------------
-# ModelSpec: structured config for any embedding model
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -72,7 +57,7 @@ class ModelSpec:
             model_id=d["model_id"],
             checkpoint=d.get("checkpoint"),
             config_path=d.get("config_path"),
-            output_geometry=d.get("geometry", d.get("output_geometry", "euclidean")),
+            output_geometry=d.get("geometry", "euclidean"),
             curvature=d.get("curvature"),
         )
 
@@ -80,11 +65,6 @@ class ModelSpec:
         """Generate a short hash of the spec for collision-resistant keys."""
         content = json.dumps(self.to_dict(), sort_keys=True)
         return hashlib.sha256(content.encode()).hexdigest()[:12]
-
-
-# ---------------------------------------------------------------------------
-# Base class for providers
-# ---------------------------------------------------------------------------
 
 
 class BaseEmbeddingProvider(ABC):
@@ -127,15 +107,15 @@ class BaseEmbeddingProvider(ABC):
         }
 
 
-# ---------------------------------------------------------------------------
-# Provider registry (singleton instances)
-# ---------------------------------------------------------------------------
-
-# Registry stores provider classes
 _PROVIDER_CLASSES: dict[str, type[BaseEmbeddingProvider]] = {}
-
-# Cache stores singleton instances
 _PROVIDER_INSTANCES: dict[str, BaseEmbeddingProvider] = {}
+
+
+_KNOWN_PROVIDER_MODULES: dict[str, str] = {
+    "embed_anything": "hyperview.embeddings.providers.embed_anything",
+    "hycoclip": "hyperview.embeddings.providers.hycoclip",
+    "hycoclip_onnx": "hyperview.embeddings.providers.hycoclip_onnx",
+}
 
 
 def register_provider(provider_id: str, provider_class: type[BaseEmbeddingProvider]) -> None:
@@ -145,18 +125,27 @@ def register_provider(provider_id: str, provider_class: type[BaseEmbeddingProvid
     _PROVIDER_INSTANCES.pop(provider_id, None)
 
 
-def _try_auto_register(provider_id: str) -> None:
-    """Attempt to auto-register a provider by importing its module."""
-    module_map = {
-        "embed_anything": "hyperview.embeddings.providers.embed_anything",
-        "hycoclip": "hyperview.embeddings.providers.hycoclip",
-        "hycoclip_onnx": "hyperview.embeddings.providers.hycoclip_onnx",
-    }
-    if provider_id in module_map:
+def _try_auto_register(provider_id: str, *, silent: bool = True) -> None:
+    """Attempt to auto-register a provider by importing its module.
+
+    Args:
+        provider_id: Provider identifier.
+        silent: If True, swallow ImportError (used when listing providers).
+            If False, let ImportError propagate (used when explicitly requesting
+            a provider via get_provider()).
+    """
+
+    module_name = _KNOWN_PROVIDER_MODULES.get(provider_id)
+    if not module_name:
+        return
+
+    if silent:
         try:
-            __import__(module_map[provider_id])
+            import_module(module_name)
         except ImportError:
-            pass
+            return
+    else:
+        import_module(module_name)
 
 
 def get_provider(provider_id: str) -> BaseEmbeddingProvider:
@@ -165,7 +154,7 @@ def get_provider(provider_id: str) -> BaseEmbeddingProvider:
     Providers are cached to preserve model state across calls.
     """
     if provider_id not in _PROVIDER_CLASSES:
-        _try_auto_register(provider_id)
+        _try_auto_register(provider_id, silent=False)
 
     if provider_id not in _PROVIDER_CLASSES:
         available = ", ".join(sorted(_PROVIDER_CLASSES.keys())) or "(none registered)"
@@ -183,14 +172,9 @@ def get_provider(provider_id: str) -> BaseEmbeddingProvider:
 def list_providers() -> list[str]:
     """List available provider IDs."""
     # Trigger auto-registration for known providers
-    for pid in ["embed_anything", "hycoclip", "hycoclip_onnx"]:
-        _try_auto_register(pid)
+    for pid in _KNOWN_PROVIDER_MODULES:
+        _try_auto_register(pid, silent=True)
     return list(_PROVIDER_CLASSES.keys())
-
-
-# ---------------------------------------------------------------------------
-# Helper: generate provider-aware space_key
-# ---------------------------------------------------------------------------
 
 
 def make_provider_aware_space_key(model_spec: ModelSpec) -> str:
@@ -205,10 +189,6 @@ def make_provider_aware_space_key(model_spec: ModelSpec) -> str:
 
     return f"{model_spec.provider}__{slug}__{content_hash}"
 
-
-# ---------------------------------------------------------------------------
-# Public exports
-# ---------------------------------------------------------------------------
 
 __all__ = [
     "BaseEmbeddingProvider",
