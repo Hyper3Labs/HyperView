@@ -11,6 +11,121 @@ logger = logging.getLogger(__name__)
 class ProjectionEngine:
     """Engine for projecting high-dimensional embeddings to 2D."""
 
+    def to_poincare_ball(
+        self,
+        hyperboloid_embeddings: np.ndarray,
+        curvature: float | None = None,
+        clamp_radius: float = 0.999999,
+    ) -> np.ndarray:
+        """Convert hyperboloid (Lorentz) coordinates to Poincaré ball coordinates.
+
+        Input is expected to be shape (N, D+1) with first coordinate being time-like.
+        Points are assumed to satisfy: t^2 - ||x||^2 = 1/c (c > 0).
+
+        Returns Poincaré ball coordinates of shape (N, D) in the unit ball.
+
+        Notes:
+        - Many hyperbolic libraries parameterize curvature as a positive number c
+          where the manifold has sectional curvature -c.
+        - We map to the unit ball for downstream distance metrics (UMAP 'poincare').
+        """
+        if hyperboloid_embeddings.ndim != 2 or hyperboloid_embeddings.shape[1] < 2:
+            raise ValueError(
+                "hyperboloid_embeddings must have shape (N, D+1) with D>=1"
+            )
+
+        c = float(curvature) if curvature is not None else 1.0
+        if c <= 0:
+            raise ValueError(f"curvature must be > 0, got {c}")
+
+        # Radius R = 1/sqrt(c) for curvature -c
+        R = 1.0 / np.sqrt(c)
+
+        t = hyperboloid_embeddings[:, :1]
+        x = hyperboloid_embeddings[:, 1:]
+
+        # Map to ball radius R: u_R = x / (t + R)
+        denom = t + R
+        u_R = x / denom
+
+        # Rescale to unit ball: u = u_R / R = sqrt(c) * u_R
+        u = u_R / R
+
+        # Numerical guard: ensure inside the unit ball
+        radii = np.linalg.norm(u, axis=1)
+        mask = radii >= clamp_radius
+        if np.any(mask):
+            u[mask] = u[mask] / radii[mask][:, np.newaxis] * clamp_radius
+
+        return u.astype(np.float32)
+
+    def project(
+        self,
+        embeddings: np.ndarray,
+        *,
+        input_geometry: str = "euclidean",
+        output_geometry: str = "euclidean",
+        curvature: float | None = None,
+        method: str = "umap",
+        n_neighbors: int = 15,
+        min_dist: float = 0.1,
+        metric: str = "cosine",
+        random_state: int = 42,
+    ) -> np.ndarray:
+        """Project embeddings to 2D with geometry-aware preprocessing.
+
+        This separates two concerns:
+        1) Geometry/model transforms for the *input* embeddings (e.g. hyperboloid -> Poincaré)
+        2) Dimensionality reduction / layout (currently UMAP)
+
+        Args:
+            embeddings: Input embeddings (N x D) or hyperboloid (N x D+1).
+            input_geometry: Geometry/model of the input embeddings (euclidean, hyperboloid).
+            output_geometry: Geometry of the output coordinates (euclidean, poincare).
+            curvature: Curvature parameter for hyperbolic embeddings (positive c).
+            method: Layout method (currently only 'umap').
+            n_neighbors: UMAP neighbors.
+            min_dist: UMAP min_dist.
+            metric: Input metric (used for euclidean inputs).
+            random_state: Random seed.
+
+        Returns:
+            2D coordinates (N x 2).
+        """
+        if method != "umap":
+            raise ValueError(f"Invalid method: {method}. Only 'umap' is supported.")
+
+        prepared = embeddings
+        prepared_metric: str = metric
+
+        if input_geometry == "hyperboloid":
+            # Convert to unit Poincaré ball and use UMAP's built-in hyperbolic distance.
+            prepared = self.to_poincare_ball(embeddings, curvature=curvature)
+            prepared_metric = "poincare"
+
+        if output_geometry == "poincare":
+            return self.project_to_poincare(
+                prepared,
+                n_neighbors=n_neighbors,
+                min_dist=min_dist,
+                metric=prepared_metric,
+                random_state=random_state,
+            )
+
+        if output_geometry == "euclidean":
+            return self.project_umap(
+                prepared,
+                n_neighbors=n_neighbors,
+                min_dist=min_dist,
+                metric=prepared_metric,
+                n_components=2,
+                random_state=random_state,
+            )
+
+        raise ValueError(
+            f"Invalid output_geometry: {output_geometry}. Must be 'euclidean' or 'poincare'."
+        )
+
     def project_umap(
         self,
         embeddings: np.ndarray,

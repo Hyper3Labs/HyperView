@@ -60,3 +60,8 @@ frontend/nohup.out
 .hyperview-*.pid
 .playwright-mcp/
 frontend/tsconfig.tsbuildinfo
+
+# Hyperbolic model zoo (kept as a separate repo)
+hyper_model_zoo/
+hyper_models/
+scripts_ignored/

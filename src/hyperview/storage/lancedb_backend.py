@@ -191,8 +191,15 @@ class LanceDBBackend(StorageBackend):
         results = self._spaces_table.search().where(f"space_key = '{safe_key}'").limit(1).to_list()
         return SpaceInfo.from_dict(results[0]) if results else None
 
-    def ensure_space(self, model_id: str, dim: int, config: dict | None = None) -> SpaceInfo:
-        space_key = make_space_key(model_id)
+    def ensure_space(
+        self,
+        model_id: str,
+        dim: int,
+        config: dict | None = None,
+        space_key: str | None = None,
+    ) -> SpaceInfo:
+        if space_key is None:
+            space_key = make_space_key(model_id)
         existing = self.get_space(space_key)
         if existing is not None:
             if existing.dim != dim:

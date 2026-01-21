@@ -89,8 +89,15 @@ class MemoryBackend(StorageBackend):
     def get_space(self, space_key: str) -> SpaceInfo | None:
         return self._spaces.get(space_key)
 
-    def ensure_space(self, model_id: str, dim: int, config: dict | None = None) -> SpaceInfo:
-        space_key = make_space_key(model_id)
+    def ensure_space(
+        self,
+        model_id: str,
+        dim: int,
+        config: dict | None = None,
+        space_key: str | None = None,
+    ) -> SpaceInfo:
+        if space_key is None:
+            space_key = make_space_key(model_id)
         if space_key in self._spaces:
             existing = self._spaces[space_key]
             if existing.dim != dim:
