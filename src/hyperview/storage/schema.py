@@ -233,6 +233,7 @@ def make_space_key(model_id: str) -> str:
     """Generate a space_key from a model_id.
 
     For simplicity, this is just the slugified model_id.
+    For provider-aware keys, use `make_provider_aware_space_key` from providers.py.
     """
     return slugify_model_id(model_id)
 

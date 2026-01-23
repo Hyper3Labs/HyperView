@@ -391,5 +391,5 @@ def _is_colab() -> bool:
         import google.colab  # type: ignore[import-not-found]
 
         return True
-    except Exception:
+    except ImportError:
         return False

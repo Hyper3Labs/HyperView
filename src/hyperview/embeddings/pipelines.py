@@ -4,15 +4,18 @@ These functions coordinate embedding computation and 2D layout/projection
 computation, persisting results into the configured storage backend.
 """
 
+from __future__ import annotations
+
 import numpy as np
 
+from hyperview.embeddings.providers import ModelSpec, get_provider, make_provider_aware_space_key
 from hyperview.storage.backend import StorageBackend
-from hyperview.storage.schema import make_layout_key, make_space_key
+from hyperview.storage.schema import make_layout_key
 
 
-def compute_missing_embeddings(
+def compute_embeddings(
     storage: StorageBackend,
-    model_id: str,
+    model_spec: ModelSpec,
     batch_size: int = 32,
     show_progress: bool = True,
 ) -> tuple[str, int, int]:
@@ -20,7 +23,7 @@ def compute_missing_embeddings(
 
     Args:
         storage: Storage backend to read samples from and write embeddings to.
-        model_id: EmbedAnything HuggingFace model_id to use.
+        model_spec: Model specification (provider, model_id, geometry, etc.).
         batch_size: Batch size for processing.
         show_progress: Whether to show progress bar.
 
@@ -28,48 +31,58 @@ def compute_missing_embeddings(
         Tuple of (space_key, num_computed, num_skipped).
 
     Raises:
-        ValueError: If no samples in storage.
+        ValueError: If no samples in storage or provider not found.
     """
-    from hyperview.embeddings.compute import EmbeddingComputer
-
-    computer = EmbeddingComputer(model=model_id)
+    provider = get_provider(model_spec.provider)
 
     all_samples = storage.get_all_samples()
     if not all_samples:
         raise ValueError("No samples in storage")
 
-    test_embedding = computer.compute_single(all_samples[0])
-    dim = len(test_embedding)
+    # Generate space key before computing (deterministic from spec)
+    space_key = make_provider_aware_space_key(model_spec)
 
-    space_key = make_space_key(model_id)
-    provider_config = {
-        "provider": "embed_anything",
-        "geometry": "euclidean",
-    }
-    storage.ensure_space(model_id, dim, config=provider_config)
-
+    # Check which samples need embeddings
     missing_ids = storage.get_missing_embedding_ids(space_key)
+
+    # If space doesn't exist yet, all samples are missing
+    if not storage.get_space(space_key):
+        missing_ids = [s.id for s in all_samples]
+
     num_skipped = len(all_samples) - len(missing_ids)
 
     if not missing_ids:
         if show_progress:
-            print(
-                f"All {len(all_samples)} samples already have embeddings in space '{space_key}'"
-            )
+            print(f"All {len(all_samples)} samples already have embeddings in space '{space_key}'")
         return space_key, 0, num_skipped
 
-    samples_needing_embeddings = storage.get_samples_by_ids(missing_ids)
+    samples_to_embed = storage.get_samples_by_ids(missing_ids)
 
     if show_progress and num_skipped > 0:
         print(f"Skipped {num_skipped} samples with existing embeddings")
 
-    embeddings = computer.compute_batch(
-        samples_needing_embeddings, batch_size=batch_size, show_progress=show_progress
+    # Compute all embeddings in one pass (no separate probe)
+    embeddings = provider.compute_embeddings(
+        samples=samples_to_embed,
+        model_spec=model_spec,
+        batch_size=batch_size,
+        show_progress=show_progress,
     )
 
-    ids = [s.id for s in samples_needing_embeddings]
-    vectors = np.array(embeddings, dtype=np.float32)
-    storage.add_embeddings(space_key, ids, vectors)
+    dim = embeddings.shape[1]
+
+    # Ensure space exists (create if needed)
+    config = provider.get_space_config(model_spec, dim)
+    storage.ensure_space(
+        model_id=model_spec.model_id,
+        dim=dim,
+        config=config,
+        space_key=space_key,
+    )
+
+    # Store embeddings
+    ids = [s.id for s in samples_to_embed]
+    storage.add_embeddings(space_key, ids, embeddings)
 
     return space_key, len(ids), num_skipped
 
@@ -122,11 +135,12 @@ def compute_layout(
     if space is None:
         raise ValueError(f"Space not found: {space_key}")
 
+    input_geometry = space.geometry
+    curvature = (space.config or {}).get("curvature")
+
     ids, vectors = storage.get_embeddings(space_key)
     if len(ids) == 0:
-        raise ValueError(
-            f"No embeddings in space '{space_key}'. Call compute_embeddings() first."
-        )
+        raise ValueError(f"No embeddings in space '{space_key}'. Call compute_embeddings() first.")
 
     if len(ids) < 3:
         raise ValueError(f"Need at least 3 samples for visualization, have {len(ids)}")
@@ -161,20 +175,16 @@ def compute_layout(
     )
 
     engine = ProjectionEngine()
-    if geometry == "poincare":
-        coords = engine.project_to_poincare(
-            vectors,
-            n_neighbors=n_neighbors,
-            min_dist=min_dist,
-            metric=metric,
-        )
-    else:
-        coords = engine.project_umap(
-            vectors,
-            n_neighbors=n_neighbors,
-            min_dist=min_dist,
-            metric=metric,
-        )
+    coords = engine.project(
+        vectors,
+        input_geometry=input_geometry,
+        output_geometry=geometry,
+        curvature=curvature,
+        method=method,
+        n_neighbors=n_neighbors,
+        min_dist=min_dist,
+        metric=metric,
+    )
 
     storage.add_layout_coords(layout_key, ids, coords)
 

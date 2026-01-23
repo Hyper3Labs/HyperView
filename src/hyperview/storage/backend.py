@@ -90,8 +90,21 @@ class StorageBackend(ABC):
         """Get info for a specific embedding space."""
 
     @abstractmethod
-    def ensure_space(self, model_id: str, dim: int, config: dict | None = None) -> Any:
-        """Ensure an embedding space exists, creating if needed."""
+    def ensure_space(
+        self,
+        model_id: str,
+        dim: int,
+        config: dict | None = None,
+        space_key: str | None = None,
+    ) -> Any:
+        """Ensure an embedding space exists, creating if needed.
+
+        Args:
+            model_id: Model identifier for this space.
+            dim: Vector dimension.
+            config: Optional config dict for SpaceInfo.config_json.
+            space_key: Optional explicit space key. If None, derived from model_id.
+        """
 
     @abstractmethod
     def delete_space(self, space_key: str) -> bool:

@@ -359,7 +359,7 @@ export function useHyperScatter({
     };
 
     canvas.addEventListener("wheel", onWheel, { passive: false });
-    return () => canvas.removeEventListener("wheel", onWheel as any);
+    return () => canvas.removeEventListener("wheel", onWheel);
   }, [getCanvasPos, requestRender]);
 
   // Pointer interactions

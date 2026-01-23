@@ -5,7 +5,6 @@ import io
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 from PIL import Image
 from pydantic import BaseModel, Field
 
@@ -40,29 +39,23 @@ class Sample(BaseModel):
         img.thumbnail(size, Image.Resampling.LANCZOS)
         return img
 
-    def get_thumbnail_base64(self, size: tuple[int, int] = (128, 128)) -> str:
-        """Get thumbnail as base64 encoded string."""
-        # Return cached thumbnail if available
-        if self.thumbnail_base64:
-            return self.thumbnail_base64
-
+    def _encode_thumbnail(self, size: tuple[int, int] = (128, 128)) -> str:
+        """Encode thumbnail as base64 JPEG."""
         thumb = self.get_thumbnail(size)
-        # Convert to RGB if necessary (for PNG with alpha)
         if thumb.mode in ("RGBA", "P"):
             thumb = thumb.convert("RGB")
         buffer = io.BytesIO()
         thumb.save(buffer, format="JPEG", quality=85)
         return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
+    def get_thumbnail_base64(self, size: tuple[int, int] = (128, 128)) -> str:
+        """Get thumbnail as base64 encoded string."""
+        return self.thumbnail_base64 or self._encode_thumbnail(size)
+
     def cache_thumbnail(self, size: tuple[int, int] = (128, 128)) -> None:
         """Cache the thumbnail as base64 for persistence."""
         if self.thumbnail_base64 is None:
-            thumb = self.get_thumbnail(size)
-            if thumb.mode in ("RGBA", "P"):
-                thumb = thumb.convert("RGB")
-            buffer = io.BytesIO()
-            thumb.save(buffer, format="JPEG", quality=85)
-            self.thumbnail_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+            self.thumbnail_base64 = self._encode_thumbnail(size)
 
     def to_api_dict(self, include_thumbnail: bool = True) -> dict[str, Any]:
         """Convert to dictionary for API response."""
@@ -78,31 +71,4 @@ class Sample(BaseModel):
         return data
 
 
-class SampleFromArray(Sample):
-    """A sample created from a numpy array (e.g., from HuggingFace datasets)."""
 
-    _image_array: np.ndarray | None = None
-
-    @classmethod
-    def from_array(
-        cls,
-        id: str,
-        image_array: np.ndarray,
-        label: str | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> "SampleFromArray":
-        """Create a sample from a numpy array."""
-        sample = cls(
-            id=id,
-            filepath=f"memory://{id}",
-            label=label,
-            metadata=metadata or {},
-        )
-        sample._image_array = image_array
-        return sample
-
-    def load_image(self) -> Image.Image:
-        """Load the image from the array."""
-        if self._image_array is not None:
-            return Image.fromarray(self._image_array)
-        return super().load_image()

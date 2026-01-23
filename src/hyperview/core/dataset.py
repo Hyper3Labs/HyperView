@@ -1,5 +1,7 @@
 """Dataset class for managing collections of samples."""
 
+from __future__ import annotations
+
 import hashlib
 import json
 import uuid
@@ -335,7 +337,7 @@ class Dataset:
 
     def compute_embeddings(
         self,
-        model: str = "openai/clip-vit-base-patch32",
+        model: str | ModelSpec = "openai/clip-vit-base-patch32",
         batch_size: int = 32,
         show_progress: bool = True,
     ) -> str:
@@ -351,11 +353,16 @@ class Dataset:
         Returns:
             space_key for the embedding space.
         """
-        from hyperview.embeddings.pipelines import compute_missing_embeddings
+        from hyperview.embeddings.pipelines import compute_embeddings
+        from hyperview.embeddings.providers import ModelSpec
 
-        space_key, _num_computed, _num_skipped = compute_missing_embeddings(
+        if isinstance(model, ModelSpec):
+            model_spec = model
+        else:
+            model_spec = ModelSpec(provider="embed_anything", model_id=model)
+        space_key, _num_computed, _num_skipped = compute_embeddings(
             storage=self._storage,
-            model_id=model,
+            model_spec=model_spec,
             batch_size=batch_size,
             show_progress=show_progress,
         )
@@ -591,16 +598,11 @@ class Dataset:
     def save(self, filepath: str, include_thumbnails: bool = True) -> None:
         """Export dataset to a JSON file.
 
-        Note: For persistent datasets (default), data is automatically saved.
-        This method is for exporting to JSON format for sharing or backup.
-
         Args:
             filepath: Path to save the JSON file.
             include_thumbnails: Whether to include cached thumbnails.
         """
         samples = self._storage.get_all_samples()
-
-        # Cache thumbnails before saving if requested
         if include_thumbnails:
             for s in samples:
                 s.cache_thumbnail()
