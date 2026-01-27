@@ -1,0 +1,53 @@
+name: Require Frontend Export
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "frontend/**"
+      - "scripts/export_frontend.sh"
+      - "src/hyperview/server/static/**"
+
+jobs:
+  require-frontend-export:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Verify static export updated when frontend changes
+        run: |
+          set -euo pipefail
+
+          base_sha="${{ github.event.pull_request.base.sha }}"
+          head_sha="${{ github.event.pull_request.head.sha }}"
+
+          changed_files="$(git diff --name-only "$base_sha" "$head_sha")"
+
+          echo "Changed files:"
+          echo "$changed_files"
+
+          frontend_changed="false"
+          static_changed="false"
+
+          if echo "$changed_files" | grep -qE '^(frontend/|scripts/export_frontend\.sh$)'; then
+            frontend_changed="true"
+          fi
+
+          if echo "$changed_files" | grep -q '^src/hyperview/server/static/'; then
+            static_changed="true"
+          fi
+
+          if [[ "$frontend_changed" == "true" && "$static_changed" != "true" ]]; then
+            echo ""
+            echo "ERROR: frontend/ changed but src/hyperview/server/static/ was not updated."
+            echo "Run: bash scripts/export_frontend.sh"
+            echo "Then commit the updated src/hyperview/server/static/ output."
+            exit 1
+          fi
+
+          echo "OK: export requirements satisfied."
