@@ -64,6 +64,10 @@ class Sample(BaseModel):
 
     def to_api_dict(self, include_thumbnail: bool = True) -> dict[str, Any]:
         """Convert to dictionary for API response."""
+        # Ensure dimensions are populated (loads image if needed but not cached)
+        if self.width is None or self.height is None:
+            self.ensure_dimensions()
+
         data = {
             "id": self.id,
             "filepath": self.filepath,
