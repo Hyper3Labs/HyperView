@@ -108,15 +108,15 @@ def run_demo(
     open_browser: bool = True,
     reuse_server: bool = False,
 ):
-    """Run a demo with CIFAR-100 data."""
-    print("Loading CIFAR-100 dataset...")
-    dataset = Dataset("cifar100_demo")
+    """Run a demo with CIFAR-10 data."""
+    print("Loading CIFAR-10 dataset...")
+    dataset = Dataset("cifar10_demo")
 
     added, skipped = dataset.add_from_huggingface(
-        "uoft-cs/cifar100",
+        "uoft-cs/cifar10",
         split="train",
         image_key="img",
-        label_key="fine_label",
+        label_key="label",
         max_samples=num_samples,
     )
     if skipped > 0:

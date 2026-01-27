@@ -1,8 +1,18 @@
+@import "dockview/dist/styles/dockview.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
+  html,
+  body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+
   :root {
     /* Rerun-inspired dark theme as default (dark-first) */
     --background: 215 28% 7%;       /* #0d1117 */
@@ -54,17 +64,20 @@
   }
   body {
     @apply bg-background text-foreground;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-      'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+    font-size: 12px;
+    line-height: 16px;
+    letter-spacing: -0.15px;
+    font-weight: 500;
+    font-feature-settings: "liga" 1, "calt" 1;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 }
 
-/* Custom scrollbar - Rerun style */
+/* Custom scrollbar - Rerun style: 6px bar, 2px inner margin, 2px outer margin */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 10px;  /* 6px bar + 2px inner margin on each side */
+  height: 10px;
 }
 
 ::-webkit-scrollbar-track {
@@ -72,12 +85,22 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: hsl(var(--surface-elevated));
+  background: hsl(var(--muted-foreground) / 0.2);
   border-radius: 3px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--text-subtle));
+  background: hsl(var(--muted-foreground) / 0.35);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--muted-foreground) / 0.25) transparent;
 }
 
 /* Hide scrollbar for some elements */
@@ -88,4 +111,114 @@
 .hide-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
+}
+
+/* Scroll containers inside panels should keep scrollbars inset */
+.panel-scroll {
+  scrollbar-gutter: stable;
+}
+
+/* Dockview theme overrides (match HyperView tokens) */
+.hyperview-dockview {
+  --dv-background-color: hsl(var(--background));
+  --dv-group-view-background-color: hsl(var(--card));
+  --dv-tabs-and-actions-container-background-color: hsl(var(--secondary));
+  --dv-activegroup-visiblepanel-tab-background-color: hsl(var(--card));
+  --dv-activegroup-hiddenpanel-tab-background-color: hsl(var(--secondary));
+  --dv-inactivegroup-visiblepanel-tab-background-color: hsl(var(--secondary));
+  --dv-inactivegroup-hiddenpanel-tab-background-color: hsl(var(--secondary));
+  --dv-activegroup-visiblepanel-tab-color: hsl(var(--foreground));
+  --dv-activegroup-hiddenpanel-tab-color: hsl(var(--muted-foreground));
+  --dv-inactivegroup-visiblepanel-tab-color: hsl(var(--muted-foreground));
+  --dv-inactivegroup-hiddenpanel-tab-color: hsl(var(--muted-foreground));
+  --dv-tabs-and-actions-container-font-size: 12px;
+  --dv-tabs-and-actions-container-height: 24px;
+  --dv-tab-font-size: 12px;
+  --dv-tabs-container-scrollbar-color: hsl(var(--muted-foreground) / 0.25);
+  --dv-scrollbar-background-color: hsl(var(--muted-foreground) / 0.25);
+  --dv-tab-divider-color: hsl(var(--border));
+  --dv-separator-border: transparent;
+  --dv-paneview-header-border-color: hsl(var(--border));
+  --dv-sash-color: hsl(var(--border));
+  --dv-icon-hover-background-color: hsl(var(--accent));
+  --dv-active-sash-color: hsl(var(--primary));
+  --dv-drag-over-background-color: hsl(var(--primary) / 0.15);
+  --dv-drag-over-border-color: hsl(var(--primary) / 0.6);
+  /* Remove tab margins for flush appearance */
+  --dv-tab-margin: 0;
+}
+
+/* Remove any gaps between panels - Rerun-style flush layout */
+.hyperview-dockview .dv-groupview {
+  border: none;
+}
+
+.hyperview-dockview .dv-tabs-and-actions-container {
+  border-bottom: 1px solid hsl(var(--border));
+}
+
+.hyperview-dockview .dv-tab {
+  padding: 0 8px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  line-height: 16px;
+}
+
+.hyperview-dockview .dv-scrollable .dv-scrollbar-horizontal {
+  height: 6px;
+  border-radius: 3px;
+}
+
+/* Hide Dockview tab scrollbars (avoid extra bar under tabs) */
+.hyperview-dockview .dv-tabs-container {
+  scrollbar-width: none;
+}
+
+.hyperview-dockview .dv-tabs-container::-webkit-scrollbar {
+  height: 0;
+}
+
+.hyperview-dockview .dv-scrollable .dv-scrollbar-horizontal {
+  display: none;
+}
+
+/* Sash styling: transparent hit area with centered 1px visible line via pseudo-element */
+.hyperview-dockview .dv-split-view-container > .dv-sash-container > .dv-sash {
+  /* Keep the sash itself transparent - we'll draw the line with ::after */
+  background-color: transparent !important;
+}
+
+/* Horizontal sash (vertical divider line) */
+.hyperview-dockview .dv-split-view-container.dv-horizontal > .dv-sash-container > .dv-sash::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 1px;
+  background-color: hsl(var(--border));
+  pointer-events: none;
+}
+
+.hyperview-dockview .dv-split-view-container.dv-horizontal > .dv-sash-container > .dv-sash.dv-enabled:hover::after {
+  background-color: hsl(var(--primary));
+}
+
+/* Vertical sash (horizontal divider line) */
+.hyperview-dockview .dv-split-view-container.dv-vertical > .dv-sash-container > .dv-sash::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 1px;
+  background-color: hsl(var(--border));
+  pointer-events: none;
+}
+
+.hyperview-dockview .dv-split-view-container.dv-vertical > .dv-sash-container > .dv-sash.dv-enabled:hover::after {
+  background-color: hsl(var(--primary));
 }

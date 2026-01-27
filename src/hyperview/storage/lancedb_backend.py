@@ -42,8 +42,19 @@ class LanceDBBackend(StorageBackend):
         self._samples_table = self._get_or_create_samples_table()
         self._spaces_table = self._get_or_create_spaces_table()
 
+    def _table_names(self) -> set[str]:
+        """Return the set of table names in this LanceDB database."""
+        try:
+            res = self._db.list_tables()
+            # LanceDB may return a response object with a `.tables` field.
+            names = res.tables if hasattr(res, "tables") else res
+        except Exception:
+            # Back-compat for older LanceDB.
+            names = self._db.table_names()
+        return set(names)
+
     def _get_or_create_samples_table(self) -> lancedb.table.Table | None:
-        if "samples" in self._db.table_names():
+        if "samples" in self._table_names():
             return self._db.open_table("samples")
         return None
 
@@ -55,7 +66,7 @@ class LanceDBBackend(StorageBackend):
         return self._samples_table
 
     def _get_or_create_spaces_table(self) -> lancedb.table.Table:
-        if "spaces" in self._db.table_names():
+        if "spaces" in self._table_names():
             return self._db.open_table("spaces")
         return self._db.create_table("spaces", schema=create_spaces_schema())
 
@@ -215,7 +226,7 @@ class LanceDBBackend(StorageBackend):
     def delete_space(self, space_key: str) -> bool:
         self._spaces_table.delete(f"space_key = '{_sql_escape(space_key)}'")
         emb_table = f"embeddings__{space_key}"
-        if emb_table in self._db.table_names():
+        if emb_table in self._table_names():
             self._db.drop_table(emb_table)
         return True
 
@@ -227,7 +238,7 @@ class LanceDBBackend(StorageBackend):
             raise ValueError(f"Space not found: {space_key}")
 
         emb_table_name = f"embeddings__{space_key}"
-        if emb_table_name not in self._db.table_names():
+        if emb_table_name not in self._table_names():
             self._db.create_table(emb_table_name, schema=create_embeddings_schema(space.dim))
 
         emb_table = self._db.open_table(emb_table_name)
@@ -247,7 +258,7 @@ class LanceDBBackend(StorageBackend):
             raise ValueError(f"Space not found: {space_key}")
 
         emb_table_name = f"embeddings__{space_key}"
-        if emb_table_name not in self._db.table_names():
+        if emb_table_name not in self._table_names():
             return [], np.empty((0, space.dim), dtype=np.float32)
 
         emb_table = self._db.open_table(emb_table_name)
@@ -263,7 +274,7 @@ class LanceDBBackend(StorageBackend):
 
     def get_embedded_ids(self, space_key: str) -> set[str]:
         emb_table_name = f"embeddings__{space_key}"
-        if emb_table_name not in self._db.table_names():
+        if emb_table_name not in self._table_names():
             return set()
         return {r["id"] for r in self._db.open_table(emb_table_name).search().select(["id"]).to_list()}
 
@@ -274,10 +285,10 @@ class LanceDBBackend(StorageBackend):
         return list(all_ids - self.get_embedded_ids(space_key))
 
     def _get_layouts_registry_table(self) -> lancedb.table.Table | None:
-        return self._db.open_table("layouts_registry") if "layouts_registry" in self._db.table_names() else None
+        return self._db.open_table("layouts_registry") if "layouts_registry" in self._table_names() else None
 
     def _ensure_layouts_registry_table(self) -> lancedb.table.Table:
-        if "layouts_registry" not in self._db.table_names():
+        if "layouts_registry" not in self._table_names():
             self._db.create_table("layouts_registry", schema=create_layouts_registry_schema())
         return self._db.open_table("layouts_registry")
 
@@ -312,13 +323,13 @@ class LanceDBBackend(StorageBackend):
         registry_table.add(pa.Table.from_pylist([layout_info.to_dict()], schema=create_layouts_registry_schema()))
 
         table_name = f"layouts__{layout_key}"
-        if table_name not in self._db.table_names():
+        if table_name not in self._table_names():
             self._db.create_table(table_name, schema=create_layouts_schema())
         return layout_info
 
     def delete_layout(self, layout_key: str) -> bool:
         table_name = f"layouts__{layout_key}"
-        if table_name in self._db.table_names():
+        if table_name in self._table_names():
             self._db.drop_table(table_name)
         registry = self._get_layouts_registry_table()
         if registry:
@@ -332,7 +343,7 @@ class LanceDBBackend(StorageBackend):
             raise ValueError(f"Layout '{layout_key}' not registered")
 
         table_name = f"layouts__{layout_key}"
-        if table_name not in self._db.table_names():
+        if table_name not in self._table_names():
             self._db.create_table(table_name, schema=create_layouts_schema())
 
         table = self._db.open_table(table_name)
@@ -348,7 +359,7 @@ class LanceDBBackend(StorageBackend):
 
     def get_layout_coords(self, layout_key: str, ids: list[str] | None = None) -> tuple[list[str], np.ndarray]:
         table_name = f"layouts__{layout_key}"
-        if table_name not in self._db.table_names():
+        if table_name not in self._table_names():
             return [], np.empty((0, 2), dtype=np.float32)
 
         table = self._db.open_table(table_name)
@@ -372,7 +383,7 @@ class LanceDBBackend(StorageBackend):
         y_max: float,
     ) -> tuple[list[str], np.ndarray]:
         table_name = f"layouts__{layout_key}"
-        if table_name not in self._db.table_names():
+        if table_name not in self._table_names():
             return [], np.empty((0, 2), dtype=np.float32)
 
         rows = self._db.open_table(table_name).search().where(
@@ -412,7 +423,7 @@ class LanceDBBackend(StorageBackend):
             space_key = spaces[0].space_key
 
         emb_table_name = f"embeddings__{space_key}"
-        if emb_table_name not in self._db.table_names():
+        if emb_table_name not in self._table_names():
             return []
 
         results = self._db.open_table(emb_table_name).search(vector, vector_column_name="vector").metric("cosine").limit(k).to_list()

@@ -1,11 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import justifiedLayout from "justified-layout";
 import { useStore } from "@/store/useStore";
-import { Panel, PanelFooter } from "./Panel";
-import { PanelHeader } from "./PanelHeader";
-import { GridIcon, CheckIcon } from "./icons";
+import { Panel } from "./Panel";
+import { CheckIcon } from "./icons";
 import type { Sample } from "@/types";
 
 interface ImageGridProps {
@@ -14,69 +14,161 @@ interface ImageGridProps {
   hasMore?: boolean;
 }
 
-const GAP = 8;
-const ITEM_HEIGHT = 200;
-const MIN_ITEM_WIDTH = 200; // Minimum width for each image
+// Justified layout config
+const BOX_SPACING = 2; // Tight spacing between images
+const TARGET_ROW_HEIGHT = 180; // Target height for rows
+const DEFAULT_ASPECT_RATIO = 1; // Fallback for samples without dimensions
+
+/**
+ * Get aspect ratio from sample, with fallback
+ */
+function getAspectRatio(sample: Sample): number {
+  if (sample.width && sample.height && sample.height > 0) {
+    return sample.width / sample.height;
+  }
+  return DEFAULT_ASPECT_RATIO;
+}
+
+/**
+ * Compute justified layout geometry for samples
+ */
+function computeLayout(
+  samples: Sample[],
+  containerWidth: number
+): { boxes: Array<{ width: number; height: number; top: number; left: number }>; containerHeight: number } {
+  if (samples.length === 0 || containerWidth <= 0) {
+    return { boxes: [], containerHeight: 0 };
+  }
+
+  const aspectRatios = samples.map(getAspectRatio);
+
+  const geometry = justifiedLayout(aspectRatios, {
+    containerWidth,
+    containerPadding: 0,
+    boxSpacing: BOX_SPACING,
+    targetRowHeight: TARGET_ROW_HEIGHT,
+    targetRowHeightTolerance: 0.25,
+    showWidows: true, // Always show last row even if incomplete
+  });
+
+  return {
+    boxes: geometry.boxes,
+    containerHeight: geometry.containerHeight,
+  };
+}
+
+/**
+ * Group boxes into rows for virtualization
+ */
+interface RowData {
+  startIndex: number;
+  endIndex: number; // exclusive
+  top: number;
+  height: number;
+}
+
+function groupIntoRows(
+  boxes: Array<{ width: number; height: number; top: number; left: number }>
+): RowData[] {
+  if (boxes.length === 0) return [];
+
+  const rows: RowData[] = [];
+  let currentRowTop = boxes[0].top;
+  let currentRowStart = 0;
+  let currentRowHeight = boxes[0].height;
+
+  for (let i = 1; i < boxes.length; i++) {
+    const box = boxes[i];
+    // New row if top position changes significantly
+    if (Math.abs(box.top - currentRowTop) > 1) {
+      rows.push({
+        startIndex: currentRowStart,
+        endIndex: i,
+        top: currentRowTop,
+        height: currentRowHeight,
+      });
+      currentRowStart = i;
+      currentRowTop = box.top;
+      currentRowHeight = box.height;
+    } else {
+      // Same row - take max height in case of slight variations
+      currentRowHeight = Math.max(currentRowHeight, box.height);
+    }
+  }
+
+  // Push final row
+  rows.push({
+    startIndex: currentRowStart,
+    endIndex: boxes.length,
+    top: currentRowTop,
+    height: currentRowHeight,
+  });
+
+  return rows;
+}
 
 export function ImageGrid({ samples, onLoadMore, hasMore }: ImageGridProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState(0);
+
   const {
     selectedIds,
     isLassoSelection,
     selectionSource,
-    lassoTotal,
     toggleSelection,
     addToSelection,
     setHoveredId,
     hoveredId,
+    labelFilter,
   } = useStore();
-  const [columnCount, setColumnCount] = useState(4);
 
-  // Calculate column count based on container width
+  // Track container width for layout computation
   useEffect(() => {
-    const updateColumnCount = () => {
-      if (!containerRef.current) return;
-      const containerWidth = containerRef.current.clientWidth;
-      const padding = 16; // Total horizontal padding (8px each side)
-      const availableWidth = containerWidth - padding;
+    const container = containerRef.current;
+    if (!container) return;
 
-      // Calculate how many columns can fit
-      const columns = Math.max(1, Math.floor((availableWidth + GAP) / (MIN_ITEM_WIDTH + GAP)));
-      setColumnCount(columns);
+    const updateWidth = () => {
+      const width = container.clientWidth;
+      if (width > 0 && width !== containerWidth) {
+        setContainerWidth(width);
+      }
     };
 
-    updateColumnCount();
+    updateWidth();
 
-    const resizeObserver = new ResizeObserver(updateColumnCount);
-    if (containerRef.current) {
-      resizeObserver.observe(containerRef.current);
-    }
+    const resizeObserver = new ResizeObserver(() => {
+      requestAnimationFrame(updateWidth);
+    });
+    resizeObserver.observe(container);
 
     return () => resizeObserver.disconnect();
-  }, []);
+  }, [containerWidth]);
 
-  // In lasso mode, `samples` is already the selected-page list.
-  const rowCount = Math.ceil(samples.length / columnCount);
-
-  // Create stable row keys based on the sample IDs in each row
-  const getRowKey = useCallback(
-    (index: number) => {
-      const startIndex = index * columnCount;
-      const rowSamples = samples.slice(startIndex, startIndex + columnCount);
-      return rowSamples.map((s) => s.id).join("-") || `row-${index}`;
-    },
-    [samples, columnCount]
+  // Compute justified layout
+  const { boxes, containerHeight } = useMemo(
+    () => computeLayout(samples, containerWidth),
+    [samples, containerWidth]
   );
 
+  // Group into rows for virtualization
+  const rows = useMemo(() => groupIntoRows(boxes), [boxes]);
+
+  // Virtualizer for rows
   const virtualizer = useVirtualizer({
-    count: rowCount,
+    count: rows.length,
     getScrollElement: () => containerRef.current,
-    estimateSize: () => ITEM_HEIGHT + GAP,
-    overscan: 5,
-    getItemKey: getRowKey,
+    estimateSize: (index) => rows[index]?.height ?? TARGET_ROW_HEIGHT,
+    overscan: 3,
+    getItemKey: (index) => {
+      const row = rows[index];
+      if (!row) return `row-${index}`;
+      // Create stable key from sample IDs in this row
+      const rowSamples = samples.slice(row.startIndex, row.endIndex);
+      return rowSamples.map((s) => s.id).join("-") || `row-${index}`;
+    },
   });
 
-  // Load more when scrolling near the bottom
+  // Load more when scrolling near bottom
   useEffect(() => {
     const container = containerRef.current;
     if (!container || !onLoadMore || !hasMore) return;
@@ -92,13 +184,12 @@ export function ImageGrid({ samples, onLoadMore, hasMore }: ImageGridProps) {
     return () => container.removeEventListener("scroll", handleScroll);
   }, [onLoadMore, hasMore]);
 
-  // Reset virtualizer measurements when selection or filter mode changes
+  // Reset scroll on filter change
   useEffect(() => {
-    virtualizer.measure();
-  }, [selectedIds, isLassoSelection, virtualizer]);
+    containerRef.current?.scrollTo({ top: 0 });
+  }, [labelFilter]);
 
-  // If a selection was made in the scatter plot, jump the image grid to the top
-  // so the selected sample(s) are immediately visible.
+  // Scroll to top when scatter selection made
   useEffect(() => {
     if (isLassoSelection) return;
     if (selectionSource !== "scatter") return;
@@ -107,18 +198,16 @@ export function ImageGrid({ samples, onLoadMore, hasMore }: ImageGridProps) {
     try {
       virtualizer.scrollToIndex(0, { align: "start" });
     } catch {
-      // Fallback if the virtualizer isn't ready yet.
       containerRef.current?.scrollTo({ top: 0 });
     }
   }, [isLassoSelection, selectedIds, selectionSource, virtualizer]);
 
+  // Handle click with selection logic
   const handleClick = useCallback(
     (sample: Sample, event: React.MouseEvent) => {
       if (event.metaKey || event.ctrlKey) {
-        // Multi-select with Cmd/Ctrl
         toggleSelection(sample.id);
       } else if (event.shiftKey && selectedIds.size > 0) {
-        // Range select with Shift - use original samples array, not filtered
         const selectedArray = Array.from(selectedIds);
         const lastSelected = selectedArray[selectedArray.length - 1];
         const lastIndex = samples.findIndex((s) => s.id === lastSelected);
@@ -131,7 +220,6 @@ export function ImageGrid({ samples, onLoadMore, hasMore }: ImageGridProps) {
           addToSelection(rangeIds);
         }
       } else {
-        // Single select
         const newSet = new Set<string>();
         newSet.add(sample.id);
         useStore.getState().setSelectedIds(newSet, "grid");
@@ -140,118 +228,111 @@ export function ImageGrid({ samples, onLoadMore, hasMore }: ImageGridProps) {
     [samples, selectedIds, toggleSelection, addToSelection]
   );
 
-  const items = virtualizer.getVirtualItems();
+  const virtualRows = virtualizer.getVirtualItems();
 
   return (
     <Panel>
-      <PanelHeader
-        icon={<GridIcon />}
-        title="Samples"
-        subtitle={
-          isLassoSelection
-            ? `${lassoTotal} selected`
-            : selectedIds.size > 0
-              ? `${selectedIds.size} selected`
-              : `${samples.length} items`
-        }
-      />
+      <div className="flex-1 min-h-0 overflow-hidden">
+        <div ref={containerRef} className="panel-scroll h-full min-h-0 overflow-auto">
+          <div
+            style={{
+              height: containerHeight || "100%",
+              width: "100%",
+              position: "relative",
+            }}
+          >
+            {virtualRows.map((virtualRow) => {
+              const row = rows[virtualRow.index];
+              if (!row) return null;
 
-      {/* Grid Container */}
-      <div ref={containerRef} className="flex-1 overflow-auto p-2">
-        <div
-          style={{
-            height: `${virtualizer.getTotalSize()}px`,
-            width: "100%",
-            position: "relative",
-          }}
-        >
-          {items.map((virtualRow) => {
-            const rowIndex = virtualRow.index;
-            const startIndex = rowIndex * columnCount;
-            const rowSamples = samples.slice(startIndex, startIndex + columnCount);
+              const rowSamples = samples.slice(row.startIndex, row.endIndex);
+              const rowBoxes = boxes.slice(row.startIndex, row.endIndex);
 
-            return (
-              <div
-                key={virtualRow.key}
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  left: 0,
-                  width: "100%",
-                  height: `${ITEM_HEIGHT}px`,
-                  transform: `translateY(${virtualRow.start}px)`,
-                }}
-                className="flex gap-2 px-1"
-              >
-                {rowSamples.map((sample) => {
-                  const isSelected = isLassoSelection ? true : selectedIds.has(sample.id);
-                  const isHovered = hoveredId === sample.id;
+              return (
+                <div
+                  key={virtualRow.key}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    height: row.height,
+                    transform: `translateY(${row.top}px)`,
+                  }}
+                >
+                  {rowSamples.map((sample, i) => {
+                    const box = rowBoxes[i];
+                    if (!box) return null;
 
-                  return (
-                    <div
-                      key={sample.id}
-                      className={`
-                        relative flex-1 rounded-md overflow-hidden cursor-pointer
-                        transition-all duration-150 ease-out
-                        ${isSelected ? "ring-2 ring-primary" : ""}
-                        ${isHovered ? "ring-2 ring-primary/50" : ""}
-                      `}
-                      onClick={(e) => handleClick(sample, e)}
-                      onMouseEnter={() => setHoveredId(sample.id)}
-                      onMouseLeave={() => setHoveredId(null)}
-                    >
-                      {/* Image - using native img for base64 data (Next Image doesn't support this) */}
-                      {sample.thumbnail ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={`data:image/jpeg;base64,${sample.thumbnail}`}
-                          alt={sample.filename}
-                          className="w-full h-full object-cover"
-                          loading="lazy"
-                        />
-                      ) : (
-                        <div className="w-full h-full bg-muted flex items-center justify-center">
-                          <span className="text-muted-foreground text-xs">No image</span>
-                        </div>
-                      )}
+                    const isSelected = isLassoSelection ? true : selectedIds.has(sample.id);
+                    const isHovered = hoveredId === sample.id;
 
-                      {/* Label badge */}
-                      {sample.label && (
-                        <div className="absolute bottom-1 left-1 right-1">
-                          <span
-                            className="inline-block px-1.5 py-0.5 text-xs rounded truncate max-w-full"
-                            style={{
-                              backgroundColor: "rgba(0,0,0,0.7)",
-                              color: "#fff",
-                            }}
-                          >
-                            {sample.label}
-                          </span>
-                        </div>
-                      )}
+                    return (
+                      <div
+                        key={sample.id}
+                        style={{
+                          position: "absolute",
+                          left: box.left,
+                          top: 0,
+                          width: box.width,
+                          height: box.height,
+                        }}
+                        className={`
+                          overflow-hidden cursor-pointer
+                          transition-shadow duration-150 ease-out
+                          ${isSelected ? "ring-2 ring-inset ring-primary" : ""}
+                          ${isHovered && !isSelected ? "ring-2 ring-inset ring-primary/50" : ""}
+                        `}
+                        onClick={(e) => handleClick(sample, e)}
+                        onMouseEnter={() => setHoveredId(sample.id)}
+                        onMouseLeave={() => setHoveredId(null)}
+                      >
+                        {/* Image container - justified layout sizes tile to preserve aspect ratio */}
+                        {/* Future: overlays (segmentations, bboxes) will be absolutely positioned here */}
+                        {sample.thumbnail ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={`data:image/jpeg;base64,${sample.thumbnail}`}
+                            alt={sample.filename}
+                            className="w-full h-full object-cover"
+                            loading="lazy"
+                          />
+                        ) : (
+                          <div className="w-full h-full bg-muted flex items-center justify-center">
+                            <span className="text-muted-foreground text-xs">No image</span>
+                          </div>
+                        )}
 
-                      {/* Selection indicator */}
-                      {isSelected && (
-                        <div className="absolute top-1 right-1 w-5 h-5 rounded-full bg-primary flex items-center justify-center">
-                          <CheckIcon />
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-                {/* Fill empty cells */}
-                {Array.from({ length: columnCount - rowSamples.length }).map((_, i) => (
-                  <div key={`empty-${i}`} className="flex-1" />
-                ))}
-              </div>
-            );
-          })}
+                        {/* Label badge */}
+                        {sample.label && (
+                          <div className="absolute bottom-0.5 left-0.5 right-0.5">
+                            <span
+                              className="inline-block px-1 py-0.5 text-[10px] leading-tight truncate max-w-full"
+                              style={{
+                                backgroundColor: "rgba(0,0,0,0.7)",
+                                color: "#fff",
+                              }}
+                            >
+                              {sample.label}
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Selection indicator */}
+                        {isSelected && (
+                          <div className="absolute top-0.5 right-0.5 w-4 h-4 rounded-full bg-primary flex items-center justify-center">
+                            <CheckIcon />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
-
-      <PanelFooter>
-        <span>Click • ⌘+click multi • ⇧+click range</span>
-      </PanelFooter>
     </Panel>
   );
 }

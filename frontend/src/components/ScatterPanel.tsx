@@ -1,75 +1,96 @@
 "use client";
 
-import { useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useStore } from "@/store/useStore";
-import { Panel, PanelFooter } from "./Panel";
-import { PanelHeader } from "./PanelHeader";
-import { EuclideanIcon, PoincareIcon, ScatterIcon } from "./icons";
-import { type ScatterLabelsInfo, useHyperScatter } from "./useHyperScatter";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Panel } from "./Panel";
+import { useHyperScatter } from "./useHyperScatter";
+import { useLabelLegend } from "./useLabelLegend";
 import type { Geometry } from "@/types";
-import { listAvailableGeometries } from "@/lib/layouts";
+import { findLayoutByGeometry, listAvailableGeometries } from "@/lib/layouts";
+import { fetchEmbeddings } from "@/lib/api";
 
 interface ScatterPanelProps {
   className?: string;
+  layoutKey?: string;
+  geometry?: Geometry;
 }
 
-export function ScatterPanel({ className = "" }: ScatterPanelProps) {
+export function ScatterPanel({
+  className = "",
+  layoutKey,
+  geometry,
+}: ScatterPanelProps) {
   const {
     datasetInfo,
-    embeddings,
+    embeddingsByLayoutKey,
+    setEmbeddingsForLayout,
     selectedIds,
     setSelectedIds,
     beginLassoSelection,
     hoveredId,
     setHoveredId,
-    geometry,
-    setGeometry,
+    setActiveLayoutKey,
+    labelFilter,
   } = useStore();
+
+  const [localGeometry, setLocalGeometry] = useState<Geometry>("euclidean");
 
   // Check which geometries are available
   const availableGeometries = useMemo(() => {
     return listAvailableGeometries(datasetInfo?.layouts ?? []);
   }, [datasetInfo?.layouts]);
 
-  const embeddingModelName = useMemo(() => {
-    if (!embeddings || !datasetInfo) return null;
+  useEffect(() => {
+    if (geometry) return;
+    if (availableGeometries.length === 0) return;
+    if (!availableGeometries.includes(localGeometry)) {
+      setLocalGeometry(availableGeometries[0]);
+    }
+  }, [availableGeometries, geometry, localGeometry]);
 
-    const layoutKey = embeddings.layout_key;
+  const resolvedGeometry = geometry ?? localGeometry;
 
-    // Find the LayoutInfo for current layout to get space_key directly
-    const layoutInfo = datasetInfo.layouts.find((l) => l.layout_key === layoutKey);
-    const spaceKey = layoutInfo?.space_key ?? layoutKey.split("__")[0];
+  const resolvedLayoutKey = useMemo(() => {
+    if (!datasetInfo) return layoutKey ?? null;
 
-    const space = datasetInfo.spaces.find((s) => s.space_key === spaceKey);
-
-    return space?.model_id ?? space?.space_key ?? spaceKey;
-  }, [datasetInfo, embeddings]);
-
-  const labelsInfo = useMemo<ScatterLabelsInfo | null>(() => {
-    if (!embeddings) return null;
-
-    // Stable label order for palette and legend.
-    const uniqueLabels = [...new Set(embeddings.labels.map((l) => l || "undefined"))];
-
-    const labelToCategory: Record<string, number> = {};
-    for (let i = 0; i < uniqueLabels.length; i++) {
-      labelToCategory[uniqueLabels[i]] = i;
+    if (layoutKey) {
+      const exists = datasetInfo.layouts.some((layout) => layout.layout_key === layoutKey);
+      if (exists) return layoutKey;
     }
 
-    const categories = new Uint16Array(embeddings.labels.length);
-    for (let i = 0; i < embeddings.labels.length; i++) {
-      const key = embeddings.labels[i] || "undefined";
-      categories[i] = labelToCategory[key] ?? 0;
-    }
+    const layout = findLayoutByGeometry(datasetInfo.layouts, resolvedGeometry);
+    return layout?.layout_key ?? datasetInfo.layouts[0]?.layout_key ?? null;
+  }, [datasetInfo, layoutKey, resolvedGeometry]);
 
-    const palette = uniqueLabels.map((label) => {
-      if (label === "undefined") return "#008080";
-      return embeddings.label_colors[label] || "#808080";
-    });
+  const embeddings = resolvedLayoutKey ? embeddingsByLayoutKey[resolvedLayoutKey] ?? null : null;
 
-    return { uniqueLabels, categories, palette };
-  }, [embeddings]);
+  useEffect(() => {
+    if (!resolvedLayoutKey) return;
+    setActiveLayoutKey(resolvedLayoutKey);
+  }, [resolvedLayoutKey, setActiveLayoutKey]);
+
+  useEffect(() => {
+    if (!resolvedLayoutKey) return;
+    if (embeddingsByLayoutKey[resolvedLayoutKey]) return;
+
+    let cancelled = false;
+
+    fetchEmbeddings(resolvedLayoutKey)
+      .then((data) => {
+        if (cancelled) return;
+        setEmbeddingsForLayout(resolvedLayoutKey, data);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error("Failed to load embeddings:", err);
+      })
+
+    return () => {
+      cancelled = true;
+    };
+  }, [embeddingsByLayoutKey, resolvedLayoutKey, setEmbeddingsForLayout]);
+
+  const { labelsInfo } = useLabelLegend({ datasetInfo, embeddings, labelFilter });
 
   const {
     canvasRef,
@@ -89,61 +110,38 @@ export function ScatterPanel({ className = "" }: ScatterPanelProps) {
     setSelectedIds,
     beginLassoSelection,
     setHoveredId,
+    hoverEnabled: !labelFilter,
   });
 
-  const uniqueLabels = labelsInfo?.uniqueLabels ?? [];
+  const focusLayout = useCallback(() => {
+    if (!resolvedLayoutKey) return;
+    setActiveLayoutKey(resolvedLayoutKey);
+  }, [resolvedLayoutKey, setActiveLayoutKey]);
+
+  const loadingLabel = resolvedLayoutKey
+    ? "Loading embeddings..."
+    : "No embeddings layout available";
 
   return (
     <Panel className={className}>
-      <PanelHeader
-        icon={<ScatterIcon />}
-        title="Embeddings"
-        subtitle={embeddings ? embeddingModelName ?? "" : "Loading..."}
-      >
-        {/* Geometry toggle */}
-        {availableGeometries.length > 1 && (
-          <ToggleGroup
-            type="single"
-            value={geometry}
-            onValueChange={(value) => value && setGeometry(value as Geometry)}
-            size="sm"
-            variant="outline"
-            className="bg-muted/50 rounded-md p-0.5 gap-0.5"
-          >
-            <ToggleGroupItem
-              value="euclidean"
-              aria-label="Euclidean geometry"
-              className="h-6 px-2 gap-1.5 text-[11px] border-0 data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm data-[state=off]:bg-transparent data-[state=off]:text-muted-foreground"
-            >
-              <EuclideanIcon />
-              <span className="hidden sm:inline">Euclidean</span>
-            </ToggleGroupItem>
-            <ToggleGroupItem
-              value="poincare"
-              aria-label="Poincaré disk (hyperbolic)"
-              className="h-6 px-2 gap-1.5 text-[11px] border-0 data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm data-[state=off]:bg-transparent data-[state=off]:text-muted-foreground"
-            >
-              <PoincareIcon />
-              <span className="hidden sm:inline">Poincaré</span>
-            </ToggleGroupItem>
-          </ToggleGroup>
-        )}
-      </PanelHeader>
-
-      {/* Main content area */}
-      <div className="flex-1 flex">
+      {/* Main content area - min-h-0 prevents flex overflow */}
+      <div className="flex-1 flex min-h-0">
         {/* Canvas container */}
-        <div ref={containerRef} className="flex-1 relative">
+        <div ref={containerRef} className="flex-1 relative min-w-0">
           <canvas
             ref={canvasRef}
             className="absolute inset-0"
             style={{ zIndex: 1 }}
-            onPointerDown={handlePointerDown}
+            onPointerDown={(e) => {
+              focusLayout();
+              handlePointerDown(e);
+            }}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
             onPointerCancel={handlePointerUp}
             onPointerLeave={handlePointerLeave}
             onDoubleClick={handleDoubleClick}
+            onPointerEnter={focusLayout}
           />
 
           {/* Lasso overlay (screen-space) */}
@@ -164,41 +162,13 @@ export function ScatterPanel({ className = "" }: ScatterPanelProps) {
           ) : (
             !embeddings && (
               <div className="absolute inset-0 flex items-center justify-center bg-card/80 z-10">
-                <div className="text-muted-foreground">Loading embeddings...</div>
+                <div className="text-muted-foreground">{loadingLabel}</div>
               </div>
             )
           )}
         </div>
 
-        {/* Legend */}
-        {uniqueLabels.length > 0 && (
-          <div className="w-36 border-l border-border bg-card p-2 overflow-y-auto">
-            <div className="text-[11px] font-medium mb-2 text-muted-foreground uppercase tracking-wide">Labels</div>
-            <div className="space-y-1">
-              {uniqueLabels.slice(0, 20).map((label) => (
-                <div key={label} className="flex items-center gap-2">
-                  <div
-                    className="w-2.5 h-2.5 rounded-full flex-shrink-0"
-                    style={{
-                      backgroundColor: label === "undefined" ? "hsl(var(--accent-cyan))" : (embeddings?.label_colors[label] || "hsl(var(--muted-foreground))"),
-                    }}
-                  />
-                  <span className="text-[11px] text-muted-foreground truncate font-mono" title={label}>
-                    {label}
-                  </span>
-                </div>
-              ))}
-              {uniqueLabels.length > 20 && (
-                <div className="text-[11px] text-muted-foreground/70">+{uniqueLabels.length - 20} more</div>
-              )}
-            </div>
-          </div>
-        )}
       </div>
-
-      <PanelFooter>
-        <span>⇧+drag lasso • scroll zoom • drag pan</span>
-      </PanelFooter>
     </Panel>
   );
 }

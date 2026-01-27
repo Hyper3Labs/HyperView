@@ -2,15 +2,10 @@ import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { EmbeddingsData } from "@/types";
+import type { ScatterLabelsInfo } from "@/lib/labelLegend";
 import type { Dataset, GeometryMode, Modifiers, Renderer } from "hyper-scatter";
 
 type HyperScatterModule = typeof import("hyper-scatter");
-
-export interface ScatterLabelsInfo {
-  uniqueLabels: string[];
-  categories: Uint16Array;
-  palette: string[];
-}
 
 const MAX_LASSO_VERTS = 512;
 
@@ -46,6 +41,7 @@ interface UseHyperScatterArgs {
   setSelectedIds: (ids: Set<string>, source?: "scatter" | "grid") => void;
   beginLassoSelection: (query: { layoutKey: string; polygon: number[] }) => void;
   setHoveredId: (id: string | null) => void;
+  hoverEnabled?: boolean;
 }
 
 function toModifiers(e: { shiftKey: boolean; ctrlKey: boolean; altKey: boolean; metaKey: boolean }): Modifiers {
@@ -97,6 +93,7 @@ export function useHyperScatter({
   setSelectedIds,
   beginLassoSelection,
   setHoveredId,
+  hoverEnabled = true,
 }: UseHyperScatterArgs) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -116,6 +113,7 @@ export function useHyperScatter({
   const lastPointerXRef = useRef(0);
   const lastPointerYRef = useRef(0);
   const lassoPointsRef = useRef<number[]>([]);
+  const persistentLassoRef = useRef<number[] | null>(null);
 
   const hoveredIndexRef = useRef<number>(-1);
 
@@ -171,12 +169,30 @@ export function useHyperScatter({
     };
   }, []);
 
+  const redrawOverlay = useCallback(() => {
+    if (!overlayCanvasRef.current) return;
+    clearOverlay(overlayCanvasRef.current);
+    const persistent = persistentLassoRef.current;
+    if (persistent && persistent.length >= 6) {
+      drawLassoOverlay(overlayCanvasRef.current, persistent);
+    }
+  }, []);
+
+  const clearPersistentLasso = useCallback(() => {
+    persistentLassoRef.current = null;
+    clearOverlay(overlayCanvasRef.current);
+  }, []);
+
   const stopInteraction = useCallback(() => {
     isPanningRef.current = false;
     isLassoingRef.current = false;
     lassoPointsRef.current = [];
+    if (persistentLassoRef.current) {
+      redrawOverlay();
+      return;
+    }
     clearOverlay(overlayCanvasRef.current);
-  }, []);
+  }, [redrawOverlay]);
 
   // Initialize renderer when embeddings change.
   useEffect(() => {
@@ -218,7 +234,7 @@ export function useHyperScatter({
           overlayCanvasRef.current.height = Math.max(1, height);
           overlayCanvasRef.current.style.width = `${width}px`;
           overlayCanvasRef.current.style.height = `${height}px`;
-          clearOverlay(overlayCanvasRef.current);
+          redrawOverlay();
         }
 
         // Use coords from embeddings response directly
@@ -288,7 +304,7 @@ export function useHyperScatter({
         rendererRef.current = null;
       }
     };
-  }, [embeddings, labelsInfo, requestRender, stopInteraction]);
+  }, [embeddings, labelsInfo, redrawOverlay, requestRender, stopInteraction]);
 
   // Store -> renderer sync
   useEffect(() => {
@@ -303,12 +319,19 @@ export function useHyperScatter({
 
     renderer.setSelection(indices);
 
+    if (!hoverEnabled) {
+      renderer.setHovered(-1);
+      hoveredIndexRef.current = -1;
+      requestRender();
+      return;
+    }
+
     const hoveredIdx = hoveredId ? (idToIndex.get(hoveredId) ?? -1) : -1;
     renderer.setHovered(hoveredIdx);
     hoveredIndexRef.current = hoveredIdx;
 
     requestRender();
-  }, [embeddings, hoveredId, idToIndex, requestRender, selectedIds]);
+  }, [embeddings, hoveredId, hoverEnabled, idToIndex, requestRender, selectedIds]);
 
   // Resize handling
   useEffect(() => {
@@ -326,6 +349,7 @@ export function useHyperScatter({
         overlayCanvasRef.current.height = Math.max(1, height);
         overlayCanvasRef.current.style.width = `${width}px`;
         overlayCanvasRef.current.style.height = `${height}px`;
+        redrawOverlay();
       }
 
       const renderer = rendererRef.current;
@@ -340,7 +364,7 @@ export function useHyperScatter({
     const ro = new ResizeObserver(resize);
     ro.observe(container);
     return () => ro.disconnect();
-  }, [requestRender]);
+  }, [redrawOverlay, requestRender]);
 
   // Wheel zoom (native listener so we can set passive:false)
   useEffect(() => {
@@ -377,6 +401,10 @@ export function useHyperScatter({
       lastPointerXRef.current = pos.x;
       lastPointerYRef.current = pos.y;
 
+      if (persistentLassoRef.current) {
+        clearPersistentLasso();
+      }
+
       // Shift-drag = lasso, otherwise pan.
       if (e.shiftKey) {
         isLassoingRef.current = true;
@@ -396,7 +424,7 @@ export function useHyperScatter({
 
       e.preventDefault();
     },
-    [getCanvasPos]
+    [clearPersistentLasso, getCanvasPos]
   );
 
   const handlePointerMove = useCallback(
@@ -433,6 +461,15 @@ export function useHyperScatter({
         return;
       }
 
+      if (!hoverEnabled) {
+        if (hoveredIndexRef.current !== -1) {
+          hoveredIndexRef.current = -1;
+          renderer.setHovered(-1);
+          requestRender();
+        }
+        return;
+      }
+
       // Hover
       const hit = renderer.hitTest(pos.x, pos.y);
       const nextIndex = hit ? hit.index : -1;
@@ -449,7 +486,7 @@ export function useHyperScatter({
 
       requestRender();
     },
-    [embeddings, getCanvasPos, requestRender, setHoveredId]
+    [embeddings, getCanvasPos, hoverEnabled, requestRender, setHoveredId]
   );
 
   const handlePointerUp = useCallback(
@@ -461,8 +498,10 @@ export function useHyperScatter({
       }
 
       if (isLassoingRef.current) {
-        const pts = lassoPointsRef.current;
+        const pts = lassoPointsRef.current.slice();
+        persistentLassoRef.current = pts.length >= 6 ? pts : null;
         stopInteraction();
+        redrawOverlay();
 
         if (pts.length >= 6) {
           try {
@@ -520,7 +559,16 @@ export function useHyperScatter({
       stopInteraction();
       requestRender();
     },
-    [beginLassoSelection, embeddings, getCanvasPos, requestRender, selectedIds, setSelectedIds, stopInteraction]
+    [
+      beginLassoSelection,
+      embeddings,
+      getCanvasPos,
+      redrawOverlay,
+      requestRender,
+      selectedIds,
+      setSelectedIds,
+      stopInteraction,
+    ]
   );
 
   const handlePointerLeave = useCallback(
@@ -541,6 +589,7 @@ export function useHyperScatter({
     (_e: React.MouseEvent<HTMLCanvasElement>) => {
       const renderer = rendererRef.current;
       if (!renderer) return;
+      clearPersistentLasso();
       stopInteraction();
 
       renderer.setSelection(new Set());
@@ -548,7 +597,7 @@ export function useHyperScatter({
 
       requestRender();
     },
-    [requestRender, setSelectedIds, stopInteraction]
+    [clearPersistentLasso, requestRender, setSelectedIds, stopInteraction]
   );
 
   return {

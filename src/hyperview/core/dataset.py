@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
-from datasets import load_dataset
+from datasets import DownloadConfig, load_dataset
 from PIL import Image
 
 from hyperview.core.sample import Sample
@@ -232,7 +232,21 @@ class Dataset:
         """
         from hyperview.storage import StorageConfig
 
-        ds = cast(Any, load_dataset(dataset_name, split=split))
+        # HuggingFace `load_dataset()` can be surprisingly slow even when the dataset
+        # is already cached, due to Hub reachability checks in some environments.
+        # For a fast path, first try loading in "offline" mode (cache-only), and
+        # fall back to an online load if the dataset isn't cached yet.
+        try:
+            ds = cast(
+                Any,
+                load_dataset(
+                    dataset_name,
+                    split=split,
+                    download_config=DownloadConfig(local_files_only=True),
+                ),
+            )
+        except Exception:
+            ds = cast(Any, load_dataset(dataset_name, split=split))
 
         # Get label names if available
         label_names = None

@@ -7,7 +7,7 @@ HyperView works natively in Google Colab. Because Colab runs on a remote VM, you
 ### 1. Install HyperView
 
 ```bash
-!pip install -q git+https://github.com/HackerRoomAI/HyperView.git
+!pip install -q git+https://github.com/Hyper3Labs/HyperView.git
 ```
 
 ### 2. Launch the visualizer

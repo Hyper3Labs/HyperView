@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run HyperView demo with CIFAR-100 dataset."""
+"""Run HyperView demo with CIFAR-10 dataset."""
 
 import argparse
 import os
@@ -15,8 +15,8 @@ def main():
     parser.add_argument(
         "--dataset",
         type=str,
-        default="cifar100_demo",
-        help="Dataset name to use for persistence (default: cifar100_demo)",
+        default="cifar10_demo",
+        help="Dataset name to use for persistence (default: cifar10_demo)",
     )
     parser.add_argument(
         "--samples", type=int, default=50000, help="Number of samples to load (default: 50000)"
@@ -61,10 +61,10 @@ def main():
     dataset = hv.Dataset(args.dataset, persist=not args.no_persist)
 
     dataset.add_from_huggingface(
-        "uoft-cs/cifar100",
+        "uoft-cs/cifar10",
         split="train",
         image_key="img",
-        label_key="fine_label",
+        label_key="label",
         max_samples=args.samples,
     )
 

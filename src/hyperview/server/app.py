@@ -46,6 +46,8 @@ class SampleResponse(BaseModel):
     label: str | None
     thumbnail: str | None
     metadata: dict
+    width: int | None = None
+    height: int | None = None
 
 
 class LayoutInfoResponse(BaseModel):

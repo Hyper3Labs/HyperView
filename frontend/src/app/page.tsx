@@ -1,18 +1,13 @@
 "use client";
 
-import { useEffect, useCallback, useMemo, useState } from "react";
-import {
-  ResizablePanelGroup,
-  ResizablePanel,
-  ResizableHandle,
-} from "@/components/ui/resizable";
-import { Header, ImageGrid, ScatterPanel } from "@/components";
+import { useEffect, useCallback, useMemo, useRef, useState } from "react";
+import { Header } from "@/components";
+import { DockviewWorkspace, DockviewProvider } from "@/components/DockviewWorkspace";
 import { useStore } from "@/store/useStore";
 import type { Sample } from "@/types";
 import {
   fetchDataset,
   fetchSamples,
-  fetchEmbeddings,
   fetchSamplesBatch,
   fetchLassoSelection,
 } from "@/lib/api";
@@ -21,7 +16,6 @@ const SAMPLES_PER_PAGE = 100;
 
 export default function Home() {
   const {
-    datasetInfo,
     samples,
     totalSamples,
     samplesLoaded,
@@ -29,7 +23,6 @@ export default function Home() {
     appendSamples,
     addSamplesIfMissing,
     setDatasetInfo,
-    setEmbeddings,
     setIsLoading,
     isLoading,
     error,
@@ -42,11 +35,11 @@ export default function Home() {
     lassoTotal,
     lassoIsLoading,
     setLassoResults,
-    geometry,
+    labelFilter,
   } = useStore();
 
   const [loadingMore, setLoadingMore] = useState(false);
-  const [geometryLoading, setGeometryLoading] = useState(false);
+  const labelFilterRef = useRef<string | null>(labelFilter ?? null);
 
   // Initial data load - runs once on mount
   // Store setters are stable and don't need to be in deps
@@ -56,16 +49,14 @@ export default function Home() {
       setError(null);
 
       try {
-        // Fetch dataset info, samples, and embeddings in parallel
-        const [datasetInfo, samplesRes, embeddingsData] = await Promise.all([
+        // Fetch dataset info and samples in parallel
+        const [datasetInfo, samplesRes] = await Promise.all([
           fetchDataset(),
           fetchSamples(0, SAMPLES_PER_PAGE),
-          fetchEmbeddings(),
         ]);
 
         setDatasetInfo(datasetInfo);
         setSamples(samplesRes.samples, samplesRes.total);
-        setEmbeddings(embeddingsData);
       } catch (err) {
         console.error("Failed to load data:", err);
         setError(err instanceof Error ? err.message : "Failed to load data");
@@ -78,38 +69,12 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Fetch new embeddings when geometry changes
-  useEffect(() => {
-    if (!datasetInfo) return;
-
-    // Find layout for current geometry (using LayoutInfo.geometry directly)
-    const targetLayout = datasetInfo.layouts.find((l) => l.geometry === geometry);
-    if (!targetLayout) return;
-
-    // Skip if already showing this layout
-    const currentLayout = useStore.getState().currentLayoutKey;
-    if (currentLayout === targetLayout.layout_key) return;
-
-    const loadGeometry = async () => {
-      setGeometryLoading(true);
-      try {
-        const embeddingsData = await fetchEmbeddings(targetLayout.layout_key);
-        setEmbeddings(embeddingsData);
-      } catch (err) {
-        console.error("Failed to load geometry:", err);
-      } finally {
-        setGeometryLoading(false);
-      }
-    };
-
-    loadGeometry();
-  }, [geometry, datasetInfo, setEmbeddings]);
-
   // Fetch selected samples that aren't already loaded
   useEffect(() => {
     const fetchSelectedSamples = async () => {
       if (isLassoSelection) return;
       if (selectedIds.size === 0) return;
+      if (selectionSource === "label") return;
 
       // Find IDs that are selected but not in our samples array
       const loadedIds = new Set(samples.map((s) => s.id));
@@ -126,7 +91,32 @@ export default function Home() {
     };
 
     fetchSelectedSamples();
-  }, [selectedIds, samples, addSamplesIfMissing, isLassoSelection]);
+  }, [selectedIds, samples, addSamplesIfMissing, isLassoSelection, selectionSource]);
+
+  // Refetch samples when label filter changes (non-lasso mode)
+  useEffect(() => {
+    if (labelFilterRef.current === labelFilter) return;
+    if (isLassoSelection) return;
+
+    labelFilterRef.current = labelFilter ?? null;
+
+    let cancelled = false;
+    const run = async () => {
+      try {
+        const res = await fetchSamples(0, SAMPLES_PER_PAGE, labelFilter ?? undefined);
+        if (cancelled) return;
+        setSamples(res.samples, res.total);
+      } catch (err) {
+        if (cancelled) return;
+        console.error("Failed to load filtered samples:", err);
+      }
+    };
+
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [isLassoSelection, labelFilter, setSamples]);
 
   // Fetch initial lasso selection page when a new lasso query begins.
   useEffect(() => {
@@ -189,7 +179,7 @@ export default function Home() {
 
     setLoadingMore(true);
     try {
-      const res = await fetchSamples(samplesLoaded, SAMPLES_PER_PAGE);
+      const res = await fetchSamples(samplesLoaded, SAMPLES_PER_PAGE, labelFilter ?? undefined);
       appendSamples(res.samples);
     } catch (err) {
       console.error("Failed to load more samples:", err);
@@ -207,6 +197,7 @@ export default function Home() {
     samplesLoaded,
     totalSamples,
     setLassoResults,
+    labelFilter,
   ]);
 
   const displayedSamples = useMemo(() => {
@@ -268,46 +259,19 @@ export default function Home() {
   }
 
   return (
-    <div className="h-screen flex flex-col bg-background">
-      <Header />
+    <DockviewProvider
+      samples={displayedSamples}
+      onLoadMore={loadMore}
+      hasMore={displayedHasMore}
+    >
+      <div className="h-screen flex flex-col bg-background">
+        <Header />
 
-      {/* Main content - resizable panels with Rerun-style spacing */}
-      <div className="flex-1 p-1 bg-background overflow-hidden">
-        <ResizablePanelGroup
-          orientation="horizontal"
-          id="hyperview-main-layout"
-          className="h-full"
-        >
-          {/* Left panel - Image Grid */}
-          <ResizablePanel
-            id="image-grid"
-            defaultSize={50}
-            minSize={20}
-            maxSize={80}
-            className="min-w-0"
-          >
-            <ImageGrid
-              samples={displayedSamples}
-              onLoadMore={loadMore}
-              hasMore={displayedHasMore}
-            />
-          </ResizablePanel>
-
-          {/* Resizable handle with grip */}
-          <ResizableHandle withHandle />
-
-          {/* Right panel - Scatter Plot */}
-          <ResizablePanel
-            id="scatter-panel"
-            defaultSize={50}
-            minSize={20}
-            maxSize={80}
-            className="min-w-0"
-          >
-            <ScatterPanel />
-          </ResizablePanel>
-        </ResizablePanelGroup>
+        {/* Main content - dockable panels */}
+        <div className="flex-1 bg-background overflow-hidden">
+          <DockviewWorkspace />
+        </div>
       </div>
-    </div>
+    </DockviewProvider>
   );
 }

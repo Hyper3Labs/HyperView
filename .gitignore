@@ -22,10 +22,6 @@ htmlcov/
 # VS Code
 .vscode/
 
-# Local Context (Agent files)
-.claude/
-context/
-
 # Generated assets
 assets/demo_animation_frames/
 *.gif
@@ -48,7 +44,7 @@ build/
 *.hf/
 .cache/
 
-# external repo (https://github.com/HackerRoomAI/hyper-scatter)
+# external repo (https://github.com/Hyper3Labs/hyper-scatter)
 hyper-scatter/
 
 # nohup
@@ -65,3 +61,14 @@ frontend/tsconfig.tsbuildinfo
 hyper_model_zoo/
 hyper_models/
 scripts_ignored/
+
+# AI Context (Agent files)
+.claude/
+context/
+CLAUDE.md
+TASKS.md
+TESTS.md
+AGENTS.md
+**/AGENTS.md
+.github/agents/
+.specstory/
