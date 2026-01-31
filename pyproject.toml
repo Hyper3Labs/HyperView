@@ -1,12 +1,12 @@
 [project]
 name = "hyperview"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Open-source dataset curation with hyperbolic embeddings visualization"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
 authors = [
-    { name = "HyperView Team" }
+    { name = "hyper3labs" }
 ]
 keywords = ["embeddings", "visualization", "hyperbolic", "dataset", "curation", "machine-learning"]
 classifiers = [
@@ -60,11 +60,17 @@ Repository = "https://github.com/Hyper3Labs/HyperView"
 Issues = "https://github.com/Hyper3Labs/HyperView/issues"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [tool.hatch.metadata]
 allow-direct-references = true
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/hyperview/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/hyperview"]

@@ -369,7 +369,7 @@ class Dataset:
                 hyper-models name (e.g. 'hycoclip-vit-s') for hyperbolic embeddings.
             provider: Explicit provider identifier. If not specified, auto-detected:
                 'hyper-models' if model matches a hyper-models name, else 'embed-anything'.
-                Available providers: `hyperview.list_embedding_providers()`.
+                Available providers: `hyperview.embeddings.list_embedding_providers()`.
             checkpoint: Checkpoint path/URL (hf://... or local path) for weight-only models.
             batch_size: Batch size for processing.
             show_progress: Whether to show progress bar.
@@ -384,7 +384,7 @@ class Dataset:
         if not model:
             raise ValueError(
                 "model is required. Examples: 'openai/clip-vit-base-patch32' (CLIP), "
-                "'hycoclip-vit-s' (hyperbolic). See hyperview.list_embedding_providers()."
+                "'hycoclip-vit-s' (hyperbolic). See hyperview.embeddings.list_embedding_providers()."
             )
 
         from hyperview.embeddings.engine import EmbeddingSpec
