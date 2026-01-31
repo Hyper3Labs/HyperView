@@ -16,6 +16,7 @@ on:
 jobs:
   require-frontend-export:
     runs-on: ubuntu-latest
+    # Skip if the push was made by github-actions to avoid loops
     if: github.actor != 'github-actions[bot]'
     permissions:
       contents: write
@@ -42,6 +43,7 @@ jobs:
             # Handle initial push (no previous commit)
             if [[ "$base_sha" == "0000000000000000000000000000000000000000" ]]; then
               echo "Initial push - skipping check"
+              echo "needs_export=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
           fi
@@ -74,47 +76,31 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Set up Node
-        if: ${{ github.event_name == 'push' && steps.changes.outputs.needs_export == 'true' }}
+        if: github.event_name == 'push' && steps.changes.outputs.needs_export == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
       - name: Export frontend
-        if: ${{ github.event_name == 'push' && steps.changes.outputs.needs_export == 'true' }}
+        if: github.event_name == 'push' && steps.changes.outputs.needs_export == 'true'
+        run: bash scripts/export_frontend.sh
+
+      - name: Commit and push exported static assets
+        if: github.event_name == 'push' && steps.changes.outputs.needs_export == 'true'
+        uses: stefanzweifel/git-auto-commit-action@v7
+        with:
+          commit_message: "chore: export frontend static assets [skip ci]"
+          file_pattern: "src/hyperview/server/static/**"
+
+      - name: Fail PR if frontend changed without static export
+        if: github.event_name == 'pull_request' && steps.changes.outputs.needs_export == 'true'
         run: |
-          bash scripts/export_frontend.sh
-
-      - name: Commit exported static assets
-        if: ${{ github.event_name == 'push' && steps.changes.outputs.needs_export == 'true' }}
-        run: |
-          set -euo pipefail
-
-          if [[ -z "$(git status --porcelain)" ]]; then
-            echo "No export changes to commit."
-            exit 0
-          fi
-
-          git status --short
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add src/hyperview/server/static
-          git commit -m "chore: export frontend static assets"
-          git push
-
-      - name: Verify static export updated when frontend changes
-        if: ${{ !(github.event_name == 'push' && steps.changes.outputs.needs_export == 'true') }}
-        run: |
-          set -euo pipefail
-
-          frontend_changed="${{ steps.changes.outputs.frontend_changed }}"
-          static_changed="${{ steps.changes.outputs.static_changed }}"
-
-          if [[ "$frontend_changed" == "true" && "$static_changed" != "true" ]]; then
-            echo ""
-            echo "ERROR: frontend/ changed but src/hyperview/server/static/ was not updated."
-            echo "Run: bash scripts/export_frontend.sh"
-            echo "Then commit the updated src/hyperview/server/static/ output."
-            exit 1
-          fi
-
-          echo "OK: export requirements satisfied."
+          echo ""
+          echo "ERROR: frontend/ changed but src/hyperview/server/static/ was not updated."
+          echo ""
+          echo "Run locally:"
+          echo "  bash scripts/export_frontend.sh"
+          echo "  git add src/hyperview/server/static"
+          echo "  git commit -m 'chore: export frontend static assets'"
+          echo ""
+          exit 1

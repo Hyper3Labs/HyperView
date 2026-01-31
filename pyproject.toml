@@ -57,6 +57,7 @@ hyperview = "hyperview.cli:main"
 Homepage = "https://github.com/Hyper3Labs/HyperView"
 Documentation = "https://github.com/Hyper3Labs/HyperView#readme"
 Repository = "https://github.com/Hyper3Labs/HyperView"
+Issues = "https://github.com/Hyper3Labs/HyperView/issues"
 
 [build-system]
 requires = ["hatchling"]
