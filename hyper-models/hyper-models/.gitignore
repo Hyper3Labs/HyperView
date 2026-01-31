@@ -1,0 +1,129 @@
+# =============================================================================
+# hyper_models - Model Zoo for Non-Euclidean Embeddings
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Python
+# -----------------------------------------------------------------------------
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# -----------------------------------------------------------------------------
+# Virtual Environments
+# -----------------------------------------------------------------------------
+.venv/
+**/.venv/
+venv/
+ENV/
+env/
+
+# -----------------------------------------------------------------------------
+# Large Local Artifacts (not committed - use HuggingFace Hub)
+# -----------------------------------------------------------------------------
+# Model checkpoints (PyTorch weights)
+**/checkpoints/
+*.pth
+*.pt
+*.bin
+*.safetensors
+
+# ONNX outputs (local exports before uploading to HF)
+**/outputs/
+*.onnx
+*.onnx.data
+
+# Cloned upstream repos (recreated via git clone)
+hycoclip_repo/
+**/hycoclip_repo/
+
+# -----------------------------------------------------------------------------
+# Package Management
+# -----------------------------------------------------------------------------
+# uv lockfile - can be committed for reproducibility, but optional
+uv.lock
+
+# pip
+pip-log.txt
+pip-delete-this-directory.txt
+
+# -----------------------------------------------------------------------------
+# Testing & Coverage
+# -----------------------------------------------------------------------------
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# -----------------------------------------------------------------------------
+# IDE / Editor
+# -----------------------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# -----------------------------------------------------------------------------
+# OS Generated
+# -----------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# -----------------------------------------------------------------------------
+# Jupyter / IPython
+# -----------------------------------------------------------------------------
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+profile_default/
+ipython_config.py
+
+# -----------------------------------------------------------------------------
+# Documentation
+# -----------------------------------------------------------------------------
+docs/_build/
+site/
+
+# -----------------------------------------------------------------------------
+# Misc
+# -----------------------------------------------------------------------------
+*.log
+*.tmp
+*.temp
+.cache/
+*.hf/
+AGENTS.md
+.specstory/

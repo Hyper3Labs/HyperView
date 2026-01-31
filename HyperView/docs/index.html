@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HyperView: Interactive Poincaré Disk</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #f0f2f5;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+        }
+        canvas {
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            border-radius: 50%;
+            background: white;
+            cursor: grab;
+        }
+        canvas:active {
+            cursor: grabbing;
+        }
+        .controls {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            max-width: 300px;
+            z-index: 100;
+        }
+        h1 { margin: 0 0 10px 0; font-size: 18px; color: #333; }
+        p { margin: 0 0 10px 0; font-size: 14px; color: #666; line-height: 1.4; }
+        .legend { display: flex; gap: 10px; font-size: 12px; margin-top: 10px; }
+        .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+        
+        .mode-btn {
+            margin-top: 15px;
+            padding: 8px 16px;
+            background: #333;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            width: 100%;
+            transition: background 0.3s;
+        }
+        .mode-btn:hover { background: #555; }
+        .mode-btn.active { background: #d93025; } /* Red for danger/collapse */
+        
+        .status-box {
+            margin-top: 10px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-left: 4px solid #ccc;
+            font-size: 13px;
+            transition: all 0.3s;
+        }
+        .status-box.collapse {
+            border-left-color: #d93025;
+            background: #fce8e6;
+            color: #a50e0e;
+        }
+        .status-box.expand {
+            border-left-color: #188038;
+            background: #e6f4ea;
+            color: #137333;
+        }
+
+        /* About Overlay Styles */
+        .about-btn {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: #fff;
+            border: 1px solid #ccc;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            font-size: 20px;
+            cursor: pointer;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #555;
+            transition: all 0.2s;
+            z-index: 100;
+        }
+        .about-btn:hover { background: #f0f0f0; color: #333; }
+
+        .overlay-backdrop {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.3s, visibility 0.3s;
+        }
+        .overlay-backdrop.visible {
+            opacity: 1;
+            visibility: visible;
+        }
+        .overlay-content {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+            position: relative;
+        }
+        .close-btn {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: #999;
+        }
+        .close-btn:hover { color: #333; }
+        
+        .overlay-content h2 { margin-top: 0; color: #333; }
+        .overlay-content h3 { color: #444; margin-top: 20px; margin-bottom: 10px; font-size: 16px; }
+        .overlay-content p { font-size: 15px; line-height: 1.6; color: #555; margin-bottom: 15px; }
+        
+        .faq-item {
+            background: #f9f9f9;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            border-left: 4px solid #0066cc;
+        }
+        .faq-item h4 { margin: 0 0 8px 0; color: #0066cc; font-size: 15px; }
+        .faq-item p { margin: 0; font-size: 14px; }
+    </style>
+</head>
+<body>
+    <button id="aboutBtn" class="about-btn" title="About HyperView">?</button>
+
+    <div id="aboutOverlay" class="overlay-backdrop">
+        <div class="overlay-content">
+            <button id="closeOverlay" class="close-btn">&times;</button>
+            <h2>Why HyperView?</h2>
+            <p>
+                Modern AI curation tools rely on <strong>Euclidean geometry</strong> (flat space). 
+                But real-world data—like biological taxonomies, social hierarchies, and medical diagnoses—is 
+                complex and hierarchical.
+            </p>
+            <p>
+                When you force this complex data into a flat box, you run out of room. 
+                To fit the "Majority," the math crushes the "Minority" and "Rare" cases together. 
+                We call this <strong>Representation Collapse</strong>.
+            </p>
+
+            <h3>The Solution: Hyperbolic Space</h3>
+            <p>
+                HyperView uses the <strong>Poincaré disk</strong>, a model of hyperbolic geometry where space expands exponentially towards the edge. 
+                This gives "infinite" room for outliers, ensuring they remain distinct and visible.
+            </p>
+
+            <h3>FAQ: Why does this matter?</h3>
+            
+            <div class="faq-item">
+                <h4>The "Hidden Diagnosis" Problem</h4>
+                <p>
+                    Imagine training an AI doctor on 10,000 chest X-rays:
+                    <br>• <strong>9,000 Healthy</strong> (Majority)
+                    <br>• <strong>900 Common Pneumonia</strong> (Minority)
+                    <br>• <strong>100 Rare Early-Stage Tuberculosis</strong> (Rare Subgroup)
+                </p>
+                <p style="margin-top: 10px;">
+                    <strong>In Euclidean Space:</strong> The model runs out of room. It crushes the 100 Tuberculosis cases into the Pneumonia cluster. To the AI, they look like noise. The patient is misdiagnosed.
+                </p>
+                <p style="margin-top: 10px;">
+                    <strong>In HyperView:</strong> The Tuberculosis cases are pushed to the edge. They form a distinct, visible island. You can see them, select them, and ensure the AI learns to save those patients.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <div class="controls">
+        <h1>HyperView Interactive Demo</h1>
+        <p>
+            <strong>Drag to Pan.</strong> Experience the "infinite" space. 
+            Notice how the red "Rare" points expand and separate as you bring them towards the center.
+        </p>
+        <div class="legend">
+            <div><span class="dot" style="background: #ccc;"></span>Majority</div>
+            <div><span class="dot" style="background: #0066cc;"></span>Minority</div>
+            <div><span class="dot" style="background: #ff0000;"></span>Rare</div>
+        </div>
+        
+        <div id="statusBox" class="status-box expand">
+            <strong>Hyperbolic Mode:</strong><br>
+            Space expands exponentially.<br>
+            Rare items are distinct.
+        </div>
+        <button id="toggleBtn" class="mode-btn">Simulate Euclidean Collapse</button>
+    </div>
+    <canvas id="poincareCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('poincareCanvas');
+        const ctx = canvas.getContext('2d');
+        const toggleBtn = document.getElementById('toggleBtn');
+        const statusBox = document.getElementById('statusBox');
+        
+        // Configuration
+        const RADIUS = 300;
+        const WIDTH = RADIUS * 2;
+        const HEIGHT = RADIUS * 2;
+        
+        canvas.width = WIDTH;
+        canvas.height = HEIGHT;
+
+        // Complex Number Utilities
+        class Complex {
+            constructor(re, im) { this.re = re; this.im = im; }
+            
+            add(other) { return new Complex(this.re + other.re, this.im + other.im); }
+            sub(other) { return new Complex(this.re - other.re, this.im - other.im); }
+            mul(other) { 
+                return new Complex(
+                    this.re * other.re - this.im * other.im,
+                    this.re * other.im + this.im * other.re
+                );
+            }
+            div(other) {
+                const denom = other.re * other.re + other.im * other.im;
+                return new Complex(
+                    (this.re * other.re + this.im * other.im) / denom,
+                    (this.im * other.re - this.re * other.im) / denom
+                );
+            }
+            conj() { return new Complex(this.re, -this.im); }
+            modSq() { return this.re * this.re + this.im * this.im; }
+        }
+
+        // Mobius Transformation: (z + a) / (1 + conj(a)z)
+        function mobiusAdd(z, a) {
+            const num = z.add(a);
+            const den = new Complex(1, 0).add(a.conj().mul(z));
+            return num.div(den);
+        }
+
+        // Data Generation (Hierarchy)
+        const points = [];
+        
+        function addCluster(count, r_hyp, r_euc, theta_center, spread_hyp, spread_euc, type) {
+            for (let i = 0; i < count; i++) {
+                // Hyperbolic Position
+                const rh_noise = (Math.random() - 0.5) * spread_hyp;
+                const th_noise = (Math.random() - 0.5) * spread_hyp;
+                const rh = Math.min(0.99, Math.max(0, r_hyp + rh_noise));
+                const th = theta_center + th_noise;
+                
+                // Euclidean Position (Crushed)
+                const re_noise = (Math.random() - 0.5) * spread_euc; 
+                const re = Math.min(0.99, Math.max(0, r_euc + re_noise));
+                
+                const hypZ = new Complex(rh * Math.cos(th), rh * Math.sin(th));
+                const eucZ = new Complex(re * Math.cos(th), re * Math.sin(th));
+
+                points.push({
+                    hypZ: hypZ,
+                    eucZ: eucZ,
+                    currentZ: hypZ, // Start in Hyperbolic
+                    type: type
+                });
+            }
+        }
+
+        // 1. Majority (Center)
+        addCluster(300, 0.1, 0.1, 0, 0.5, 0.2, 'majority');
+        
+        // 2. Minority (Edge) - r=0.85 (Hyp) vs r=0.5 (Euc)
+        addCluster(50, 0.85, 0.5, Math.PI/4, 0.2, 0.1, 'minority');
+        
+        // 3. Rare (Deep Edge) - r=0.95 (Hyp) vs r=0.52 (Euc - Overlapping Minority)
+        addCluster(10, 0.95, 0.52, Math.PI/4, 0.05, 0.02, 'rare');
+
+        // View State
+        let isEuclidean = false;
+        let animationProgress = 0; // 0 = Hyperbolic, 1 = Euclidean
+        let viewOffset = new Complex(0, 0);
+        let isDragging = false;
+        let lastMouse = null;
+
+        function screenToComplex(x, y) {
+            const rect = canvas.getBoundingClientRect();
+            const cx = x - rect.left - RADIUS;
+            const cy = y - rect.top - RADIUS;
+            return new Complex(cx / RADIUS, cy / RADIUS);
+        }
+
+        function lerpComplex(a, b, t) {
+            return new Complex(
+                a.re + (b.re - a.re) * t,
+                a.im + (b.im - a.im) * t
+            );
+        }
+
+
+        function update() {
+            // Animate transition
+            const target = isEuclidean ? 1 : 0;
+            const speed = 0.05;
+            
+            if (Math.abs(animationProgress - target) > 0.001) {
+                animationProgress += (target - animationProgress) * speed;
+            } else {
+                animationProgress = target;
+            }
+
+            // Update point positions
+            points.forEach(p => {
+                // Interpolate between base positions
+                let basePos = lerpComplex(p.hypZ, p.eucZ, animationProgress);
+                
+                // Apply View Transformation
+                // As we move to Euclidean, we want to reset the view to center (0,0)
+                // effectively disabling the "infinite scroll"
+                const effectiveViewOffset = new Complex(
+                    viewOffset.re * (1 - animationProgress),
+                    viewOffset.im * (1 - animationProgress)
+                );
+                
+                p.currentZ = mobiusAdd(basePos, effectiveViewOffset);
+            });
+            
+            draw();
+            requestAnimationFrame(update);
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, WIDTH, HEIGHT);
+            
+            // Draw Disk Boundary
+            ctx.beginPath();
+            ctx.arc(RADIUS, RADIUS, RADIUS - 1, 0, Math.PI * 2);
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            ctx.fillStyle = '#fff';
+            ctx.fill();
+
+            // Draw Grid (Geodesics)
+            ctx.strokeStyle = '#eee';
+            ctx.lineWidth = 1;
+            // Fade out grid in Euclidean mode
+            ctx.globalAlpha = 1 - animationProgress; 
+            for(let r=0.2; r<1.0; r+=0.2) {
+                ctx.beginPath();
+                ctx.arc(RADIUS, RADIUS, r * RADIUS, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+            ctx.globalAlpha = 1.0;
+
+            // Draw Points
+            points.forEach(p => {
+                const px = p.currentZ.re * RADIUS + RADIUS;
+                const py = p.currentZ.im * RADIUS + RADIUS;
+                
+                ctx.beginPath();
+                ctx.arc(px, py, p.type === 'rare' ? 5 : 3, 0, Math.PI * 2);
+                
+                if (p.type === 'majority') ctx.fillStyle = 'rgba(150, 150, 150, 0.5)';
+                if (p.type === 'minority') ctx.fillStyle = 'rgba(0, 102, 204, 0.8)';
+                if (p.type === 'rare') ctx.fillStyle = 'rgba(255, 0, 0, 1.0)';
+                
+                ctx.fill();
+            });
+        }
+
+        // Interaction
+        canvas.addEventListener('mousedown', e => {
+            if (isEuclidean) return; // Disable drag in Euclidean mode
+            isDragging = true;
+            lastMouse = screenToComplex(e.clientX, e.clientY);
+            canvas.style.cursor = 'grabbing';
+        });
+
+        window.addEventListener('mouseup', () => {
+            isDragging = false;
+            canvas.style.cursor = isEuclidean ? 'not-allowed' : 'grab';
+        });
+
+        canvas.addEventListener('mousemove', e => {
+            if (!isDragging) return;
+            
+            const currentMouse = screenToComplex(e.clientX, e.clientY);
+            const delta = currentMouse.sub(lastMouse);
+            const move = new Complex(delta.re, delta.im); 
+            
+            viewOffset = mobiusAdd(viewOffset, move);
+            lastMouse = currentMouse;
+        });
+
+        // Toggle Logic
+        toggleBtn.addEventListener('click', () => {
+            isEuclidean = !isEuclidean;
+            
+            if (isEuclidean) {
+                toggleBtn.textContent = "Switch to Hyperbolic Mode";
+                toggleBtn.classList.add('active');
+                statusBox.innerHTML = "<strong>Euclidean Collapse:</strong><br>Rare items are crushed.<br>Indistinguishable from Minority.";
+                statusBox.className = "status-box collapse";
+                canvas.style.cursor = 'not-allowed';
+            } else {
+                toggleBtn.textContent = "Simulate Euclidean Collapse";
+                toggleBtn.classList.remove('active');
+                statusBox.innerHTML = "<strong>Hyperbolic Mode:</strong><br>Space expands exponentially.<br>Rare items are distinct.";
+                statusBox.className = "status-box expand";
+                canvas.style.cursor = 'grab';
+            }
+        });
+
+        // About Overlay Logic
+        const aboutBtn = document.getElementById('aboutBtn');
+        const aboutOverlay = document.getElementById('aboutOverlay');
+        const closeOverlay = document.getElementById('closeOverlay');
+
+        function openAbout() {
+            aboutOverlay.classList.add('visible');
+        }
+
+        function closeAbout() {
+            aboutOverlay.classList.remove('visible');
+        }
+
+        aboutBtn.addEventListener('click', openAbout);
+        closeOverlay.addEventListener('click', closeAbout);
+        
+        // Close on click outside
+        aboutOverlay.addEventListener('click', (e) => {
+            if (e.target === aboutOverlay) {
+                closeAbout();
+            }
+        });
+
+        // Start Loop
+        update();
+    </script>
+</body>
+</html>

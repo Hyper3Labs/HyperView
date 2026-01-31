@@ -1,0 +1,106 @@
+name: Require Frontend Export
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "frontend/**"
+      - "scripts/export_frontend.sh"
+      - "src/hyperview/server/static/**"
+  push:
+    paths:
+      - "frontend/**"
+      - "scripts/export_frontend.sh"
+      - "src/hyperview/server/static/**"
+
+jobs:
+  require-frontend-export:
+    runs-on: ubuntu-latest
+    # Skip if the push was made by github-actions to avoid loops
+    if: github.actor != 'github-actions[bot]'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect frontend and static changes
+        id: changes
+        run: |
+          set -euo pipefail
+
+          # Determine base and head SHAs based on event type
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base_sha="${{ github.event.pull_request.base.sha }}"
+            head_sha="${{ github.event.pull_request.head.sha }}"
+          else
+            # For push events, compare with the previous commit
+            head_sha="${{ github.sha }}"
+            base_sha="${{ github.event.before }}"
+            # Handle initial push (no previous commit)
+            if [[ "$base_sha" == "0000000000000000000000000000000000000000" ]]; then
+              echo "Initial push - skipping check"
+              echo "needs_export=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
+          changed_files="$(git diff --name-only "$base_sha" "$head_sha")"
+
+          echo "Changed files:"
+          echo "$changed_files"
+
+          frontend_changed="false"
+          static_changed="false"
+
+          if echo "$changed_files" | grep -qE '^(frontend/|scripts/export_frontend\.sh$)'; then
+            frontend_changed="true"
+          fi
+
+          if echo "$changed_files" | grep -q '^src/hyperview/server/static/'; then
+            static_changed="true"
+          fi
+
+          needs_export="false"
+          if [[ "$frontend_changed" == "true" && "$static_changed" != "true" ]]; then
+            needs_export="true"
+          fi
+
+          {
+            echo "frontend_changed=$frontend_changed"
+            echo "static_changed=$static_changed"
+            echo "needs_export=$needs_export"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node
+        if: github.event_name == 'push' && steps.changes.outputs.needs_export == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Export frontend
+        if: github.event_name == 'push' && steps.changes.outputs.needs_export == 'true'
+        run: bash scripts/export_frontend.sh
+
+      - name: Commit and push exported static assets
+        if: github.event_name == 'push' && steps.changes.outputs.needs_export == 'true'
+        uses: stefanzweifel/git-auto-commit-action@v7
+        with:
+          commit_message: "chore: export frontend static assets [skip ci]"
+          file_pattern: "src/hyperview/server/static/**"
+
+      - name: Fail PR if frontend changed without static export
+        if: github.event_name == 'pull_request' && steps.changes.outputs.needs_export == 'true'
+        run: |
+          echo ""
+          echo "ERROR: frontend/ changed but src/hyperview/server/static/ was not updated."
+          echo ""
+          echo "Run locally:"
+          echo "  bash scripts/export_frontend.sh"
+          echo "  git add src/hyperview/server/static"
+          echo "  git commit -m 'chore: export frontend static assets'"
+          echo ""
+          exit 1

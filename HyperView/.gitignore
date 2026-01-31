@@ -1,0 +1,76 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+/uv.lock
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+
+# macOS
+.DS_Store
+
+# VS Code
+.vscode/
+
+# Generated assets
+assets/demo_animation_frames/
+*.gif
+
+# Frontend
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# Bundled frontend in Python package (built in CI during release)
+src/hyperview/server/static/
+
+# Python package build
+dist/
+build/
+*.egg-info/
+
+# Data cache
+*.hf/
+.cache/
+
+# external repo (https://github.com/Hyper3Labs/hyper-scatter)
+hyper-scatter/
+
+# nohup
+nohup.out
+frontend/nohup.out
+
+# Local logs / tool artifacts
+.hyperview-*.log
+.hyperview-*.pid
+.playwright-mcp/
+frontend/tsconfig.tsbuildinfo
+
+# Hyperbolic model zoo (kept as a separate repo)
+hyper_model_zoo/
+hyper_models/
+scripts_ignored/
+
+# AI Context (Agent files)
+.claude/
+context/
+CLAUDE.md
+TASKS.md
+TESTS.md
+AGENTS.md
+**/AGENTS.md
+.github/agents/
+.specstory/
+
+# Generated version file (hatch-vcs)
+src/hyperview/_version.py
