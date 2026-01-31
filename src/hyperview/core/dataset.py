@@ -351,32 +351,63 @@ class Dataset:
 
     def compute_embeddings(
         self,
-        model: str | ModelSpec = "openai/clip-vit-base-patch32",
+        model: str,
+        *,
+        provider: str | None = None,
+        checkpoint: str | None = None,
         batch_size: int = 32,
         show_progress: bool = True,
+        **provider_kwargs: Any,
     ) -> str:
         """Compute embeddings for samples that don't have them yet.
 
-        Embeddings are stored in a dedicated space keyed by model_id.
+        Embeddings are stored in a dedicated space keyed by the embedding spec.
 
         Args:
-            model: EmbedAnything HuggingFace `model_id` to use.
+            model: Model identifier (required). Use a HuggingFace model_id
+                (e.g. 'openai/clip-vit-base-patch32') for embed-anything, or a
+                hyper-models name (e.g. 'hycoclip-vit-s') for hyperbolic embeddings.
+            provider: Explicit provider identifier. If not specified, auto-detected:
+                'hyper-models' if model matches a hyper-models name, else 'embed-anything'.
+                Available providers: `hyperview.list_embedding_providers()`.
+            checkpoint: Checkpoint path/URL (hf://... or local path) for weight-only models.
             batch_size: Batch size for processing.
             show_progress: Whether to show progress bar.
+            **provider_kwargs: Additional kwargs passed to the embedding function.
 
         Returns:
             space_key for the embedding space.
-        """
-        from hyperview.embeddings.pipelines import compute_embeddings
-        from hyperview.embeddings.providers import ModelSpec
 
-        if isinstance(model, ModelSpec):
-            model_spec = model
-        else:
-            model_spec = ModelSpec(provider="embed_anything", model_id=model)
+        Raises:
+            ValueError: If model is not provided.
+        """
+        if not model:
+            raise ValueError(
+                "model is required. Examples: 'openai/clip-vit-base-patch32' (CLIP), "
+                "'hycoclip-vit-s' (hyperbolic). See hyperview.list_embedding_providers()."
+            )
+
+        from hyperview.embeddings.engine import EmbeddingSpec
+        from hyperview.embeddings.pipelines import compute_embeddings
+
+        if provider is None:
+            provider = "embed-anything"
+            try:
+                import hyper_models
+                if model in hyper_models.list_models():
+                    provider = "hyper-models"
+            except ImportError:
+                pass
+        spec = EmbeddingSpec(
+            provider=provider,
+            model_id=model,
+            checkpoint=checkpoint,
+            provider_kwargs=provider_kwargs,
+        )
+
         space_key, _num_computed, _num_skipped = compute_embeddings(
             storage=self._storage,
-            model_spec=model_spec,
+            spec=spec,
             batch_size=batch_size,
             show_progress=show_progress,
         )

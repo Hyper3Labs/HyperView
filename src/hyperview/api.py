@@ -228,9 +228,9 @@ def launch(
     """Launch the HyperView visualization server.
 
     Note:
-        HyperView's UI requires 2D layouts (Euclidean + Poincare). If they are
-        missing but high-dimensional embeddings exist, this function will compute
-        them automatically.
+        HyperView's UI needs at least one 2D layout. If layouts are missing but
+        embedding spaces exist, this function will compute a default layout
+        automatically (Euclidean if any Euclidean space exists, otherwise Poincaré).
 
     Args:
         dataset: The dataset to visualize.
@@ -251,7 +251,7 @@ def launch(
         >>> import hyperview as hv
         >>> dataset = hv.Dataset("my_dataset")
         >>> dataset.add_images_dir("/path/to/images", label_from_folder=True)
-        >>> dataset.compute_embeddings()
+        >>> dataset.compute_embeddings(model="openai/clip-vit-base-patch32")
         >>> dataset.compute_visualization()
         >>> hv.launch(dataset)
     """
@@ -332,9 +332,12 @@ def launch(
         )
 
     if not layouts:
-        default_space_key = spaces[0].space_key
-        print("No layouts found. Computing euclidean visualization...")
-        dataset.compute_visualization(space_key=default_space_key, geometry="euclidean")
+        has_euclidean_space = any(s.geometry != "hyperboloid" for s in spaces)
+        default_geometry = "euclidean" if has_euclidean_space else "poincare"
+
+        print(f"No layouts found. Computing {default_geometry} visualization...")
+        # Let compute_visualization pick the most appropriate default space.
+        dataset.compute_visualization(space_key=None, geometry=default_geometry)
 
     session = Session(dataset, host, port)
 

@@ -1,14 +1,15 @@
-"""Embedding computation, projection, and provider modules."""
+"""Embedding computation and projection."""
 
 from hyperview.embeddings.compute import EmbeddingComputer
-from hyperview.embeddings.providers import (
-    BaseEmbeddingProvider,
-    ModelSpec,
-    get_provider,
-    list_providers,
-    make_provider_aware_space_key,
-    register_provider,
+from hyperview.embeddings.engine import (
+    EmbeddingSpec,
+    get_engine,
+    get_provider_info,
+    list_embedding_providers,
 )
+
+# Register HyperView providers into LanceDB registry.
+import hyperview.embeddings.providers.lancedb_providers as _lancedb_providers  # noqa: F401
 
 
 def __getattr__(name: str):
@@ -16,22 +17,15 @@ def __getattr__(name: str):
     if name == "ProjectionEngine":
         from hyperview.embeddings.projection import ProjectionEngine
         return ProjectionEngine
-    if name == "EmbedAnythingProvider":
-        from hyperview.embeddings.providers.embed_anything import EmbedAnythingProvider
-        return EmbedAnythingProvider
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 __all__ = [
     "EmbeddingComputer",
+    "EmbeddingSpec",
     "ProjectionEngine",
-    # Provider types
-    "BaseEmbeddingProvider",
-    "EmbedAnythingProvider",
-    "ModelSpec",
     # Provider utilities
-    "get_provider",
-    "list_providers",
-    "register_provider",
-    "make_provider_aware_space_key",
+    "get_engine",
+    "get_provider_info",
+    "list_embedding_providers",
 ]

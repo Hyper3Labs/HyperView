@@ -63,8 +63,8 @@ Samples are **never implicitly deleted**. Use `hv.Dataset.delete("name")` for ex
 ## Computing Embeddings
 
 ```python
-# High-dimensional embeddings (CLIP/ResNet)
-dataset.compute_embeddings(model="clip", show_progress=True)
+# High-dimensional embeddings (CLIP)
+dataset.compute_embeddings(model="openai/clip-vit-base-patch32", show_progress=True)
 
 # 2D projections for visualization
 dataset.compute_visualization()  # UMAP to Euclidean + Hyperbolic

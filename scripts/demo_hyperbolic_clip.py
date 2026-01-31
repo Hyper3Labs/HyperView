@@ -1,18 +1,16 @@
 #!/usr/bin/env python
-"""Demo: CLIP (Euclidean) + HyCoCLIP (Poincaré) on CIFAR-100."""
+"""Demo: CLIP (Euclidean) + hyper-models (Poincaré) on CIFAR-100."""
 
 import hyperview as hv
-import hyperview.embeddings.providers.hycoclip  # noqa: F401
-from hyperview.embeddings.providers import ModelSpec
 
-DATASET_NAME = "cifar100_clip_hycoclip"
+DATASET_NAME = "cifar100_clip_hyper_models"
 HF_DATASET = "uoft-cs/cifar100"
 HF_SPLIT = "test"
 HF_IMAGE_KEY = "img"
 HF_LABEL_KEY = "fine_label"
 NUM_SAMPLES = 200
 CLIP_MODEL_ID = "openai/clip-vit-base-patch32"
-HYCOCLIP_MODEL_ID = "hycoclip_vit_s"
+HYPER_MODELS_MODEL_ID = "hycoclip-vit-s"
 
 
 def main() -> None:
@@ -29,9 +27,8 @@ def main() -> None:
 
     clip_space = dataset.compute_embeddings(CLIP_MODEL_ID)
     dataset.compute_visualization(space_key=clip_space, geometry="euclidean")
-    hycoclip_spec = ModelSpec(provider="hycoclip", model_id=HYCOCLIP_MODEL_ID)
-    hycoclip_space = dataset.compute_embeddings(hycoclip_spec)
-    dataset.compute_visualization(space_key=hycoclip_space, geometry="poincare")
+    hyper_space = dataset.compute_embeddings(model=HYPER_MODELS_MODEL_ID)
+    dataset.compute_visualization(space_key=hyper_space, geometry="poincare")
 
     print("Launching at http://127.0.0.1:6262")
 

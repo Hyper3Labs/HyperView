@@ -6,16 +6,17 @@ computation, persisting results into the configured storage backend.
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 
-from hyperview.embeddings.providers import ModelSpec, get_provider, make_provider_aware_space_key
 from hyperview.storage.backend import StorageBackend
 from hyperview.storage.schema import make_layout_key
 
 
 def compute_embeddings(
     storage: StorageBackend,
-    model_spec: ModelSpec,
+    spec: Any,
     batch_size: int = 32,
     show_progress: bool = True,
 ) -> tuple[str, int, int]:
@@ -23,7 +24,7 @@ def compute_embeddings(
 
     Args:
         storage: Storage backend to read samples from and write embeddings to.
-        model_spec: Model specification (provider, model_id, geometry, etc.).
+        spec: Embedding specification (provider, model_id, etc.)
         batch_size: Batch size for processing.
         show_progress: Whether to show progress bar.
 
@@ -33,14 +34,16 @@ def compute_embeddings(
     Raises:
         ValueError: If no samples in storage or provider not found.
     """
-    provider = get_provider(model_spec.provider)
+    from hyperview.embeddings.engine import get_engine
+
+    engine = get_engine()
 
     all_samples = storage.get_all_samples()
     if not all_samples:
         raise ValueError("No samples in storage")
 
     # Generate space key before computing (deterministic from spec)
-    space_key = make_provider_aware_space_key(model_spec)
+    space_key = spec.make_space_key()
 
     # Check which samples need embeddings
     missing_ids = storage.get_missing_embedding_ids(space_key)
@@ -61,10 +64,10 @@ def compute_embeddings(
     if show_progress and num_skipped > 0:
         print(f"Skipped {num_skipped} samples with existing embeddings")
 
-    # Compute all embeddings in one pass (no separate probe)
-    embeddings = provider.compute_embeddings(
+    # Compute all embeddings via the engine
+    embeddings = engine.embed_images(
         samples=samples_to_embed,
-        model_spec=model_spec,
+        spec=spec,
         batch_size=batch_size,
         show_progress=show_progress,
     )
@@ -72,9 +75,9 @@ def compute_embeddings(
     dim = embeddings.shape[1]
 
     # Ensure space exists (create if needed)
-    config = provider.get_space_config(model_spec, dim)
+    config = engine.get_space_config(spec, dim)
     storage.ensure_space(
-        model_id=model_spec.model_id,
+        model_id=spec.model_id or spec.provider,
         dim=dim,
         config=config,
         space_key=space_key,
@@ -129,7 +132,16 @@ def compute_layout(
         spaces = storage.list_spaces()
         if not spaces:
             raise ValueError("No embedding spaces. Call compute_embeddings() first.")
-        space_key = spaces[0].space_key
+
+        # Choose a sensible default space based on the requested output geometry.
+        # - For Poincaré output, prefer a hyperbolic (hyperboloid) embedding space if present.
+        # - For Euclidean output, prefer a Euclidean embedding space if present.
+        if geometry == "poincare":
+            preferred = next((s for s in spaces if s.geometry == "hyperboloid"), None)
+        else:
+            preferred = next((s for s in spaces if s.geometry != "hyperboloid"), None)
+
+        space_key = (preferred.space_key if preferred is not None else spaces[0].space_key)
 
     space = storage.get_space(space_key)
     if space is None:

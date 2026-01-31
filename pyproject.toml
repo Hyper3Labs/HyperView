@@ -26,7 +26,7 @@ dependencies = [
     "fastapi>=0.128.0",
     "uvicorn[standard]>=0.40.0",
     "embed-anything>=0.7.0",
-    "hyper-models @ git+https://github.com/Hyper3Labs/hyper-models.git@7489595f4f665802671136872b2bf61794995e1b",
+    "hyper-models>=0.1.0",  # PyPI package: https://pypi.org/project/hyper-models/
     "numpy>=1.26.4,<2.4",
     "umap-learn>=0.5.11",
     "pillow>=12.1.0",
@@ -88,3 +88,9 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.uv.workspace]
+members = ["hyper_models"]
+
+[tool.uv.sources]
+hyper-models = { workspace = true }

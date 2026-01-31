@@ -68,11 +68,11 @@ def main():
         max_samples=args.samples,
     )
 
-    dataset.compute_embeddings(model=args.model, show_progress=True)
+    space_key = dataset.compute_embeddings(model=args.model, show_progress=True)
 
-    # Compute both euclidean and poincare layouts
-    dataset.compute_visualization(geometry="euclidean")
-    dataset.compute_visualization(geometry="poincare")
+    # Compute a single layout for the UI to display by default.
+    # Switch to geometry="euclidean" for standard 2D UMAP.
+    dataset.compute_visualization(space_key=space_key, geometry="poincare")
 
     if args.no_server:
         return

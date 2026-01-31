@@ -47,6 +47,12 @@ def main():
             "For safety, this only attaches when the existing server reports the same dataset name."
         ),
     )
+    demo_parser.add_argument(
+        "--model",
+        type=str,
+        default="openai/clip-vit-base-patch32",
+        help="Embedding model to use (default: openai/clip-vit-base-patch32)",
+    )
 
     # Serve command
     serve_parser = subparsers.add_parser("serve", help="Serve a saved dataset")
@@ -86,6 +92,7 @@ def main():
             host=args.host,
             open_browser=not args.no_browser,
             reuse_server=args.reuse_server,
+            model=args.model,
         )
     elif args.command == "serve":
         serve_dataset(
@@ -107,7 +114,8 @@ def run_demo(
     host: str = "127.0.0.1",
     open_browser: bool = True,
     reuse_server: bool = False,
-):
+    model: str = "openai/clip-vit-base-patch32",
+) -> None:
     """Run a demo with CIFAR-10 data."""
     print("Loading CIFAR-10 dataset...")
     dataset = Dataset("cifar10_demo")
@@ -124,14 +132,14 @@ def run_demo(
     else:
         print(f"Loaded {added} samples")
 
-    print("Computing embeddings...")
-    dataset.compute_embeddings(show_progress=True)
+    print(f"Computing embeddings with {model}...")
+    space_key = dataset.compute_embeddings(model=model, show_progress=True)
     print("Embeddings computed")
 
     print("Computing visualizations...")
     # Compute both euclidean and poincare layouts
-    dataset.compute_visualization(geometry="euclidean")
-    dataset.compute_visualization(geometry="poincare")
+    dataset.compute_visualization(space_key=space_key, geometry="euclidean")
+    dataset.compute_visualization(space_key=space_key, geometry="poincare")
     print("Visualizations ready")
 
     launch(dataset, port=port, host=host, open_browser=open_browser, reuse_server=reuse_server)
@@ -144,7 +152,7 @@ def serve_dataset(
     host: str = "127.0.0.1",
     open_browser: bool = True,
     reuse_server: bool = False,
-):
+) -> None:
     """Serve a saved dataset."""
     from hyperview import Dataset, launch
 

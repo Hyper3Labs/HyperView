@@ -44,14 +44,8 @@ class LanceDBBackend(StorageBackend):
 
     def _table_names(self) -> set[str]:
         """Return the set of table names in this LanceDB database."""
-        try:
-            res = self._db.list_tables()
-            # LanceDB may return a response object with a `.tables` field.
-            names = res.tables if hasattr(res, "tables") else res
-        except Exception:
-            # Back-compat for older LanceDB.
-            names = self._db.table_names()
-        return set(names)
+        res = self._db.list_tables()
+        return set(res.tables)
 
     def _get_or_create_samples_table(self) -> lancedb.table.Table | None:
         if "samples" in self._table_names():

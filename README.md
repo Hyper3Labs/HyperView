@@ -68,7 +68,7 @@ dataset.add_from_huggingface(
 # dataset.add_images_dir("/path/to/images", label_from_folder=True)
 
 # Compute embeddings and visualization
-dataset.compute_embeddings()
+dataset.compute_embeddings(model="openai/clip-vit-base-patch32")
 dataset.compute_visualization()
 
 # Launch the UI
