@@ -75,6 +75,7 @@ version-file = "src/hyperview/_version.py"
 [tool.hatch.build.targets.wheel]
 packages = ["src/hyperview"]
 # Include frontend static assets (pre-built before packaging)
+# artifacts is for untracked files that exist; force-include ensures they're packaged
 artifacts = ["src/hyperview/server/static/**"]
 
 [tool.hatch.build.targets.sdist]
@@ -83,6 +84,8 @@ include = [
     "/README.md",
     "/LICENSE",
 ]
+# Include built frontend for reproducible source builds
+artifacts = ["src/hyperview/server/static/**"]
 
 [tool.ruff]
 line-length = 100
