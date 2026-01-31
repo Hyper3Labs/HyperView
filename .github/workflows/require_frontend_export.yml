@@ -7,6 +7,11 @@ on:
       - "frontend/**"
       - "scripts/export_frontend.sh"
       - "src/hyperview/server/static/**"
+  push:
+    paths:
+      - "frontend/**"
+      - "scripts/export_frontend.sh"
+      - "src/hyperview/server/static/**"
 
 jobs:
   require-frontend-export:
@@ -17,14 +22,25 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Verify static export updated when frontend changes
         run: |
           set -euo pipefail
 
-          base_sha="${{ github.event.pull_request.base.sha }}"
-          head_sha="${{ github.event.pull_request.head.sha }}"
+          # Determine base and head SHAs based on event type
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base_sha="${{ github.event.pull_request.base.sha }}"
+            head_sha="${{ github.event.pull_request.head.sha }}"
+          else
+            # For push events, compare with the previous commit
+            head_sha="${{ github.sha }}"
+            base_sha="${{ github.event.before }}"
+            # Handle initial push (no previous commit)
+            if [[ "$base_sha" == "0000000000000000000000000000000000000000" ]]; then
+              echo "Initial push - skipping check"
+              exit 0
+            fi
+          fi
 
           changed_files="$(git diff --name-only "$base_sha" "$head_sha")"
 
