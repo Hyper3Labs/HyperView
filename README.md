@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://youtu.be/XLaa8FHSQtc" target="_blank">
-    <img src="assets/screenshot.png" alt="HyperView Screenshot" width="100%">
+    <img src="https://raw.githubusercontent.com/Hyper3Labs/HyperView/main/assets/screenshot.png" alt="HyperView Screenshot" width="100%">
   </a>
   <br>
   <a href="https://youtu.be/XLaa8FHSQtc" target="_blank">Watch the Demo Video</a>
@@ -28,13 +28,7 @@
 ### Installation
 
 ```bash
-git clone https://github.com/Hyper3Labs/HyperView.git
-cd HyperView
-
-# Install with uv
-uv venv .venv
-source .venv/bin/activate
-uv pip install -e ".[dev]"
+pip install hyperview
 ```
 
 ### Run the Demo
@@ -79,26 +73,13 @@ hv.launch(dataset)  # Opens http://127.0.0.1:6262
 
 See [docs/colab.md](docs/colab.md) for a fast Colab smoke test and notebook-friendly launch behavior.
 
-### Save and Load Datasets
-
-```python
-# Save dataset with embeddings
-dataset.save("my_dataset.json")
-
-# Load later
-dataset = hv.Dataset.load("my_dataset.json")
-hv.launch(dataset)
-```
-
 ## Why Hyperbolic?
 
-Traditional Euclidean embeddings struggle with hierarchical data. In Euclidean space, volume grows polynomially ($r^d$), causing **Representation Collapse** where minority classes get crushed together.
+Traditional Euclidean embeddings struggle with hierarchical data. In Euclidean space, volume grows polynomially ($r^d$), causing **[Representation Collapse](https://hyper3labs.github.io/collapse)** where minority classes get crushed together.
 
-**Hyperbolic space** (Poincaré disk) has exponential volume growth ($e^r$), naturally preserving hierarchical structure and keeping rare classes distinct.
+**[Hyperbolic space](https://hyper3labs.github.io/warp)** (Poincaré disk) has exponential volume growth ($e^r$), naturally preserving hierarchical structure and keeping rare classes distinct.
 
-<p align="center">
-  <img src="assets/hyperview_infographic.png" alt="Euclidean vs Hyperbolic" width="100%">
-</p>
+**[Try the live demo →](https://hyper3labs.github.io/HyperView/)**
 
 ## Contributing
 
