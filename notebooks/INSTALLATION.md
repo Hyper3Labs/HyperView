@@ -75,8 +75,6 @@ If you see "no such file or directory" when activating, check the path:
 source .venv/bin/activate
 ```
 
-Make sure you typed `activate` correctly (not `acticate`).
-
 ### Package Installation Errors
 
 If you get parsing errors during installation, avoid using commas in the package list. Install packages separately or use spaces to separate package names.
