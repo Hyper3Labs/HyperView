@@ -14,6 +14,7 @@ Clone the repo and install dependencies:
 
 ```bash
 git clone https://github.com/Hyper3Labs/HyperView.git
+git clone https://github.com/Hyper3Labs/hyper-models
 cd HyperView
 
 # Create virtual environment and install dev dependencies
