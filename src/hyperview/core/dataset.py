@@ -36,6 +36,11 @@ class Dataset:
 
         # Create an in-memory dataset (for testing)
         dataset = hv.Dataset("temp", persist=False)
+
+        # Create a dataset with custom color palette
+        dataset = hv.Dataset("my_dataset", color_palette='tab10')
+        # Or change the palette later
+        dataset.set_labels_color_palette('Set3')
     """
 
     def __init__(
@@ -43,6 +48,7 @@ class Dataset:
         name: str | None = None,
         persist: bool = True,
         storage: StorageBackend | None = None,
+        color_palette: str | None = None,
     ):
         """Initialize a new dataset.
 
@@ -51,6 +57,9 @@ class Dataset:
             persist: If True (default), use LanceDB for persistence.
                     If False, use in-memory storage.
             storage: Optional custom storage backend. If provided, persist is ignored.
+            color_palette: Optional matplotlib colormap name for label colors
+                          (e.g., 'tab10', 'Set3', 'Pastel1'). If None, uses default palette.
+                          See https://matplotlib.org/stable/users/explain/colors/colormaps.html#qualitative
         """
         self.name = name or f"dataset_{uuid.uuid4().hex[:8]}"
 
@@ -66,13 +75,72 @@ class Dataset:
             from hyperview.storage import MemoryBackend
             self._storage = MemoryBackend(self.name)
 
-    # Color palette for deterministic label color assignment
-    _COLOR_PALETTE = [
+        # Initialize color palette
+        if color_palette is not None:
+            self._color_palette = self._matplotlib_to_hex_list(color_palette)
+        else:
+            self._color_palette = self._DEFAULT_COLOR_PALETTE
+
+    # Default color palette for deterministic label color assignment
+    _DEFAULT_COLOR_PALETTE = [
         "#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231",
         "#911eb4", "#46f0f0", "#f032e6", "#bcf60c", "#fabebe",
         "#008080", "#e6beff", "#9a6324", "#fffac8", "#800000",
         "#aaffc3", "#808000", "#ffd8b1", "#000075", "#808080",
     ]
+
+    @staticmethod
+    def _matplotlib_to_hex_list(colormap_name: str) -> list[str]:
+        """Convert a Matplotlib colormap to a list of hex color strings.
+
+        Uses lazy imports to avoid matplotlib import overhead for users
+        not using this feature.
+
+        Args:
+            colormap_name: Name of the matplotlib colormap (e.g., 'tab10', 'Set3').
+
+        Returns:
+            List of hex color strings.
+
+        Raises:
+            ValueError: If colormap_name is not a valid Matplotlib colormap.
+
+        Examples:
+            >>> Dataset._matplotlib_to_hex_list('tab10')
+            ['#1f77b4', '#ff7f0e', '#2ca02c', ...]
+        """
+        try:
+            import matplotlib.colors as mcolors
+            import matplotlib.pyplot as plt
+        except ImportError as e:
+            raise ImportError(
+                "matplotlib is required to use custom color palettes. "
+                "Install it with: pip install matplotlib"
+            ) from e
+
+        try:
+            cmap = plt.get_cmap(colormap_name)
+        except ValueError as e:
+            raise ValueError(
+                f"Invalid colormap name: '{colormap_name}'. "
+                f"See https://matplotlib.org/stable/users/explain/colors/colormaps.html for valid names."
+            ) from e
+
+        # For qualitative colormaps, use the actual number of colors if available
+        n_colors = 20  # Default fallback
+        if hasattr(cmap, "N") and cmap.N < 256:  # Likely a qualitative colormap
+            n_colors = cmap.N
+
+        if n_colors == 0:
+            raise ValueError(f"Colormap '{colormap_name}' has no colors.")
+
+        colors = []
+        for i in range(n_colors):
+            rgba = cmap(i / n_colors)
+            hex_color = mcolors.rgb2hex(rgba)
+            colors.append(hex_color)
+
+        return colors
 
     def __len__(self) -> int:
         return len(self._storage)
@@ -505,7 +573,29 @@ class Dataset:
     def get_label_colors(self) -> dict[str, str]:
         """Get the color mapping for labels (computed deterministically)."""
         labels = self._storage.get_unique_labels()
-        return {label: self._compute_label_color(label, self._COLOR_PALETTE) for label in labels}
+        return {label: self._compute_label_color(label, self._color_palette) for label in labels}
+
+    def set_labels_color_palette(self, palette_name: str) -> None:
+        """Set the color palette for label visualization.
+
+        This method allows you to change the color palette after the dataset
+        has been created. Colors are assigned deterministically to labels based
+        on the selected palette.
+
+        Args:
+            palette_name: Name of a Matplotlib qualitative colormap
+                         (e.g., 'tab10', 'Set3', 'Pastel1').
+                         See https://matplotlib.org/stable/users/explain/colors/colormaps.html#qualitative
+
+        Raises:
+            ValueError: If the palette_name is not a valid Matplotlib colormap.
+
+        Examples:
+            >>> dataset = hv.Dataset("my_dataset")
+            >>> dataset.set_labels_color_palette('tab10')
+            >>> dataset.set_labels_color_palette('Set3')
+        """
+        self._color_palette = self._matplotlib_to_hex_list(palette_name)
 
     def set_coords(
         self,
