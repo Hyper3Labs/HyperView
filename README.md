@@ -79,7 +79,7 @@ Traditional Euclidean embeddings struggle with hierarchical data. In Euclidean s
 
 **[Hyperbolic space](https://hyper3labs.github.io/warp)** (Poincaré disk) has exponential volume growth ($e^r$), naturally preserving hierarchical structure and keeping rare classes distinct.
 
-**[Try the live demo →](https://hyper3labs.github.io/HyperView/)**
+**[Try the live demo on HuggingFace Spaces→](https://huggingface.co/spaces/hyper3labs/HyperView)**
 
 ## Contributing
 
