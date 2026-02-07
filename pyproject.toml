@@ -98,9 +98,3 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-
-[tool.uv.workspace]
-members = ["../hyper-models"]
-
-[tool.uv.sources]
-hyper-models = { workspace = true }

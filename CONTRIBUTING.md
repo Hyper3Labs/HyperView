@@ -14,7 +14,6 @@ Clone the repo and install dependencies:
 
 ```bash
 git clone https://github.com/Hyper3Labs/HyperView.git
-git clone https://github.com/Hyper3Labs/hyper-models
 cd HyperView
 
 # Create virtual environment and install dev dependencies
@@ -27,6 +26,32 @@ cd frontend
 npm install
 cd ..
 ```
+
+### Optional: Co-develop `hyper-models` locally (uv workspace)
+
+By default, HyperView installs `hyper-models` from PyPI.
+
+If you want to develop HyperView and `hyper-models` side-by-side (without publishing `hyper-models`), you can tell **uv** to use a local checkout instead:
+
+1) Clone `hyper-models` next to the HyperView repo (as a sibling directory):
+
+```bash
+cd ..
+git clone https://github.com/Hyper3Labs/hyper-models
+cd HyperView
+```
+
+2) Add the following to HyperView's `pyproject.toml` (keep this change local unless the maintainers decide otherwise):
+
+```toml
+[tool.uv.workspace]
+members = ["../hyper-models"]
+
+[tool.uv.sources]
+hyper-models = { workspace = true }
+```
+
+3) Use uv's project commands (`uv run ...`, `uv sync`, etc.) so `tool.uv.sources` is respected.
 
 ## Running Locally
 

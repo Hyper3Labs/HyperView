@@ -2,14 +2,14 @@
 
 > **Open-source dataset curation + embedding visualization (Euclidean + Poincaré disk)**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Hyper3Labs/HyperView)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Hyper3Labs/HyperView) [![Open in HF Spaces](https://huggingface.co/datasets/huggingface/badges/resolve/main/open-in-hf-spaces-sm.svg)](https://huggingface.co/spaces/hyper3labs/HyperView)
 
 <p align="center">
-  <a href="https://youtu.be/XLaa8FHSQtc" target="_blank">
+  <a href="https://huggingface.co/spaces/hyper3labs/HyperView" target="_blank">
     <img src="https://raw.githubusercontent.com/Hyper3Labs/HyperView/main/assets/screenshot.png" alt="HyperView Screenshot" width="100%">
   </a>
   <br>
-  <a href="https://youtu.be/XLaa8FHSQtc" target="_blank">Watch the Demo Video</a>
+  <a href="https://huggingface.co/spaces/hyper3labs/HyperView" target="_blank">Try the live demo on HuggingFace Spaces</a>
 </p>
 
 ---
@@ -21,6 +21,11 @@
 - **HuggingFace Integration**: Load datasets directly from HuggingFace Hub
 - **Fast Embeddings**: Uses EmbedAnything for CLIP-based image embeddings
 
+## Updates
+
+- **01-02-26** — [The Geometry of Image Embeddings, Hands-on Coding Workshop](https://www.meetup.com/berlin-computer-vision-group/events/312927919/) (Berlin Computer Vision Group)
+- **17-01-26** — [The Geometry of Image Embeddings, Hands-on Coding Workshop, Part I](https://www.meetup.com/berlin-computer-vision-group/events/312636174/) (Berlin Computer Vision Group)
+
 ## Quick Start
 
 **Docs:** [docs/datasets.md](docs/datasets.md) · [docs/colab.md](docs/colab.md) · [CONTRIBUTING.md](CONTRIBUTING.md) · [TESTS.md](TESTS.md)
@@ -28,7 +33,7 @@
 ### Installation
 
 ```bash
-pip install hyperview
+uv pip install hyperview
 ```
 
 ### Run the Demo
