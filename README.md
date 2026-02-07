@@ -2,7 +2,7 @@
 
 > **Open-source dataset curation + embedding visualization (Euclidean + Poincaré disk)**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Hyper3Labs/HyperView) [![Open in HF Spaces](https://huggingface.co/datasets/huggingface/badges/resolve/main/open-in-hf-spaces-sm.svg)](https://huggingface.co/spaces/hyper3labs/HyperView)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Hyper3Labs/HyperView) [![Open in HF Spaces](https://huggingface.co/datasets/huggingface/badges/resolve/main/open-in-hf-spaces-sm.svg)](https://huggingface.co/spaces/hyper3labs/HyperView) [![Discord](https://img.shields.io/badge/Discord-hyper%C2%B3labs-5865F2?logo=discord&logoColor=white)](https://discord.gg/Az7k4Ure)
 
 <p align="center">
   <a href="https://huggingface.co/spaces/hyper3labs/HyperView" target="_blank">
@@ -25,6 +25,7 @@
 
 - **01-02-26** — [The Geometry of Image Embeddings, Hands-on Coding Workshop](https://www.meetup.com/berlin-computer-vision-group/events/312927919/) (Berlin Computer Vision Group)
 - **17-01-26** — [The Geometry of Image Embeddings, Hands-on Coding Workshop, Part I](https://www.meetup.com/berlin-computer-vision-group/events/312636174/) (Berlin Computer Vision Group)
+- **11-12-25** — [Hacker Room Demo Day #2](https://youtu.be/KnOiaNXN3Q0?t=2483) (Merantix AI Campus Berlin) — First version of HyperView presented
 
 ## Quick Start
 
@@ -86,6 +87,12 @@ Traditional Euclidean embeddings struggle with hierarchical data. In Euclidean s
 
 **[Try the live demo on HuggingFace Spaces→](https://huggingface.co/spaces/hyper3labs/HyperView)**
 
+## Community
+
+**Weekly Open Discussion** — Every Tuesday at 15:00 UTC on [Discord](https://discord.gg/Az7k4Ure?event=1469730571440885944)
+
+Join us to see the latest features demoed live, walk through new code, and get help with local setup. Whether you're a core maintainer or looking for your first contribution, everyone is welcome.
+
 ## Contributing
 
 Development setup, frontend hot-reload, and backend API notes live in [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -93,12 +100,7 @@ Development setup, frontend hot-reload, and backend API notes live in [CONTRIBUT
 ## Related projects
 
 - **hyper-scatter**: High-performance WebGL scatterplot engine (Euclidean + Poincaré) used by the frontend: https://github.com/Hyper3Labs/hyper-scatter
-- **hyper-models**: Non-Euclidean model zoo + ONNX exports (e.g. for hyperbolic VLM experiments): https://github.com/Hyper3Labs/hyper-models
-
-## References
-
-- [Poincaré Embeddings for Learning Hierarchical Representations](https://arxiv.org/abs/1705.08039) (Nickel & Kiela, 2017)
-- [Hyperbolic Neural Networks](https://arxiv.org/abs/1805.09112) (Ganea et al., 2018)
+- **hyper-models**: Non-Euclidean model zoo + ONNX exports : https://github.com/Hyper3Labs/hyper-models
 
 ## License
 
