@@ -20,4 +20,9 @@ jobs:
           node-version: '20'
 
       - name: Run Devin Review
-        run: npx devin-review ${{ github.event.pull_request.html_url }}
+        # Use script to emulate a TTY as devin-review requires terminal features
+        # The -q flag suppresses script output, -e exits with command exit code,
+        # and -c runs the command. /dev/null discards script's own output.
+        # CI=true ensures the tool runs in non-interactive CI mode.
+        run: |
+          script -q -e -c "CI=true npx devin-review ${{ github.event.pull_request.html_url }}" /dev/null
