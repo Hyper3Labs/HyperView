@@ -70,6 +70,8 @@ TESTS.md
 AGENTS.md
 **/AGENTS.md
 .github/agents/
+.github/instructions/
+.github/hooks/
 .specstory/
 
 # Generated version file (hatch-vcs)

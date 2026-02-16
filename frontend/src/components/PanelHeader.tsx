@@ -2,6 +2,7 @@
 
 import { ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { PanelTitle } from "./PanelTitle";
 
 interface PanelHeaderProps {
   icon?: ReactNode;
@@ -25,18 +26,13 @@ export function PanelHeader({ icon, title, subtitle, children, className }: Pane
   return (
     <div className={cn(
       // 24px height matches Rerun's title_bar_height()
-      "h-6 min-h-[24px] flex items-center justify-between px-3 border-b border-border bg-secondary select-none",
+      "h-6 min-h-[24px] flex items-center justify-between px-2 border-b border-border bg-secondary select-none",
       className
     )}>
-      <div className="flex items-center gap-1 min-w-0">
-        {icon && (
-          // 14px icon (3.5 tailwind units) with 4px gap to text
-          <span className="flex-shrink-0 w-3.5 h-3.5 text-muted-foreground">{icon}</span>
-        )}
-        {/* 12px font, medium weight, tight tracking */}
-        <span className="text-[12px] leading-[16px] font-medium tracking-[-0.15px] text-foreground truncate">{title}</span>
+      <div className="flex items-center min-w-0">
+        <PanelTitle title={title} icon={icon} />
         {subtitle && (
-          <span className="text-[11px] leading-4 text-muted-foreground truncate">{subtitle}</span>
+          <span className="ml-1 text-[11px] leading-4 text-muted-foreground truncate">{subtitle}</span>
         )}
       </div>
       {children && (

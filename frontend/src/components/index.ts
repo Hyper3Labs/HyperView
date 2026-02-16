@@ -4,6 +4,8 @@ export { DockviewWorkspace } from "./DockviewWorkspace";
 export { Header } from "./Header";
 export { Panel, PanelFooter } from "./Panel";
 export { PanelHeader } from "./PanelHeader";
+export { PanelTitle } from "./PanelTitle";
+export { PanelContextBar } from "./PanelContextBar";
 export { ExplorerPanel } from "./ExplorerPanel";
 export { PlaceholderPanel } from "./PlaceholderPanel";
 export * from "./icons";

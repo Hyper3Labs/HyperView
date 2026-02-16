@@ -66,14 +66,6 @@ class Dataset:
             from hyperview.storage import MemoryBackend
             self._storage = MemoryBackend(self.name)
 
-    # Color palette for deterministic label color assignment
-    _COLOR_PALETTE = [
-        "#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231",
-        "#911eb4", "#46f0f0", "#f032e6", "#bcf60c", "#fabebe",
-        "#008080", "#e6beff", "#9a6324", "#fffac8", "#800000",
-        "#aaffc3", "#808000", "#ffd8b1", "#000075", "#808080",
-    ]
-
     def __len__(self) -> int:
         return len(self._storage)
 
@@ -494,18 +486,6 @@ class Dataset:
             List of (sample, distance) tuples, sorted by distance ascending.
         """
         return self._storage.find_similar_by_vector(vector, k, space_key)
-
-    @staticmethod
-    def _compute_label_color(label: str, palette: list[str]) -> str:
-        """Compute a deterministic color for a label."""
-        digest = hashlib.md5(label.encode("utf-8")).digest()
-        idx = int.from_bytes(digest[:4], "big") % len(palette)
-        return palette[idx]
-
-    def get_label_colors(self) -> dict[str, str]:
-        """Get the color mapping for labels (computed deterministically)."""
-        labels = self._storage.get_unique_labels()
-        return {label: self._compute_label_color(label, self._COLOR_PALETTE) for label in labels}
 
     def set_coords(
         self,

@@ -2,14 +2,13 @@ import { useMemo } from "react";
 
 import type { DatasetInfo, EmbeddingsData } from "@/types";
 import {
-  MAX_DISTINCT_LABEL_COLORS,
   buildLabelColorMap,
   buildLabelCounts,
   buildLabelUniverse,
   buildLabelsInfo,
   buildLegendLabels,
-  getDistinctLabelCount,
 } from "@/lib/labelLegend";
+import { useColorSettings } from "@/store/useColorSettings";
 
 interface UseLabelLegendArgs {
   datasetInfo: DatasetInfo | null;
@@ -24,6 +23,8 @@ export function useLabelLegend({
   labelSearch = "",
   labelFilter = null,
 }: UseLabelLegendArgs) {
+  const labelColorMapId = useColorSettings((state) => state.labelColorMapId);
+
   const labelCounts = useMemo(() => buildLabelCounts(embeddings), [embeddings]);
 
   const labelUniverse = useMemo(
@@ -31,25 +32,15 @@ export function useLabelLegend({
     [datasetInfo?.labels, embeddings?.labels]
   );
 
-  const distinctLabelCount = useMemo(() => {
-    const fromCounts = getDistinctLabelCount(labelCounts);
-    if (fromCounts > 0) return fromCounts;
-    let n = labelUniverse.length;
-    if (labelUniverse.includes("undefined")) n -= 1;
-    return n;
-  }, [labelCounts, labelUniverse]);
-
-  const distinctColoringDisabled = distinctLabelCount > MAX_DISTINCT_LABEL_COLORS;
-
   const labelsInfo = useMemo(
     () =>
       buildLabelsInfo({
         datasetLabels: datasetInfo?.labels ?? [],
         embeddings,
-        distinctColoringDisabled,
+        labelColorMapId,
         labelFilter,
       }),
-    [datasetInfo?.labels, embeddings, distinctColoringDisabled, labelFilter]
+    [datasetInfo?.labels, embeddings, labelColorMapId, labelFilter]
   );
 
   const labelColorMap = useMemo(
@@ -57,10 +48,10 @@ export function useLabelLegend({
       buildLabelColorMap({
         labelsInfo,
         labelUniverse,
-        distinctColoringDisabled,
+        labelColorMapId,
         labelFilter,
       }),
-    [labelsInfo, labelUniverse, distinctColoringDisabled, labelFilter]
+    [labelsInfo, labelUniverse, labelColorMapId, labelFilter]
   );
 
   const legendLabels = useMemo(
@@ -76,8 +67,6 @@ export function useLabelLegend({
   return {
     labelCounts,
     labelUniverse,
-    distinctLabelCount,
-    distinctColoringDisabled,
     labelsInfo,
     labelColorMap,
     legendLabels,

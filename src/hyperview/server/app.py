@@ -79,7 +79,6 @@ class DatasetResponse(BaseModel):
     name: str
     num_samples: int
     labels: list[str]
-    label_colors: dict[str, str]
     spaces: list[SpaceInfoResponse]
     layouts: list[LayoutInfoResponse]
 
@@ -92,7 +91,6 @@ class EmbeddingsResponse(BaseModel):
     ids: list[str]
     labels: list[str | None]
     coords: list[list[float]]
-    label_colors: dict[str, str]
 
 
 class SimilarSampleResponse(BaseModel):
@@ -174,7 +172,6 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
             name=ds.name,
             num_samples=len(ds),
             labels=ds.labels,
-            label_colors=ds.get_label_colors(),
             spaces=space_dicts,
             layouts=layout_dicts,
         )
@@ -243,7 +240,6 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
             ids=ids,
             labels=labels,
             coords=coords.tolist(),
-            label_colors=ds.get_label_colors(),
         )
 
     @app.get("/api/spaces")

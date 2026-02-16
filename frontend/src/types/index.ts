@@ -34,7 +34,6 @@ export interface DatasetInfo {
   name: string;
   num_samples: number;
   labels: string[];
-  label_colors?: Record<string, string>;
   spaces: SpaceInfo[];
   layouts: LayoutInfo[];
 }
@@ -45,7 +44,6 @@ export interface EmbeddingsData {
   ids: string[];
   labels: (string | null)[];
   coords: [number, number][];
-  label_colors?: Record<string, string>;
 }
 
 export interface SamplesResponse {

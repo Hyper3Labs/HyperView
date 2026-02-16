@@ -28,6 +28,7 @@ import { ScatterPanel } from "./ScatterPanel";
 import { ExplorerPanel } from "./ExplorerPanel";
 import { PlaceholderPanel } from "./PlaceholderPanel";
 import { HyperViewLogo } from "./icons";
+import { PanelTitle } from "./PanelTitle";
 
 const LAYOUT_STORAGE_KEY = "hyperview:dockview-layout:v4";
 
@@ -254,7 +255,7 @@ export function useDockviewApi() {
         newPanel = api.addPanel({
           id: panelId,
           component: "explorer",
-          title: "Explorer",
+          title: "Labels",
           position,
           initialWidth: targetWidth,
           minimumWidth: MIN_SIDE_PANEL_WIDTH,
@@ -344,10 +345,13 @@ type TabWithIconProps = IDockviewPanelHeaderProps & {
 
 const TabWithIcon = React.memo(function TabWithIcon({ api, icon }: TabWithIconProps) {
   return (
-    <div className="flex items-center gap-1 text-[12px] leading-[16px] font-medium tracking-[-0.15px]">
-      <span className="flex-shrink-0">{icon}</span>
-      <span className="truncate">{api.title}</span>
-    </div>
+    <PanelTitle
+      title={api.title}
+      icon={icon}
+      fullHeight
+      className="h-full"
+      titleClassName="truncate"
+    />
   );
 });
 
@@ -459,6 +463,7 @@ function applyZonePolicies(api: DockviewApi) {
   if (explorer) {
     explorer.group.locked = true;
     explorer.group.header.hidden = true;
+    explorer.api.setActive();
   }
 
   // Hide tab headers for placeholder panels
@@ -607,17 +612,17 @@ export function DockviewWorkspace() {
         api.addPanel({
           id: PANEL.EXPLORER,
           component: "explorer",
-          title: "Explorer",
+          title: "Labels",
           position: getZonePosition("left"),
           initialWidth: getDefaultLeftPanelWidth(containerWidth),
           minimumWidth: MIN_SIDE_PANEL_WIDTH,
           maximumWidth: getDefaultLeftPanelWidth(containerWidth),
-          inactive: true,
         });
 
       if (explorerPanel) {
         explorerPanel.group.locked = true;
         explorerPanel.group.header.hidden = true;
+        explorerPanel.api.setActive();
       }
 
       setLeftPanelOpen(!!explorerPanel);

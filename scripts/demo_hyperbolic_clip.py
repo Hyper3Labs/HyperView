@@ -1,22 +1,20 @@
 #!/usr/bin/env python
-"""Demo: CLIP (Euclidean) + hyper-models (Poincaré) on CIFAR-100."""
+"""Demo: CLIP (Euclidean) + HyCoCLIP (Poincaré) on Imagenette."""
 
 import hyperview as hv
 
-DATASET_NAME = "cifar100_coarse_clip_hyper_models"
-HF_DATASET = "uoft-cs/cifar100"
-HF_SPLIT = "test"
-HF_IMAGE_KEY = "img"
-# NOTE: HyperView disables distinct label coloring when there are >20 labels.
-# CIFAR-100 has 100 fine labels, but only 20 coarse labels.
-HF_LABEL_KEY = "coarse_label"
-NUM_SAMPLES = 200
+DATASET_NAME = "imagenette_val_clip_hycoclip_demo"
+HF_DATASET = "Multimodal-Fatima/Imagenette_validation"
+HF_SPLIT = "validation"
+HF_IMAGE_KEY = "image"
+HF_LABEL_KEY = "label"
+NUM_SAMPLES = 300
 CLIP_MODEL_ID = "openai/clip-vit-base-patch32"
 HYPER_MODELS_MODEL_ID = "hycoclip-vit-s"
 
 
 def main() -> None:
-    print("Loading CIFAR-100 from Hugging Face...")
+    print("Loading Imagenette validation from Hugging Face...")
     dataset = hv.Dataset(DATASET_NAME, persist=False)
     dataset.add_from_huggingface(
         HF_DATASET,

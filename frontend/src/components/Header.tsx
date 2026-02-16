@@ -2,12 +2,17 @@
 
 import { useStore } from "@/store/useStore";
 import { Button } from "@/components/ui/button";
-import { HyperViewLogo, DiscordIcon } from "./icons";
+import { HyperViewLogo } from "./icons";
+import { FaDiscord } from "react-icons/fa";
 import { CENTER_PANEL_DEFS, useDockviewApi } from "./DockviewWorkspace";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -32,17 +37,31 @@ import {
   PanelRight,
   Settings,
   Search,
+  Github,
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
+import { isLabelColorMapId } from "@/lib/labelColors";
+import {
+  LABEL_COLOR_MAP_OPTIONS,
+  useColorSettings,
+} from "@/store/useColorSettings";
 
 const PANEL_CONFIG = CENTER_PANEL_DEFS;
+const GITHUB_URL = "https://github.com/Hyper3Labs/HyperView";
 const DISCORD_URL = process.env.NEXT_PUBLIC_DISCORD_URL ?? "https://discord.gg/Qf2pXtY4Vf";
 
 export function Header() {
   const { datasetInfo, leftPanelOpen, rightPanelOpen, bottomPanelOpen } = useStore();
   const dockview = useDockviewApi();
   const [datasetPickerOpen, setDatasetPickerOpen] = useState(false);
+  const labelColorMapId = useColorSettings((state) => state.labelColorMapId);
+  const setLabelColorMapId = useColorSettings((state) => state.setLabelColorMapId);
+
+  const handleLabelColorMapChange = (nextValue: string) => {
+    if (!isLabelColorMapId(nextValue)) return;
+    setLabelColorMapId(nextValue);
+  };
 
   const handlePanelToggle = (panelId: string) => {
     if (!dockview?.api) return;
@@ -60,7 +79,7 @@ export function Header() {
   );
 
   return (
-    <header className="h-7 min-h-[28px] bg-secondary border-b border-border flex items-center justify-between px-2">
+    <header className="h-7 min-h-[28px] bg-card border-b border-border flex items-center justify-between px-2">
         {/* Left side: Logo + View menu */}
         <div className="flex items-center gap-2">
           {/* Logo */}
@@ -75,10 +94,10 @@ export function Header() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-6 px-2 text-[12px] leading-[16px] tracking-[-0.15px] text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                  className="h-6 rounded-sm px-1.5 text-[12px] leading-[16px] tracking-[-0.15px] text-muted-foreground hover:text-foreground hover:bg-muted/50"
                 >
                   View
-                  <ChevronDown className="ml-0.5 h-2.5 w-2.5" />
+                  <ChevronDown className="ml-0.5 h-3 w-3" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-48">
@@ -90,7 +109,7 @@ export function Header() {
                     <DropdownMenuItem
                       key={panel.id}
                       onClick={() => handlePanelToggle(panel.id)}
-                      className="flex items-center justify-between h-7 text-[12px] leading-[16px]"
+                      className="justify-between"
                     >
                       <span className="flex items-center gap-2">
                         <Icon className="h-3.5 w-3.5" />
@@ -107,7 +126,7 @@ export function Header() {
                 {/* Reset layout */}
                 <DropdownMenuItem
                   onClick={() => dockview.resetLayout()}
-                  className="flex items-center gap-2 h-7 text-[12px] leading-[16px]"
+                  className="gap-1.5"
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
                   Reset Layout
@@ -126,10 +145,10 @@ export function Header() {
                 size="sm"
                 role="combobox"
                 aria-expanded={datasetPickerOpen}
-                className="h-6 min-w-[200px] max-w-[400px] px-3 text-[12px] leading-[16px] tracking-[-0.15px] text-muted-foreground hover:text-foreground bg-muted/40 hover:bg-muted/60 border border-border/50 rounded-md justify-start gap-2"
+                className="h-6 w-[600px] max-w-[60vw] px-3 text-[12px] leading-[16px] tracking-[-0.15px] text-muted-foreground hover:text-foreground bg-muted/40 hover:bg-muted/60 border border-border/50 rounded-md justify-start gap-2"
               >
                 <Search className="h-3 w-3 flex-shrink-0 opacity-50" />
-                <span className="truncate flex-1 text-left">
+                <span className="truncate flex-1 text-center text-foreground/70">
                   {datasetInfo?.name ?? "No dataset loaded"}
                 </span>
               </Button>
@@ -166,8 +185,19 @@ export function Header() {
           </Popover>
         </div>
 
-        {/* Right side: Discord + Panel toggles + Settings */}
+        {/* Right side: GitHub + Discord + Panel toggles + Settings */}
         <div className="flex items-center gap-0.5">
+          {/* GitHub link */}
+          <a
+            href={GITHUB_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="h-6 w-6 p-0 flex items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+            title="View on GitHub"
+          >
+            <Github className="h-3.5 w-3.5" />
+          </a>
+
           {/* Discord link */}
           <a
             href={DISCORD_URL}
@@ -176,7 +206,7 @@ export function Header() {
             className="h-6 w-6 p-0 flex items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
             title="Join our Discord community"
           >
-            <DiscordIcon className="h-3.5 w-3.5" />
+            <FaDiscord className="h-3.5 w-3.5" />
           </a>
 
           {/* Separator */}
@@ -230,14 +260,37 @@ export function Header() {
           {/* Separator */}
           <div className="w-px h-3 bg-border mx-1" />
 
-          {/* Settings button */}
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground hover:bg-muted/40"
-          >
-            <Settings className="h-3.5 w-3.5" />
-          </Button>
+          {/* Settings menu */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground hover:bg-muted/40"
+                aria-label="Application settings"
+                title="Settings"
+              >
+                <Settings className="h-3.5 w-3.5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-[240px]">
+              <DropdownMenuLabel>Color Settings</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel className="pt-0">Label Palette</DropdownMenuLabel>
+              <DropdownMenuRadioGroup
+                value={labelColorMapId}
+                onValueChange={handleLabelColorMapChange}
+              >
+                {LABEL_COLOR_MAP_OPTIONS.map((option) => (
+                  <DropdownMenuRadioItem key={option.value} value={option.value}>
+                    <span className="truncate">{option.label}</span>
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => setLabelColorMapId("auto")}>Reset to Auto</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
     </header>
   );

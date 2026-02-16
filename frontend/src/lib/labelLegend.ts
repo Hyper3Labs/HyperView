@@ -2,13 +2,11 @@ import type { EmbeddingsData } from "@/types";
 import {
   FALLBACK_LABEL_COLOR,
   MISSING_LABEL_COLOR,
-  createLabelColorMap,
   normalizeLabel,
+  type LabelColorMapId,
 } from "@/lib/labelColors";
+import { createCategoricalLabelTransferFunction } from "@/lib/colorTransfer";
 
-// Past ~20-30 categories, color-as-encoding becomes unreliable for most users.
-// We choose a conservative upper bound and fall back to a single color.
-export const MAX_DISTINCT_LABEL_COLORS = 20;
 export const UNSELECTED_LABEL_ALPHA = 0.12;
 
 export interface ScatterLabelsInfo {
@@ -65,12 +63,6 @@ export function buildLabelCounts(embeddings: EmbeddingsData | null): Map<string,
   return counts;
 }
 
-export function getDistinctLabelCount(labelCounts: Map<string, number>): number {
-  let n = labelCounts.size;
-  if (labelCounts.has("undefined")) n -= 1;
-  return n;
-}
-
 export function buildLabelUniverse(
   datasetLabels: string[],
   embeddingsLabels: (string | null)[] | null
@@ -117,14 +109,14 @@ export function buildLabelUniverse(
 export function buildLabelsInfo(params: {
   datasetLabels: string[];
   embeddings: EmbeddingsData | null;
-  distinctColoringDisabled: boolean;
+  labelColorMapId: LabelColorMapId;
   labelFilter?: string | null;
   unselectedAlpha?: number;
 }): ScatterLabelsInfo | null {
   const {
     datasetLabels,
     embeddings,
-    distinctColoringDisabled,
+    labelColorMapId,
     labelFilter = null,
     unselectedAlpha = UNSELECTED_LABEL_ALPHA,
   } = params;
@@ -156,13 +148,11 @@ export function buildLabelsInfo(params: {
     categories[i] = labelToCategory[key] ?? undefinedIndex;
   }
 
-  let palette: string[];
-  if (distinctColoringDisabled) {
-    palette = universe.map((l) => (l === "undefined" ? MISSING_LABEL_COLOR : FALLBACK_LABEL_COLOR));
-  } else {
-    const colors = createLabelColorMap(universe);
-    palette = universe.map((l) => colors[l] ?? FALLBACK_LABEL_COLOR);
-  }
+  const transfer = createCategoricalLabelTransferFunction({
+    labels: universe,
+    paletteId: labelColorMapId,
+  });
+  let palette = universe.map((l) => transfer.colorFor(l));
 
   const filteredPalette = applyLabelFilterToPalette({
     palette,
@@ -177,14 +167,14 @@ export function buildLabelsInfo(params: {
 export function buildLabelColorMap(params: {
   labelsInfo: ScatterLabelsInfo | null;
   labelUniverse: string[];
-  distinctColoringDisabled: boolean;
+  labelColorMapId: LabelColorMapId;
   labelFilter?: string | null;
   unselectedAlpha?: number;
 }): Record<string, string> {
   const {
     labelsInfo,
     labelUniverse,
-    distinctColoringDisabled,
+    labelColorMapId,
     labelFilter = null,
     unselectedAlpha = UNSELECTED_LABEL_ALPHA,
   } = params;
@@ -199,16 +189,12 @@ export function buildLabelColorMap(params: {
 
   if (labelUniverse.length === 0) return map;
 
-  if (distinctColoringDisabled) {
-    for (const label of labelUniverse) {
-      map[label] = label === "undefined" ? MISSING_LABEL_COLOR : FALLBACK_LABEL_COLOR;
-    }
-    return map;
-  }
-
-  const colors = createLabelColorMap(labelUniverse);
+  const transfer = createCategoricalLabelTransferFunction({
+    labels: labelUniverse,
+    paletteId: labelColorMapId,
+  });
   for (const label of labelUniverse) {
-    map[label] = colors[label] ?? FALLBACK_LABEL_COLOR;
+    map[label] = transfer.colorFor(label);
   }
 
   if (!labelFilter || !labelUniverse.includes(labelFilter)) return map;
