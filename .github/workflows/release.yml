@@ -92,3 +92,18 @@ jobs:
 
       - name: Publish to PyPI
         run: uv publish
+
+  deploy-hf-spaces:
+    name: Trigger HF Space rebuild
+    needs: pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Dispatch to hyperview-spaces
+        run: |
+          gh api repos/Hyper3Labs/hyperview-spaces/dispatches \
+            -f event_type=pypi-release \
+            -f 'client_payload[version]=${{ github.ref_name }}'
+        env:
+          GH_TOKEN: ${{ secrets.SPACES_DEPLOY_TOKEN }}
