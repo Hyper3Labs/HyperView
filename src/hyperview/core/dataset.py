@@ -197,6 +197,8 @@ class Dataset:
         label_key: str | None = "fine_label",
         label_names_key: str | None = None,
         max_samples: int | None = None,
+        shuffle: bool = False,
+        seed: int = 42,
         show_progress: bool = True,
         skip_existing: bool = True,
         image_format: str = "auto",
@@ -214,6 +216,8 @@ class Dataset:
             label_key: Key for the label column (can be None).
             label_names_key: Key for label names in dataset info.
             max_samples: Maximum number of samples to load.
+            shuffle: If True, shuffle the dataset before sampling (ensures diverse classes).
+            seed: Random seed for shuffling (default: 42).
             show_progress: Whether to print progress.
             skip_existing: If True (default), skip samples that already exist in storage.
             image_format: Image format to save: "auto" (detect from source, fallback PNG),
@@ -240,6 +244,22 @@ class Dataset:
         except Exception:
             ds = cast(Any, load_dataset(dataset_name, split=split))
 
+        source_fingerprint = ds._fingerprint if hasattr(ds, "_fingerprint") else None
+
+        dataset_size = len(ds)
+        total = dataset_size if max_samples is None else min(dataset_size, max_samples)
+
+        # Select source row indices explicitly so sampled subsets are clear and
+        # sample IDs remain stable for the same underlying row.
+        selected_indices: list[int] | None = None
+        if shuffle:
+            rng = np.random.default_rng(seed)
+            selected_indices = rng.permutation(dataset_size)[:total].tolist()
+            ds = ds.select(selected_indices)
+        elif max_samples is not None:
+            selected_indices = list(range(total))
+            ds = ds.select(selected_indices)
+
         # Get label names if available
         label_names = None
         if label_key and label_names_key:
@@ -251,7 +271,7 @@ class Dataset:
 
         # Extract dataset metadata for robust sample IDs
         config_name = getattr(ds.info, "config_name", None) or "default"
-        fingerprint = ds._fingerprint[:8] if hasattr(ds, "_fingerprint") and ds._fingerprint else "unknown"
+        fingerprint = source_fingerprint[:8] if source_fingerprint else "unknown"
         version = str(ds.info.version) if ds.info.version else None
 
         # Get media directory for this dataset
@@ -259,7 +279,6 @@ class Dataset:
         media_dir = config.get_huggingface_media_dir(dataset_name, split)
 
         samples = []
-        total = len(ds) if max_samples is None else min(len(ds), max_samples)
 
         if show_progress:
             print(f"Loading {total} samples from {dataset_name}...")
@@ -268,6 +287,7 @@ class Dataset:
 
         for i in iterator:
             item = ds[i]
+            source_index = selected_indices[i] if selected_indices is not None else i
             image = item[image_key]
 
             # Handle PIL Image or numpy array
@@ -287,7 +307,7 @@ class Dataset:
 
             # Generate robust sample ID with config and fingerprint
             safe_name = dataset_name.replace("/", "_")
-            sample_id = f"{safe_name}_{config_name}_{fingerprint}_{split}_{i}"
+            sample_id = f"{safe_name}_{config_name}_{fingerprint}_{split}_{source_index}"
 
             # Determine image format and extension
             if image_format == "auto":
@@ -311,8 +331,8 @@ class Dataset:
                 "source": dataset_name,
                 "config": config_name,
                 "split": split,
-                "index": i,
-                "fingerprint": ds._fingerprint if hasattr(ds, "_fingerprint") else None,
+                "index": source_index,
+                "fingerprint": source_fingerprint,
                 "version": version,
             }
 

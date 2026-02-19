@@ -72,6 +72,8 @@ AGENTS.md
 .github/agents/
 .github/instructions/
 .github/hooks/
+.github/skills/
+.agents/
 .specstory/
 
 # Generated version file (hatch-vcs)
