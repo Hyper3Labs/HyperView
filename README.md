@@ -37,17 +37,41 @@
 uv pip install hyperview
 ```
 
-### Run the Demo
+### Run HyperView
 
 ```bash
-hyperview demo --samples 500
+hyperview \
+  --dataset cifar10_demo \
+  --hf-dataset uoft-cs/cifar10 \
+  --split train \
+  --image-key img \
+  --label-key label \
+  --samples 500 \
+  --model openai/clip-vit-base-patch32 \
+  --geometry both
 ```
 
 This will:
-1. Load 500 samples from CIFAR-100
-2. Compute CLIP embeddings
-3. Generate Euclidean and Poincaré visualizations
-4. Start the server at **http://127.0.0.1:6262**
+1. Use dataset `cifar10_demo`
+2. Load up to 500 samples from CIFAR-10
+3. Compute CLIP embeddings
+4. Generate Euclidean and Poincaré visualizations
+5. Start the server at **http://127.0.0.1:6262**
+
+You can also launch with explicit dataset/model/projection args:
+
+```bash
+hyperview \
+  --dataset imagenette_clip \
+  --hf-dataset fastai/imagenette \
+  --split train \
+  --image-key image \
+  --label-key label \
+  --samples 1000 \
+  --model openai/clip-vit-base-patch32 \
+  --method umap \
+  --geometry euclidean
+```
 
 ### Python API
 
