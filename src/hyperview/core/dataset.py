@@ -439,11 +439,12 @@ class Dataset:
 
         Args:
             space_key: Embedding space to project. If None, uses the first available.
-            method: Projection method ('umap' supported).
+            method: Projection method ('umap' or 'pca'). PCA is faster and
+                deterministic; UMAP captures nonlinear structure better.
             geometry: Output geometry type ('euclidean' or 'poincare').
-            n_neighbors: Number of neighbors for UMAP.
-            min_dist: Minimum distance for UMAP.
-            metric: Distance metric for UMAP.
+            n_neighbors: Number of neighbors for UMAP (ignored for PCA).
+            min_dist: Minimum distance for UMAP (ignored for PCA).
+            metric: Distance metric for UMAP (ignored for PCA).
             force: Force recomputation even if layout exists.
 
         Returns:
