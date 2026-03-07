@@ -106,7 +106,7 @@ def compute_layout(
     Args:
         storage: Storage backend with embeddings.
         space_key: Embedding space to project. If None, uses the first available.
-        method: Projection method ('umap' supported).
+        method: Projection method ('umap' or 'pca').
         geometry: Output geometry type ('euclidean' or 'poincare').
         n_neighbors: Number of neighbors for UMAP.
         min_dist: Minimum distance for UMAP.
@@ -122,8 +122,8 @@ def compute_layout(
     """
     from hyperview.embeddings.projection import ProjectionEngine
 
-    if method != "umap":
-        raise ValueError(f"Invalid method: {method}. Only 'umap' is supported.")
+    if method not in ("umap", "pca"):
+        raise ValueError(f"Invalid method: {method}. Supported methods: 'umap', 'pca'.")
 
     if geometry not in ("euclidean", "poincare"):
         raise ValueError(f"Invalid geometry: {geometry}. Must be 'euclidean' or 'poincare'.")
@@ -157,11 +157,15 @@ def compute_layout(
     if len(ids) < 3:
         raise ValueError(f"Need at least 3 samples for visualization, have {len(ids)}")
 
-    layout_params = {
-        "n_neighbors": n_neighbors,
-        "min_dist": min_dist,
-        "metric": metric,
-    }
+    if method == "umap":
+        layout_params = {
+            "n_neighbors": n_neighbors,
+            "min_dist": min_dist,
+            "metric": metric,
+        }
+    else:
+        # PCA is deterministic with no tuning parameters
+        layout_params = {}
     layout_key = make_layout_key(space_key, method, geometry, layout_params)
 
     if not force:
