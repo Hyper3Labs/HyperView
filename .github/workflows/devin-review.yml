@@ -25,10 +25,12 @@ jobs:
       - name: Resolve pull request context
         id: pr
         uses: actions/github-script@v8
+        env:
+          WORKFLOW_PR_NUMBER: ${{ inputs.pr_number }}
         with:
           script: |
             const prNumber = context.eventName === 'workflow_dispatch'
-              ? Number(core.getInput('pr_number'))
+              ? Number(process.env.WORKFLOW_PR_NUMBER)
               : context.payload.pull_request.number;
 
             if (!Number.isInteger(prNumber) || prNumber <= 0) {
