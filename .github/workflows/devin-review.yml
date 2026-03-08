@@ -67,6 +67,8 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upsert PR comment with Devin Review link
+        id: comment
+        continue-on-error: true
         uses: actions/github-script@v8
         env:
           PR_NUMBER: ${{ steps.review.outputs.number }}
@@ -112,3 +114,14 @@ jobs:
               });
               core.info(`Created Devin Review comment: ${created.data.html_url}`);
             }
+
+      - name: Report comment permission limitation
+        if: ${{ steps.comment.outcome == 'failure' }}
+        run: |
+          {
+            echo
+            echo "PR comment was not posted automatically."
+            echo
+            echo "This repository currently sets GitHub Actions GITHUB_TOKEN to read-only permissions, so the workflow cannot create issue comments."
+            echo "If repository workflow permissions are changed to read/write, this step will start posting or updating the PR comment automatically."
+          } >> "$GITHUB_STEP_SUMMARY"
