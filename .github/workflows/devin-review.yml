@@ -1,7 +1,7 @@
 name: Devin Review
 
 on:
-  pull_request_target:
+  pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
@@ -12,18 +12,15 @@ on:
 
 jobs:
   devin-review:
-    if: ${{ github.event_name == 'workflow_dispatch' || !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      DEVIN_API_KEY: ${{ secrets.DEVIN_API_KEY }}
+    timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: read
 
     steps:
-      - name: Resolve pull request context
-        id: pr
+      - name: Resolve Devin Review URL
+        id: review
         uses: actions/github-script@v8
         env:
           WORKFLOW_PR_NUMBER: ${{ inputs.pr_number }}
@@ -39,109 +36,31 @@ jobs:
             }
 
             const { owner, repo } = context.repo;
-            const { data: pr } = await github.rest.pulls.get({
-              owner,
-              repo,
-              pull_number: prNumber,
-            });
-            const files = await github.paginate(github.rest.pulls.listFiles, {
-              owner,
-              repo,
-              pull_number: prNumber,
-              per_page: 100,
-            });
+            const reviewUrl = `https://devinreview.com/${owner}/${repo}/pull/${prNumber}`;
+            const prUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
 
             core.setOutput('number', String(prNumber));
-            core.setOutput('url', pr.html_url);
-            core.setOutput('title', pr.title);
-            core.setOutput('author', pr.user.login);
-            core.setOutput('head_sha', pr.head.sha);
-            core.setOutput('head_repo', pr.head.repo.full_name);
-            core.setOutput('base_repo', pr.base.repo.full_name);
-            core.setOutput('files_json', JSON.stringify(files.map((file) => file.filename)));
+            core.setOutput('pr_url', prUrl);
+            core.setOutput('review_url', reviewUrl);
 
-      - name: Validate Devin API configuration
-        if: ${{ env.DEVIN_API_KEY == '' }}
-        run: |
-          echo "DEVIN_API_KEY is not configured for this repository or organization." >&2
-          echo "Configure DEVIN_API_KEY before using the API-based Devin review workflow." >&2
-          exit 1
-
-      - name: Start Devin review session
-        id: devin
+      - name: Warm Devin Review page
         env:
-          PR_NUMBER: ${{ steps.pr.outputs.number }}
-          PR_URL: ${{ steps.pr.outputs.url }}
-          PR_TITLE: ${{ steps.pr.outputs.title }}
-          PR_AUTHOR: ${{ steps.pr.outputs.author }}
-          PR_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
-          PR_HEAD_REPO: ${{ steps.pr.outputs.head_repo }}
-          PR_BASE_REPO: ${{ steps.pr.outputs.base_repo }}
-          PR_FILES_JSON: ${{ steps.pr.outputs.files_json }}
-          REPOSITORY: ${{ github.repository }}
+          REVIEW_URL: ${{ steps.review.outputs.review_url }}
         run: |
-          PROMPT=$(cat <<EOF
-          You are reviewing pull request #${PR_NUMBER} in ${REPOSITORY}.
+          curl --fail --silent --show-error --location "$REVIEW_URL" --output /dev/null
 
-          Repository:
-          - Base repository: ${PR_BASE_REPO}
-          - Head repository: ${PR_HEAD_REPO}
-
-          Pull request:
-          - Title: ${PR_TITLE}
-          - Author: ${PR_AUTHOR}
-          - URL: ${PR_URL}
-          - Head SHA: ${PR_HEAD_SHA}
-
-          Changed files JSON:
-          ${PR_FILES_JSON}
-
-          Tasks:
-          1. Review the current pull request diff and related repository context for PR #${PR_NUMBER}.
-          2. Never commit, push, or open a new pull request.
-          3. Never ask the user for confirmation and never wait for user messages.
-          4. Leave at most 3 total review comments.
-          5. Use inline review comments with precise line references when possible.
-          6. Before commenting, check whether the same issue was already raised or already fixed in the current PR discussion.
-          7. If no issues are found, leave a short summary comment saying everything looks good.
-          8. Follow repository instruction files such as AGENTS.md, CLAUDE.md, CONTRIBUTING.md, and REVIEW.md if present.
-
-          Focus on bugs, regressions, missing tests, and clear correctness issues. Avoid speculative nits.
-          EOF
-          )
-
-          PAYLOAD=$(jq -n \
-            --arg prompt "$PROMPT" \
-            --arg title "PR Review #${PR_NUMBER} (${REPOSITORY})" \
-            '{
-              prompt: $prompt,
-              idempotent: true,
-              title: $title,
-              tags: ["github-actions", "devin-review", "pull-request"]
-            }')
-
-          RESPONSE=$(curl --fail --silent --show-error \
-            --request POST \
-            --url https://api.devin.ai/v1/sessions \
-            --header "Authorization: Bearer ${DEVIN_API_KEY}" \
-            --header "Content-Type: application/json" \
-            --data "$PAYLOAD")
-
-          SESSION_ID=$(echo "$RESPONSE" | jq -r '.session_id')
-          SESSION_URL=$(echo "$RESPONSE" | jq -r '.url')
-
-          if [[ -z "$SESSION_ID" || "$SESSION_ID" == "null" || -z "$SESSION_URL" || "$SESSION_URL" == "null" ]]; then
-            echo "Unexpected Devin API response: $RESPONSE" >&2
-            exit 1
-          fi
-
-          echo "session_id=$SESSION_ID" >> "$GITHUB_OUTPUT"
-          echo "session_url=$SESSION_URL" >> "$GITHUB_OUTPUT"
-
+      - name: Publish Devin Review summary
+        env:
+          PR_NUMBER: ${{ steps.review.outputs.number }}
+          PR_URL: ${{ steps.review.outputs.pr_url }}
+          REVIEW_URL: ${{ steps.review.outputs.review_url }}
+        run: |
           {
-            echo "Started Devin review session."
+            echo "Devin Review is available for PR #${PR_NUMBER}."
             echo
-            echo "- PR: #${PR_NUMBER}"
-            echo "- Session ID: ${SESSION_ID}"
-            echo "- Session URL: ${SESSION_URL}"
+            echo "- GitHub PR: ${PR_URL}"
+            echo "- Devin Review: ${REVIEW_URL}"
+            echo
+            echo "This workflow intentionally does not use DEVIN_API_KEY."
+            echo "For automatic Devin statuses or comments inside GitHub, connect the Devin GitHub integration and enable auto-review in Devin settings."
           } >> "$GITHUB_STEP_SUMMARY"
