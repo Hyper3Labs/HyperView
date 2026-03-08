@@ -2,11 +2,15 @@ name: Devin Review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 jobs:
   devin-review:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
 
     steps:
       - name: Checkout repository
@@ -26,4 +30,4 @@ jobs:
         env:
           CI: true  # Ensures the tool runs in non-interactive CI mode
         run: |
-          script -q -e -c "npx devin-review ${{ github.event.pull_request.html_url }}" /dev/null
+          script -q -e -c "printf 'y\n' | npx devin-review '${{ github.event.pull_request.html_url }}'" /dev/null
