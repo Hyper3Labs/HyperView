@@ -1,33 +1,145 @@
 name: Devin Review
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to review
+        required: true
+        type: string
 
 jobs:
   devin-review:
+    if: ${{ github.event_name == 'workflow_dispatch' || !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
+    env:
+      DEVIN_API_KEY: ${{ secrets.DEVIN_API_KEY }}
     permissions:
       contents: read
-      pull-requests: write
+      pull-requests: read
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Resolve pull request context
+        id: pr
+        uses: actions/github-script@v8
         with:
-          fetch-depth: 0
+          script: |
+            const prNumber = context.eventName === 'workflow_dispatch'
+              ? Number(core.getInput('pr_number'))
+              : context.payload.pull_request.number;
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
+            if (!Number.isInteger(prNumber) || prNumber <= 0) {
+              core.setFailed(`Invalid pull request number: ${prNumber}`);
+              return;
+            }
 
-      - name: Run Devin Review
-        # Use script to emulate a TTY as devin-review requires terminal features
-        # The -q flag suppresses script output, -e exits with command exit code,
-        # and -c runs the command. /dev/null discards script's own output.
-        env:
-          CI: true  # Ensures the tool runs in non-interactive CI mode
+            const { owner, repo } = context.repo;
+            const { data: pr } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: prNumber,
+            });
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner,
+              repo,
+              pull_number: prNumber,
+              per_page: 100,
+            });
+
+            core.setOutput('number', String(prNumber));
+            core.setOutput('url', pr.html_url);
+            core.setOutput('title', pr.title);
+            core.setOutput('author', pr.user.login);
+            core.setOutput('head_sha', pr.head.sha);
+            core.setOutput('head_repo', pr.head.repo.full_name);
+            core.setOutput('base_repo', pr.base.repo.full_name);
+            core.setOutput('files_json', JSON.stringify(files.map((file) => file.filename)));
+
+      - name: Validate Devin API configuration
+        if: ${{ env.DEVIN_API_KEY == '' }}
         run: |
-          script -q -e -c "printf 'y\n' | npx devin-review '${{ github.event.pull_request.html_url }}'" /dev/null
+          echo "DEVIN_API_KEY is not configured for this repository or organization." >&2
+          echo "Configure DEVIN_API_KEY before using the API-based Devin review workflow." >&2
+          exit 1
+
+      - name: Start Devin review session
+        id: devin
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+          PR_TITLE: ${{ steps.pr.outputs.title }}
+          PR_AUTHOR: ${{ steps.pr.outputs.author }}
+          PR_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          PR_HEAD_REPO: ${{ steps.pr.outputs.head_repo }}
+          PR_BASE_REPO: ${{ steps.pr.outputs.base_repo }}
+          PR_FILES_JSON: ${{ steps.pr.outputs.files_json }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          PROMPT=$(cat <<EOF
+          You are reviewing pull request #${PR_NUMBER} in ${REPOSITORY}.
+
+          Repository:
+          - Base repository: ${PR_BASE_REPO}
+          - Head repository: ${PR_HEAD_REPO}
+
+          Pull request:
+          - Title: ${PR_TITLE}
+          - Author: ${PR_AUTHOR}
+          - URL: ${PR_URL}
+          - Head SHA: ${PR_HEAD_SHA}
+
+          Changed files JSON:
+          ${PR_FILES_JSON}
+
+          Tasks:
+          1. Review the current pull request diff and related repository context for PR #${PR_NUMBER}.
+          2. Never commit, push, or open a new pull request.
+          3. Never ask the user for confirmation and never wait for user messages.
+          4. Leave at most 3 total review comments.
+          5. Use inline review comments with precise line references when possible.
+          6. Before commenting, check whether the same issue was already raised or already fixed in the current PR discussion.
+          7. If no issues are found, leave a short summary comment saying everything looks good.
+          8. Follow repository instruction files such as AGENTS.md, CLAUDE.md, CONTRIBUTING.md, and REVIEW.md if present.
+
+          Focus on bugs, regressions, missing tests, and clear correctness issues. Avoid speculative nits.
+          EOF
+          )
+
+          PAYLOAD=$(jq -n \
+            --arg prompt "$PROMPT" \
+            --arg title "PR Review #${PR_NUMBER} (${REPOSITORY})" \
+            '{
+              prompt: $prompt,
+              idempotent: true,
+              title: $title,
+              tags: ["github-actions", "devin-review", "pull-request"]
+            }')
+
+          RESPONSE=$(curl --fail --silent --show-error \
+            --request POST \
+            --url https://api.devin.ai/v1/sessions \
+            --header "Authorization: Bearer ${DEVIN_API_KEY}" \
+            --header "Content-Type: application/json" \
+            --data "$PAYLOAD")
+
+          SESSION_ID=$(echo "$RESPONSE" | jq -r '.session_id')
+          SESSION_URL=$(echo "$RESPONSE" | jq -r '.url')
+
+          if [[ -z "$SESSION_ID" || "$SESSION_ID" == "null" || -z "$SESSION_URL" || "$SESSION_URL" == "null" ]]; then
+            echo "Unexpected Devin API response: $RESPONSE" >&2
+            exit 1
+          fi
+
+          echo "session_id=$SESSION_ID" >> "$GITHUB_OUTPUT"
+          echo "session_url=$SESSION_URL" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "Started Devin review session."
+            echo
+            echo "- PR: #${PR_NUMBER}"
+            echo "- Session ID: ${SESSION_ID}"
+            echo "- Session URL: ${SESSION_URL}"
+          } >> "$GITHUB_STEP_SUMMARY"
