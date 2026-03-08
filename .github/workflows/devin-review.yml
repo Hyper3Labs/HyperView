@@ -68,7 +68,6 @@ jobs:
 
       - name: Upsert PR comment with Devin Review link
         id: comment
-        continue-on-error: true
         uses: actions/github-script@v8
         env:
           PR_NUMBER: ${{ steps.review.outputs.number }}
@@ -78,6 +77,7 @@ jobs:
           script: |
             const marker = '<!-- devin-review-link -->';
             const issue_number = Number(process.env.PR_NUMBER);
+            core.setOutput('posted', 'false');
             const body = [
               marker,
               'Devin Review is available for this pull request.',
@@ -88,35 +88,45 @@ jobs:
               'This link opens the hosted Devin Review page for the current PR.',
             ].join('\n');
 
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number,
-              per_page: 100,
-            });
-
-            const existing = comments.find((comment) => comment.body && comment.body.includes(marker));
-
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-              core.info(`Updated existing Devin Review comment: ${existing.html_url}`);
-            } else {
-              const created = await github.rest.issues.createComment({
+            try {
+              const comments = await github.paginate(github.rest.issues.listComments, {
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number,
-                body,
+                per_page: 100,
               });
-              core.info(`Created Devin Review comment: ${created.data.html_url}`);
+
+              const existing = comments.find((comment) => comment.body && comment.body.includes(marker));
+
+              if (existing) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existing.id,
+                  body,
+                });
+                core.info(`Updated existing Devin Review comment: ${existing.html_url}`);
+              } else {
+                const created = await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number,
+                  body,
+                });
+                core.info(`Created Devin Review comment: ${created.data.html_url}`);
+              }
+
+              core.setOutput('posted', 'true');
+            } catch (error) {
+              if (error && error.status === 403) {
+                core.warning('PR comment was not posted because this repository grants GitHub Actions a read-only GITHUB_TOKEN.');
+              } else {
+                throw error;
+              }
             }
 
       - name: Report comment permission limitation
-        if: ${{ steps.comment.outcome == 'failure' }}
+        if: ${{ steps.comment.outputs.posted != 'true' }}
         run: |
           {
             echo
