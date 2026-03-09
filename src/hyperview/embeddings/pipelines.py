@@ -154,8 +154,11 @@ def compute_layout(
     if len(ids) == 0:
         raise ValueError(f"No embeddings in space '{space_key}'. Call compute_embeddings() first.")
 
-    if len(ids) < 3:
-        raise ValueError(f"Need at least 3 samples for visualization, have {len(ids)}")
+    min_samples = 3 if method == "umap" else 2
+    if len(ids) < min_samples:
+        raise ValueError(
+            f"Need at least {min_samples} samples for {method} visualization, have {len(ids)}"
+        )
 
     if method == "umap":
         layout_params = {

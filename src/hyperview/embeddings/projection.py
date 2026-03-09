@@ -330,12 +330,18 @@ class ProjectionEngine:
         # Economy SVD (full_matrices=False) is O(N * D * min(N,D))
         _U, S, Vt = np.linalg.svd(centered, full_matrices=False)
 
-        projected = centered @ Vt[:n_components].T
+        # SVD produces min(N, D) components; clamp to what's available
+        k = min(n_components, Vt.shape[0])
+        projected = centered @ Vt[:k].T
+        if k < n_components:
+            pad = np.zeros((projected.shape[0], n_components - k), dtype=projected.dtype)
+            projected = np.hstack([projected, pad])
 
         variance = S**2 / max(len(data) - 1, 1)
         total_var = variance.sum()
         if total_var > 0:
-            explained = variance[:n_components] / total_var
+            explained = np.zeros(n_components)
+            explained[:k] = variance[:k] / total_var
         else:
             explained = np.zeros(n_components)
 
