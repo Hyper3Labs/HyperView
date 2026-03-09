@@ -180,6 +180,17 @@ class TestEdgeCases:
         coords = engine.project(data, method="pca", input_geometry="euclidean", output_geometry="euclidean")
         assert coords.shape == (2, 2)
 
+    def test_pca_svd_fewer_features_than_components(self):
+        """When D < n_components, _pca_svd should pad with zeros."""
+        engine = ProjectionEngine()
+        data = np.array([[1.0], [2.0], [3.0]])  # (3, 1) — only 1 feature
+        projected, explained = engine._pca_svd(data, n_components=2)
+        assert projected.shape == (3, 2)
+        assert explained.shape == (2,)
+        # Second component should be zero-padded
+        np.testing.assert_array_equal(projected[:, 1], 0.0)
+        assert explained[1] == 0.0
+
 
 class TestIntegrationDatasetApi:
 
@@ -282,3 +293,36 @@ class TestIntegrationDatasetApi:
             assert len(vis_ids) == 20
             assert vis_coords.shape == (20, 2)
             assert np.all(np.isfinite(vis_coords))
+
+    def test_two_samples_through_pipeline(self):
+        """2-sample PCA should work end-to-end through compute_visualization."""
+        from hyperview.core.dataset import Dataset
+        from hyperview.core.sample import Sample
+
+        ds = Dataset("test_pca_2samp", persist=False)
+
+        for i in range(2):
+            ds.add_sample(Sample(id=f"s{i}", filepath=f"/fake/{i}.png", label=f"c{i}"))
+
+        space_key = "test_space"
+        ds._storage.ensure_space(
+            model_id="test",
+            dim=16,
+            config={"provider": "test", "geometry": "euclidean"},
+            space_key=space_key,
+        )
+        rng = np.random.default_rng(42)
+        ids = [f"s{i}" for i in range(2)]
+        vectors = rng.standard_normal((2, 16)).astype(np.float32)
+        ds._storage.add_embeddings(space_key, ids, vectors)
+
+        layout_key = ds.compute_visualization(
+            space_key=space_key,
+            method="pca",
+            geometry="euclidean",
+        )
+
+        assert layout_key is not None
+        vis_ids, _, vis_coords = ds.get_visualization_data(layout_key)
+        assert len(vis_ids) == 2
+        assert vis_coords.shape == (2, 2)
