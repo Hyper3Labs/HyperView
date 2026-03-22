@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1 - 2026-03-22
+
+### Fixes
+- Switch the frontend `hyper-scatter` dependency to the published npm package so clean installs and GitHub release builds resolve it without a local checkout.
+
+### Notes
+- This release supersedes the failed `0.3.0` PyPI publish and carries forward the user-facing changes documented below.
+
 ## 0.3.0 - 2026-03-22
 
 ### Features
