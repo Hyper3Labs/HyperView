@@ -25,6 +25,7 @@ def main() -> None:
     )
 
     dataset.compute_visualization(space_key=space_key, layout="spherical")
+    dataset.compute_visualization(space_key=space_key, method="pca", layout="spherical")
 
     hv.launch(dataset)
 

@@ -75,9 +75,9 @@ def main() -> None:
 
     space_key = dataset.compute_embeddings(model=MODEL_ID, show_progress=True)
 
-    # Compute the default hyperbolic 2D view plus a spherical view.
-    # Bare "spherical" now resolves to the 3D spherical layout.
     dataset.compute_visualization(space_key=space_key, layout="euclidean:3d")
+    dataset.compute_visualization(space_key=space_key, layout="euclidean")
+    dataset.compute_visualization(space_key=space_key, method="pca", layout="euclidean")
     dataset.compute_visualization(space_key=space_key, layout="poincare")
     dataset.compute_visualization(space_key=space_key, layout="spherical")
 
