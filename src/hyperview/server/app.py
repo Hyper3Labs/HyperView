@@ -4,16 +4,20 @@ import os
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-import numpy as np
-
 from hyperview.core.dataset import Dataset
-from hyperview.core.selection import points_in_polygon
+from hyperview.core.selection import (
+    OrbitViewState3D,
+    points_in_polygon,
+    select_ids_for_3d_lasso,
+)
+from hyperview.storage.schema import parse_layout_dimension
 
 # Global dataset reference (set by launch())
 _current_dataset: Dataset | None = None
@@ -30,8 +34,15 @@ class LassoSelectionRequest(BaseModel):
     """Request model for lasso selection queries."""
 
     layout_key: str  # e.g., "openai_clip-vit-base-patch32__umap"
-    # Polygon vertices in data space, interleaved: [x0, y0, x1, y1, ...]
+    # Polygon vertices, interleaved: [x0, y0, x1, y1, ...]
+    # - 2D layouts: data-space polygon (same coordinates as /api/embeddings)
+    # - 3D layouts: screen-space polygon in CSS pixels
     polygon: list[float]
+    # Required for 3D lasso requests.
+    view_3d: dict[str, float] | None = None
+    viewport_width: int | None = None
+    viewport_height: int | None = None
+    label_filter: str | None = None
     offset: int = 0
     limit: int = 100
     include_thumbnails: bool = True
@@ -166,7 +177,7 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
         space_dicts = [s.to_api_dict() for s in spaces]
 
         layouts = ds.list_layouts()
-        layout_dicts = [l.to_api_dict() for l in layouts]
+        layout_dicts = [layout.to_api_dict() for layout in layouts]
 
         return DatasetResponse(
             name=ds.name,
@@ -222,10 +233,13 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
         # Find the requested layout
         layout_info = None
         if layout_key is None:
-            layout_info = layouts[0]
+            layout_info = next(
+                (layout for layout in layouts if parse_layout_dimension(layout.layout_key) == 2),
+                layouts[0],
+            )
             layout_key = layout_info.layout_key
         else:
-            layout_info = next((l for l in layouts if l.layout_key == layout_key), None)
+            layout_info = next((layout for layout in layouts if layout.layout_key == layout_key), None)
             if layout_info is None:
                 raise HTTPException(status_code=404, detail=f"Layout not found: {layout_key}")
 
@@ -252,7 +266,7 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
     async def get_layouts(ds: Dataset = Depends(get_dataset)):
         """Get all available layouts."""
         layouts = ds.list_layouts()
-        return {"layouts": [l.to_api_dict() for l in layouts]}
+        return {"layouts": [layout.to_api_dict() for layout in layouts]}
 
     @app.post("/api/selection")
     async def sync_selection(request: SelectionRequest):
@@ -265,10 +279,9 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
 
         Returns a total selected count and a paginated page of selected samples.
 
-        Notes:
-        - Selection is performed in *data space* (the same coordinates returned
-          by /api/embeddings).
-        - For now we use an in-memory scan with a tight AABB prefilter.
+                Selection modes:
+                - 2D layouts: polygon in data space (same coordinates as /api/embeddings).
+                - 3D layouts: polygon in screen space with explicit camera + viewport.
         """
         if request.offset < 0:
             raise HTTPException(status_code=400, detail="offset must be >= 0")
@@ -281,32 +294,145 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
                 detail="polygon must be an even-length list with at least 3 vertices",
             )
 
+        layout_info = next(
+            (layout for layout in ds.list_layouts() if layout.layout_key == request.layout_key),
+            None,
+        )
+        if layout_info is None:
+            raise HTTPException(status_code=404, detail=f"Layout not found: {request.layout_key}")
+        layout_dimension = parse_layout_dimension(layout_info.layout_key)
+
         poly = np.asarray(request.polygon, dtype=np.float32).reshape((-1, 2))
         if not np.all(np.isfinite(poly)):
             raise HTTPException(status_code=400, detail="polygon must contain only finite numbers")
 
-        # Tight AABB prefilter.
-        x_min = float(np.min(poly[:, 0]))
-        x_max = float(np.max(poly[:, 0]))
-        y_min = float(np.min(poly[:, 1]))
-        y_max = float(np.max(poly[:, 1]))
+        selected_ids: list[str]
 
-        candidate_ids, candidate_coords = ds.get_lasso_candidates_aabb(
-            layout_key=request.layout_key,
-            x_min=x_min,
-            x_max=x_max,
-            y_min=y_min,
-            y_max=y_max,
-        )
+        if layout_dimension == 2:
+            # Tight AABB prefilter in data space.
+            x_min = float(np.min(poly[:, 0]))
+            x_max = float(np.max(poly[:, 0]))
+            y_min = float(np.min(poly[:, 1]))
+            y_max = float(np.max(poly[:, 1]))
 
-        if candidate_coords.size == 0:
-            return {"total": 0, "offset": request.offset, "limit": request.limit, "sample_ids": [], "samples": []}
+            candidate_ids, candidate_coords = ds.get_lasso_candidates_aabb(
+                layout_key=request.layout_key,
+                x_min=x_min,
+                x_max=x_max,
+                y_min=y_min,
+                y_max=y_max,
+                label_filter=request.label_filter,
+            )
 
-        inside_mask = points_in_polygon(candidate_coords, poly)
-        if not np.any(inside_mask):
-            return {"total": 0, "offset": request.offset, "limit": request.limit, "sample_ids": [], "samples": []}
+            if candidate_coords.size == 0:
+                return {
+                    "total": 0,
+                    "offset": request.offset,
+                    "limit": request.limit,
+                    "sample_ids": [],
+                    "samples": [],
+                }
 
-        selected_ids = [candidate_ids[i] for i in np.flatnonzero(inside_mask)]
+            inside_mask = points_in_polygon(candidate_coords, poly)
+            if not np.any(inside_mask):
+                return {
+                    "total": 0,
+                    "offset": request.offset,
+                    "limit": request.limit,
+                    "sample_ids": [],
+                    "samples": [],
+                }
+
+            selected_ids = [candidate_ids[i] for i in np.flatnonzero(inside_mask)]
+        elif layout_dimension == 3:
+            if request.view_3d is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="view_3d is required for 3D lasso selection",
+                )
+            if request.viewport_width is None or request.viewport_height is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="viewport_width and viewport_height are required for 3D lasso selection",
+                )
+            if request.viewport_width <= 0 or request.viewport_height <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="viewport_width and viewport_height must be > 0",
+                )
+
+            try:
+                view_3d = OrbitViewState3D(**request.view_3d)
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=f"Invalid view_3d payload: {exc}")
+
+            view_vals = np.array(
+                [
+                    view_3d.yaw,
+                    view_3d.pitch,
+                    view_3d.distance,
+                    view_3d.target_x,
+                    view_3d.target_y,
+                    view_3d.target_z,
+                    view_3d.ortho_scale,
+                ],
+                dtype=np.float64,
+            )
+            if not np.all(np.isfinite(view_vals)):
+                raise HTTPException(status_code=400, detail="view_3d must contain only finite numbers")
+            if view_3d.distance <= 0 or view_3d.ortho_scale <= 0:
+                raise HTTPException(status_code=400, detail="view_3d.distance and view_3d.ortho_scale must be > 0")
+
+            ids, labels, coords = ds.get_visualization_data(request.layout_key)
+            if not ids:
+                return {
+                    "total": 0,
+                    "offset": request.offset,
+                    "limit": request.limit,
+                    "sample_ids": [],
+                    "samples": [],
+                }
+            if coords.ndim != 2 or coords.shape[1] != 3:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"3D lasso requires a 3D layout coordinate matrix; "
+                        f"got shape {coords.shape} for layout '{request.layout_key}'."
+                    ),
+                )
+
+            finite_mask = np.all(np.isfinite(coords), axis=1)
+            if not np.all(finite_mask):
+                finite_indices = np.flatnonzero(finite_mask)
+                if finite_indices.size == 0:
+                    return {
+                        "total": 0,
+                        "offset": request.offset,
+                        "limit": request.limit,
+                        "sample_ids": [],
+                        "samples": [],
+                    }
+                ids = [ids[int(i)] for i in finite_indices]
+                labels = [labels[int(i)] for i in finite_indices]
+                coords = coords[finite_mask]
+
+            selected_ids = select_ids_for_3d_lasso(
+                ids=ids,
+                labels=labels,
+                coords=coords,
+                geometry=layout_info.geometry,
+                polygon=poly,
+                view=view_3d,
+                viewport_width=request.viewport_width,
+                viewport_height=request.viewport_height,
+                label_filter=request.label_filter,
+            )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported layout dimension for lasso: {layout_dimension}D",
+            )
+
         total = len(selected_ids)
 
         start = int(request.offset)

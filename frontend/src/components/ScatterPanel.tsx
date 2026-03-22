@@ -22,19 +22,25 @@ import {
 import { useHyperScatter } from "./useHyperScatter";
 import { useLabelLegend } from "./useLabelLegend";
 import type { Geometry } from "@/types";
-import { findLayoutByGeometry, listAvailableGeometries } from "@/lib/layouts";
-import { fetchEmbeddings } from "@/lib/api";
+import {
+  findLayoutByGeometry,
+  getLayoutDimension,
+  listAvailableGeometries,
+} from "@/lib/layouts";
+import { ApiError, fetchDataset, fetchEmbeddings } from "@/lib/api";
 
 interface ScatterPanelProps {
   className?: string;
   layoutKey?: string;
   geometry?: Geometry;
+  layoutDimension?: 2 | 3;
 }
 
 export function ScatterPanel({
   className = "",
   layoutKey,
   geometry,
+  layoutDimension = 2,
 }: ScatterPanelProps) {
   const {
     datasetInfo,
@@ -46,16 +52,23 @@ export function ScatterPanel({
     hoveredId,
     setHoveredId,
     setActiveLayoutKey,
+    setDatasetInfo,
     labelFilter,
   } = useStore();
 
   const [localGeometry, setLocalGeometry] = useState<Geometry>("euclidean");
   const [localLayoutKey, setLocalLayoutKey] = useState<string | null>(null);
 
+  const renderableLayouts = useMemo(() => {
+    return (datasetInfo?.layouts ?? []).filter(
+      (layout) => getLayoutDimension(layout.layout_key) === layoutDimension
+    );
+  }, [datasetInfo?.layouts, layoutDimension]);
+
   // Check which geometries are available
   const availableGeometries = useMemo(() => {
-    return listAvailableGeometries(datasetInfo?.layouts ?? []);
-  }, [datasetInfo?.layouts]);
+    return listAvailableGeometries(renderableLayouts, layoutDimension);
+  }, [layoutDimension, renderableLayouts]);
 
   useEffect(() => {
     if (geometry) return;
@@ -71,31 +84,35 @@ export function ScatterPanel({
     if (!datasetInfo) return localLayoutKey ?? layoutKey ?? null;
 
     if (localLayoutKey) {
-      const exists = datasetInfo.layouts.some((layout) => layout.layout_key === localLayoutKey);
+      const exists = renderableLayouts.some((layout) => layout.layout_key === localLayoutKey);
       if (exists) return localLayoutKey;
     }
 
     if (layoutKey) {
-      const exists = datasetInfo.layouts.some((layout) => layout.layout_key === layoutKey);
+      const exists = renderableLayouts.some((layout) => layout.layout_key === layoutKey);
       if (exists) return layoutKey;
     }
 
-    const layout = findLayoutByGeometry(datasetInfo.layouts, resolvedGeometry);
-    return layout?.layout_key ?? datasetInfo.layouts[0]?.layout_key ?? null;
-  }, [datasetInfo, layoutKey, localLayoutKey, resolvedGeometry]);
+    const layout = findLayoutByGeometry(renderableLayouts, resolvedGeometry, layoutDimension);
+    if (geometry) {
+      return layout?.layout_key ?? null;
+    }
+
+    return layout?.layout_key ?? renderableLayouts[0]?.layout_key ?? null;
+  }, [datasetInfo, geometry, layoutDimension, layoutKey, localLayoutKey, renderableLayouts, resolvedGeometry]);
 
   useEffect(() => {
     if (!datasetInfo || !localLayoutKey) return;
-    const exists = datasetInfo.layouts.some((layout) => layout.layout_key === localLayoutKey);
+    const exists = renderableLayouts.some((layout) => layout.layout_key === localLayoutKey);
     if (!exists) {
       setLocalLayoutKey(null);
     }
-  }, [datasetInfo, localLayoutKey]);
+  }, [datasetInfo, localLayoutKey, renderableLayouts]);
 
   const resolvedLayout = useMemo(() => {
     if (!datasetInfo || !resolvedLayoutKey) return null;
-    return datasetInfo.layouts.find((layout) => layout.layout_key === resolvedLayoutKey) ?? null;
-  }, [datasetInfo, resolvedLayoutKey]);
+    return renderableLayouts.find((layout) => layout.layout_key === resolvedLayoutKey) ?? null;
+  }, [datasetInfo, renderableLayouts, resolvedLayoutKey]);
 
   const resolvedSpace = useMemo(() => {
     if (!datasetInfo || !resolvedLayout) return null;
@@ -103,9 +120,8 @@ export function ScatterPanel({
   }, [datasetInfo, resolvedLayout]);
 
   const geometryLayouts = useMemo(() => {
-    if (!datasetInfo) return [];
-    return datasetInfo.layouts.filter((layout) => layout.geometry === resolvedGeometry);
-  }, [datasetInfo, resolvedGeometry]);
+    return renderableLayouts.filter((layout) => layout.geometry === resolvedGeometry);
+  }, [renderableLayouts, resolvedGeometry]);
 
   const modelOptions = useMemo<PanelContextOption[]>(() => {
     if (!datasetInfo || geometryLayouts.length === 0) return [];
@@ -271,17 +287,49 @@ export function ScatterPanel({
         if (cancelled) return;
         setEmbeddingsForLayout(resolvedLayoutKey, data);
       })
-      .catch((err) => {
+      .catch(async (err) => {
         if (cancelled) return;
+
+        if (
+          err instanceof ApiError &&
+          err.status === 404 &&
+          typeof err.detail === "string" &&
+          err.detail.includes("Layout not found")
+        ) {
+          // The dock layout can reference stale layout keys after backend/session changes.
+          // Refresh metadata and let resolvedLayoutKey fall back to currently available layouts.
+          if (localLayoutKey === resolvedLayoutKey) {
+            setLocalLayoutKey(null);
+          }
+          setActiveLayoutKey(null);
+
+          try {
+            const dataset = await fetchDataset();
+            if (cancelled) return;
+            setDatasetInfo(dataset);
+          } catch (refreshErr) {
+            if (cancelled) return;
+            console.error("Failed to refresh dataset metadata after stale layout key:", refreshErr);
+          }
+          return;
+        }
+
         console.error("Failed to load embeddings:", err);
       })
 
     return () => {
       cancelled = true;
     };
-  }, [embeddingsByLayoutKey, resolvedLayoutKey, setEmbeddingsForLayout]);
+  }, [
+    embeddingsByLayoutKey,
+    localLayoutKey,
+    resolvedLayoutKey,
+    setActiveLayoutKey,
+    setDatasetInfo,
+    setEmbeddingsForLayout,
+  ]);
 
-  const { labelsInfo } = useLabelLegend({ datasetInfo, embeddings, labelFilter });
+  const { labelsInfo } = useLabelLegend({ datasetInfo, embeddings });
 
   const {
     canvasRef,
@@ -296,12 +344,12 @@ export function ScatterPanel({
   } = useHyperScatter({
     embeddings,
     labelsInfo,
+    labelFilter,
     selectedIds,
     hoveredId,
     setSelectedIds,
     beginLassoSelection,
     setHoveredId,
-    hoverEnabled: !labelFilter,
   });
 
   const focusLayout = useCallback(() => {
@@ -311,7 +359,7 @@ export function ScatterPanel({
 
   const loadingLabel = resolvedLayoutKey
     ? "Loading embeddings..."
-    : "No embeddings layout available";
+    : `No ${layoutDimension}D embeddings layout available`;
 
   return (
     <Panel className={className}>

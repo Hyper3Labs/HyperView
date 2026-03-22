@@ -110,15 +110,11 @@ export function buildLabelsInfo(params: {
   datasetLabels: string[];
   embeddings: EmbeddingsData | null;
   labelColorMapId: LabelColorMapId;
-  labelFilter?: string | null;
-  unselectedAlpha?: number;
 }): ScatterLabelsInfo | null {
   const {
     datasetLabels,
     embeddings,
     labelColorMapId,
-    labelFilter = null,
-    unselectedAlpha = UNSELECTED_LABEL_ALPHA,
   } = params;
   if (!embeddings) return null;
 
@@ -152,16 +148,9 @@ export function buildLabelsInfo(params: {
     labels: universe,
     paletteId: labelColorMapId,
   });
-  let palette = universe.map((l) => transfer.colorFor(l));
+  const palette = universe.map((l) => transfer.colorFor(l));
 
-  const filteredPalette = applyLabelFilterToPalette({
-    palette,
-    labels: universe,
-    labelFilter,
-    unselectedAlpha,
-  });
-
-  return { uniqueLabels: universe, categories, palette: filteredPalette };
+  return { uniqueLabels: universe, categories, palette };
 }
 
 export function buildLabelColorMap(params: {
@@ -181,27 +170,33 @@ export function buildLabelColorMap(params: {
   const map: Record<string, string> = {};
 
   if (labelsInfo) {
+    const filteredPalette = applyLabelFilterToPalette({
+      palette: labelsInfo.palette,
+      labels: labelsInfo.uniqueLabels,
+      labelFilter,
+      unselectedAlpha,
+    });
+
     for (let i = 0; i < labelsInfo.uniqueLabels.length; i++) {
-      map[labelsInfo.uniqueLabels[i]] = labelsInfo.palette[i] ?? FALLBACK_LABEL_COLOR;
+      map[labelsInfo.uniqueLabels[i]] = filteredPalette[i] ?? FALLBACK_LABEL_COLOR;
     }
-    return map;
-  }
+  } else {
+    if (labelUniverse.length === 0) return map;
 
-  if (labelUniverse.length === 0) return map;
+    const transfer = createCategoricalLabelTransferFunction({
+      labels: labelUniverse,
+      paletteId: labelColorMapId,
+    });
+    for (const label of labelUniverse) {
+      map[label] = transfer.colorFor(label);
+    }
 
-  const transfer = createCategoricalLabelTransferFunction({
-    labels: labelUniverse,
-    paletteId: labelColorMapId,
-  });
-  for (const label of labelUniverse) {
-    map[label] = transfer.colorFor(label);
-  }
+    if (!labelFilter || !labelUniverse.includes(labelFilter)) return map;
 
-  if (!labelFilter || !labelUniverse.includes(labelFilter)) return map;
-
-  for (const label of labelUniverse) {
-    if (label !== labelFilter) {
-      map[label] = applyAlphaToHex(map[label], unselectedAlpha);
+    for (const label of labelUniverse) {
+      if (label !== labelFilter) {
+        map[label] = applyAlphaToHex(map[label], unselectedAlpha);
+      }
     }
   }
 

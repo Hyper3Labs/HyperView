@@ -31,6 +31,28 @@ dataset.add_from_huggingface(
 )
 ```
 
+To target a named Hugging Face subset/configuration, pass `config="default"`
+or another config name alongside `split=`.
+
+To avoid materializing the full split before sampling, use `streaming=True`.
+This keeps ingestion on Hugging Face's iterable dataset path and stops after the
+requested rows:
+
+```python
+dataset.add_from_huggingface(
+    "uoft-cs/cifar100",
+    split="train",
+    image_key="img",
+    label_key="fine_label",
+    max_samples=500,
+    streaming=True,
+)
+```
+
+When `streaming=True` and `shuffle=True`, sampling becomes approximate and
+buffer-based. Tune `shuffle_buffer_size=` if you need more mixing and can afford
+additional read-ahead.
+
 ### From Directory
 ```python
 dataset.add_images_dir("/path/to/images", label_from_folder=True)
@@ -66,8 +88,8 @@ Samples are **never implicitly deleted**. Use `hv.Dataset.delete("name")` for ex
 # High-dimensional embeddings (CLIP)
 dataset.compute_embeddings(model="openai/clip-vit-base-patch32", show_progress=True)
 
-# 2D projections for visualization
-dataset.compute_visualization()  # UMAP to Euclidean + Hyperbolic
+# 2D projection for visualization
+dataset.compute_visualization()  # Defaults to euclidean:2d
 ```
 
 Embeddings are stored per-sample. If a sample already has embeddings, it's skipped.
