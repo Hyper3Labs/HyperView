@@ -17,7 +17,7 @@
 ## Features
 
 - **Dual-Panel UI**: Image grid + scatter plot with bidirectional selection
-- **Euclidean/Poincaré Toggle**: Switch between standard 2D UMAP and Poincaré disk visualization
+- **Multi-Layout Visualizations**: Explore Euclidean, Poincare, and spherical layouts in 2D or 3D with UMAP or PCA projections
 - **HuggingFace Integration**: Load datasets directly from HuggingFace Hub
 - **Fast Embeddings**: Uses EmbedAnything for CLIP-based image embeddings
 
@@ -48,14 +48,15 @@ hyperview \
   --label-key label \
   --samples 500 \
   --model openai/clip-vit-base-patch32 \
-  --geometry both
+  --layout euclidean \
+  --layout poincare
 ```
 
 This will:
 1. Use dataset `cifar10_demo`
 2. Load up to 500 samples from CIFAR-10
 3. Compute CLIP embeddings
-4. Generate Euclidean and Poincaré visualizations
+4. Generate Euclidean and Poincare visualizations
 5. Start the server at **http://127.0.0.1:6262**
 
 You can also launch with explicit dataset/model/projection args:
@@ -70,7 +71,7 @@ hyperview \
   --samples 1000 \
   --model openai/clip-vit-base-patch32 \
   --method umap \
-  --geometry euclidean
+  --layout euclidean
 ```
 
 ### Python API
