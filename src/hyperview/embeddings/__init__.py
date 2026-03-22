@@ -1,5 +1,7 @@
 """Embedding computation and projection."""
 
+# Register HyperView providers into LanceDB registry.
+import hyperview.embeddings.providers.lancedb_providers as _lancedb_providers  # noqa: F401
 from hyperview.embeddings.compute import EmbeddingComputer
 from hyperview.embeddings.engine import (
     EmbeddingSpec,
@@ -7,9 +9,6 @@ from hyperview.embeddings.engine import (
     get_provider_info,
     list_embedding_providers,
 )
-
-# Register HyperView providers into LanceDB registry.
-import hyperview.embeddings.providers.lancedb_providers as _lancedb_providers  # noqa: F401
 
 
 def __getattr__(name: str):

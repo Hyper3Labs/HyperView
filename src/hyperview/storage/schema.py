@@ -5,7 +5,7 @@ Storage architecture:
 - metadata: Key-value pairs for dataset config
 - spaces: Registry of embedding spaces
 - embeddings__<space_key>: One table per embedding space (id + vector)
-- layouts__<layout_key>: One table per layout (id + x + y)
+- layouts__<layout_key>: One table per layout (id + x + y [+ z])
 """
 
 import json
@@ -16,6 +16,32 @@ from typing import Any
 import pyarrow as pa
 
 from hyperview.core.sample import Sample
+
+
+def normalize_layout_dimension(layout_dimension: int) -> int:
+    """Validate and normalize a visualization layout dimension."""
+    if layout_dimension not in (2, 3):
+        raise ValueError(
+            "layout_dimension must be one of "
+            f"(2, 3), got {layout_dimension}"
+        )
+    return int(layout_dimension)
+
+
+def parse_layout_dimension(layout_key: str) -> int:
+    """Extract the visualization dimension from a layout key.
+
+    Layout keys must end with ``__2d`` / ``__3d`` optionally followed by a
+    params hash.
+    """
+    suffix = layout_key.rsplit("__", 1)[-1]
+    dimension_token = suffix.split("_", 1)[0]
+    if dimension_token not in ("2d", "3d"):
+        raise ValueError(
+            "layout_key must end with '__2d' or '__3d'"
+            f" (optionally followed by a params hash), got '{layout_key}'"
+        )
+    return int(dimension_token[0])
 
 
 def create_sample_schema() -> pa.Schema:
@@ -76,18 +102,26 @@ def create_embeddings_schema(dim: int) -> pa.Schema:
     )
 
 
-def create_layouts_schema() -> pa.Schema:
+def create_layouts_schema(layout_dimension: int = 2) -> pa.Schema:
     """Create the PyArrow schema for a layouts table.
 
-    Layouts store 2D coordinates for visualization.
+    Layouts store dimension-specific scalar coordinate columns for visualization.
+
+    Args:
+        layout_dimension: Number of layout dimensions.
     """
-    return pa.schema(
-        [
-            pa.field("id", pa.utf8(), nullable=False),
-            pa.field("x", pa.float32(), nullable=False),
-            pa.field("y", pa.float32(), nullable=False),
-        ]
-    )
+    layout_dimension = normalize_layout_dimension(layout_dimension)
+
+    fields: list[pa.Field] = [
+        pa.field("id", pa.utf8(), nullable=False),
+        pa.field("x", pa.float32(), nullable=False),
+        pa.field("y", pa.float32(), nullable=False),
+    ]
+
+    if layout_dimension == 3:
+        fields.append(pa.field("z", pa.float32(), nullable=False))
+
+    return pa.schema(fields)
 
 
 @dataclass
@@ -150,7 +184,7 @@ class SpaceInfo:
 def create_layouts_registry_schema() -> pa.Schema:
     """Create the PyArrow schema for the layouts registry.
 
-    Each row represents a layout (2D projection of an embedding space).
+    Each row represents a layout projection of an embedding space.
     """
     return pa.schema(
         [
@@ -167,7 +201,7 @@ def create_layouts_registry_schema() -> pa.Schema:
 
 @dataclass
 class LayoutInfo:
-    """Metadata for a layout (2D projection)."""
+    """Metadata for a layout projection."""
 
     layout_key: str
     space_key: str
@@ -176,6 +210,10 @@ class LayoutInfo:
     count: int
     created_at: int
     params: dict[str, Any] | None = None
+
+    @property
+    def layout_dimension(self) -> int:
+        return parse_layout_dimension(self.layout_key)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -241,13 +279,15 @@ def make_layout_key(
     space_key: str,
     method: str = "umap",
     geometry: str = "euclidean",
+    layout_dimension: int = 2,
     params: dict | None = None,
 ) -> str:
     """Generate a layout_key from space, method, geometry, and params.
 
     The params are hashed to ensure different parameter sets get different keys.
     """
-    base = f"{space_key}__{geometry}_{method}"
+    layout_dimension = normalize_layout_dimension(layout_dimension)
+    base = f"{space_key}__{geometry}_{method}__{layout_dimension}d"
     if params:
         # Create a stable hash of params
         import hashlib

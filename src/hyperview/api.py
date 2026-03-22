@@ -7,6 +7,7 @@ import threading
 import time
 import webbrowser
 from dataclasses import dataclass
+from importlib.util import find_spec
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 from uuid import uuid4
@@ -53,6 +54,16 @@ def _read_health(url: str, timeout_s: float) -> _HealthResponse:
         dataset=data.get("dataset"),
         pid=data.get("pid") if isinstance(data.get("pid"), int) else None,
     )
+
+
+def _resolve_default_launch_layout(dataset: Dataset) -> str:
+    spaces = dataset.list_spaces()
+
+    if any(space.geometry not in ("hyperboloid", "hypersphere") for space in spaces):
+        return "euclidean:2d"
+    if any(space.geometry == "hypersphere" for space in spaces):
+        return "spherical:3d"
+    return "poincare:2d"
 
 
 class Session:
@@ -228,9 +239,9 @@ def launch(
     """Launch the HyperView visualization server.
 
     Note:
-        HyperView's UI needs at least one 2D layout. If layouts are missing but
-        embedding spaces exist, this function will compute a default layout
-        automatically (Euclidean if any Euclidean space exists, otherwise Poincaré).
+        HyperView needs at least one visualization to display. If no layouts
+        exist yet but embedding spaces do, this function computes one default
+        layout automatically.
 
     Args:
         dataset: The dataset to visualize.
@@ -318,26 +329,26 @@ def launch(
             "port or stop the process listening on that port."
         )
 
-    # The frontend requires 2D coords from /api/embeddings.
-    # Ensure at least one layout exists; do not auto-generate optional geometries.
     layouts = dataset.list_layouts()
     spaces = dataset.list_spaces()
 
-    if not spaces:
+    if not layouts and not spaces:
         raise ValueError(
-            "HyperView launch requires 2D projections for the UI. "
-            "No projections or embedding spaces were found. "
+            "HyperView launch requires at least one visualization or embedding space. "
+            "No visualizations or embedding spaces were found. "
             "Call `dataset.compute_embeddings()` and `dataset.compute_visualization()` "
-            "before `hv.launch()`."
+            "or `dataset.set_coords()` before `hv.launch()`."
         )
 
     if not layouts:
-        has_euclidean_space = any(s.geometry != "hyperboloid" for s in spaces)
-        default_geometry = "euclidean" if has_euclidean_space else "poincare"
+        default_layout = _resolve_default_launch_layout(dataset)
 
-        print(f"No layouts found. Computing {default_geometry} visualization...")
+        print(f"No visualizations found. Computing {default_layout} visualization...")
         # Let compute_visualization pick the most appropriate default space.
-        dataset.compute_visualization(space_key=None, geometry=default_geometry)
+        dataset.compute_visualization(
+            space_key=None,
+            layout=default_layout,
+        )
 
     session = Session(dataset, host, port)
 
@@ -390,9 +401,6 @@ def _is_colab() -> bool:
     """Check if running inside a Google Colab notebook runtime."""
     if os.environ.get("COLAB_RELEASE_TAG"):
         return True
-    try:
-        import google.colab  # type: ignore[import-not-found]
-
+    if find_spec("google.colab") is not None:
         return True
-    except ImportError:
-        return False
+    return False

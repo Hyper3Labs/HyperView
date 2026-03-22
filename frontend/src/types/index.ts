@@ -9,7 +9,7 @@ export interface Sample {
   height: number | null;
 }
 
-export type Geometry = "euclidean" | "poincare";
+export type Geometry = "euclidean" | "poincare" | "spherical";
 
 export interface SpaceInfo {
   space_key: string;
@@ -43,7 +43,7 @@ export interface EmbeddingsData {
   geometry: Geometry;
   ids: string[];
   labels: (string | null)[];
-  coords: [number, number][];
+  coords: number[][];
 }
 
 export interface SamplesResponse {

@@ -2,15 +2,23 @@ import { create } from "zustand";
 import type { DatasetInfo, EmbeddingsData, Sample } from "@/types";
 import { normalizeLabel } from "@/lib/labelColors";
 
-function computeLabelSelection(embeddings: EmbeddingsData, label: string): Set<string> {
-  const target = normalizeLabel(label);
-  const ids = new Set<string>();
-  for (let i = 0; i < embeddings.labels.length; i++) {
-    if (normalizeLabel(embeddings.labels[i]) === target) {
-      ids.add(embeddings.ids[i]);
-    }
-  }
-  return ids;
+export interface OrbitView3DPayload {
+  yaw: number;
+  pitch: number;
+  distance: number;
+  target_x: number;
+  target_y: number;
+  target_z: number;
+  ortho_scale: number;
+}
+
+export interface LassoQueryPayload {
+  layoutKey: string;
+  polygon: number[];
+  labelFilter: string | null;
+  view3d: OrbitView3DPayload | null;
+  viewportWidth: number | null;
+  viewportHeight: number | null;
 }
 
 interface AppState {
@@ -50,18 +58,18 @@ interface AppState {
   // Selection
   selectedIds: Set<string>;
   isLassoSelection: boolean;
-  selectionSource: "scatter" | "grid" | "lasso" | "label" | null;
-  setSelectedIds: (ids: Set<string>, source?: "scatter" | "grid" | "label") => void;
+  selectionSource: "scatter" | "grid" | "lasso" | null;
+  setSelectedIds: (ids: Set<string>, source?: "scatter" | "grid") => void;
   toggleSelection: (id: string) => void;
   addToSelection: (ids: string[]) => void;
   clearSelection: () => void;
 
   // Lasso selection (server-driven)
-  lassoQuery: { layoutKey: string; polygon: number[] } | null;
+  lassoQuery: LassoQueryPayload | null;
   lassoSamples: Sample[];
   lassoTotal: number;
   lassoIsLoading: boolean;
-  beginLassoSelection: (query: { layoutKey: string; polygon: number[] }) => void;
+  beginLassoSelection: (query: LassoQueryPayload) => void;
   setLassoResults: (samples: Sample[], total: number, append?: boolean) => void;
   clearLassoSelection: () => void;
 
@@ -118,72 +126,29 @@ export const useStore = create<AppState>((set, get) => ({
   // Embeddings
   embeddingsByLayoutKey: {},
   setEmbeddingsForLayout: (layoutKey, data) =>
-    set((state) => {
-      const selectionUpdate =
-        state.labelFilter &&
-        state.selectionSource === "label" &&
-        state.activeLayoutKey === layoutKey
-          ? {
-              selectedIds: computeLabelSelection(data, state.labelFilter),
-              selectionSource: "label" as const,
-            }
-          : {};
-
-      return {
-        embeddingsByLayoutKey: { ...state.embeddingsByLayoutKey, [layoutKey]: data },
-        ...selectionUpdate,
-      };
-    }),
+    set((state) => ({
+      embeddingsByLayoutKey: { ...state.embeddingsByLayoutKey, [layoutKey]: data },
+    })),
 
   // Active layout
   activeLayoutKey: null,
-  setActiveLayoutKey: (layoutKey) =>
-    set((state) => {
-      if (!layoutKey) return { activeLayoutKey: null };
-      if (!state.labelFilter || state.selectionSource !== "label") {
-        return { activeLayoutKey: layoutKey };
-      }
-
-      const embeddings = state.embeddingsByLayoutKey[layoutKey];
-      if (!embeddings) {
-        return {
-          activeLayoutKey: layoutKey,
-          selectedIds: new Set<string>(),
-          selectionSource: "label",
-        };
-      }
-
-      return {
-        activeLayoutKey: layoutKey,
-        selectedIds: computeLabelSelection(embeddings, state.labelFilter),
-        selectionSource: "label",
-      };
-    }),
+  setActiveLayoutKey: (layoutKey) => set({ activeLayoutKey: layoutKey }),
 
   // Label filter
   labelFilter: null,
-  setLabelFilter: (label) =>
-    set((state) => {
-      const nextLabel = label ? normalizeLabel(label) : null;
-      const nextState: Partial<AppState> = { labelFilter: nextLabel };
-
-      if (nextLabel) {
-        const layoutKey = state.activeLayoutKey;
-        const embeddings = layoutKey ? state.embeddingsByLayoutKey[layoutKey] : null;
-        nextState.selectedIds = embeddings ? computeLabelSelection(embeddings, nextLabel) : new Set<string>();
-        nextState.selectionSource = "label";
-        nextState.isLassoSelection = false;
-        nextState.lassoQuery = null;
-        nextState.lassoSamples = [];
-        nextState.lassoTotal = 0;
-        nextState.lassoIsLoading = false;
-      } else if (state.selectionSource === "label") {
-        nextState.selectedIds = new Set<string>();
-        nextState.selectionSource = null;
-      }
-
-      return nextState;
-    }),
+  setLabelFilter: (label) => {
+    const nextLabel = label ? normalizeLabel(label) : null;
+    set({
+      labelFilter: nextLabel,
+      selectedIds: new Set<string>(),
+      isLassoSelection: false,
+      selectionSource: null,
+      lassoQuery: null,
+      lassoSamples: [],
+      lassoTotal: 0,
+      lassoIsLoading: false,
+    });
+  },
 
   // Selection
   selectedIds: new Set<string>(),

@@ -6,6 +6,7 @@ import { DockviewWorkspace, DockviewProvider } from "@/components/DockviewWorksp
 import { useStore } from "@/store/useStore";
 import type { Sample } from "@/types";
 import {
+  ApiError,
   fetchDataset,
   fetchSamples,
   fetchSamplesBatch,
@@ -35,11 +36,21 @@ export default function Home() {
     lassoTotal,
     lassoIsLoading,
     setLassoResults,
+    clearLassoSelection,
     labelFilter,
   } = useStore();
 
   const [loadingMore, setLoadingMore] = useState(false);
   const labelFilterRef = useRef<string | null>(labelFilter ?? null);
+
+  const refreshDatasetMetadata = useCallback(async () => {
+    try {
+      const dataset = await fetchDataset();
+      setDatasetInfo(dataset);
+    } catch (refreshErr) {
+      console.error("Failed to refresh dataset metadata:", refreshErr);
+    }
+  }, [setDatasetInfo]);
 
   // Initial data load - runs once on mount
   // Store setters are stable and don't need to be in deps
@@ -74,7 +85,6 @@ export default function Home() {
     const fetchSelectedSamples = async () => {
       if (isLassoSelection) return;
       if (selectedIds.size === 0) return;
-      if (selectionSource === "label") return;
 
       // Find IDs that are selected but not in our samples array
       const loadedIds = new Set(samples.map((s) => s.id));
@@ -131,6 +141,10 @@ export default function Home() {
         const res = await fetchLassoSelection({
           layoutKey: lassoQuery.layoutKey,
           polygon: lassoQuery.polygon,
+          labelFilter: lassoQuery.labelFilter ?? undefined,
+          view3d: lassoQuery.view3d,
+          viewportWidth: lassoQuery.viewportWidth,
+          viewportHeight: lassoQuery.viewportHeight,
           offset: 0,
           limit: SAMPLES_PER_PAGE,
           signal: abort.signal,
@@ -139,6 +153,18 @@ export default function Home() {
         setLassoResults(res.samples, res.total, false);
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
+
+        if (
+          err instanceof ApiError &&
+          err.status === 404 &&
+          typeof err.detail === "string" &&
+          err.detail.includes("Layout not found")
+        ) {
+          clearLassoSelection();
+          void refreshDatasetMetadata();
+          return;
+        }
+
         console.error("Failed to fetch lasso selection:", err);
         setLassoResults([], 0, false);
       }
@@ -147,7 +173,14 @@ export default function Home() {
     run();
 
     return () => abort.abort();
-  }, [isLassoSelection, lassoIsLoading, lassoQuery, setLassoResults]);
+  }, [
+    clearLassoSelection,
+    isLassoSelection,
+    lassoIsLoading,
+    lassoQuery,
+    refreshDatasetMetadata,
+    setLassoResults,
+  ]);
 
   // Load more samples
   const loadMore = useCallback(async () => {
@@ -163,11 +196,26 @@ export default function Home() {
         const res = await fetchLassoSelection({
           layoutKey: lassoQuery.layoutKey,
           polygon: lassoQuery.polygon,
+          labelFilter: lassoQuery.labelFilter ?? undefined,
+          view3d: lassoQuery.view3d,
+          viewportWidth: lassoQuery.viewportWidth,
+          viewportHeight: lassoQuery.viewportHeight,
           offset: lassoSamples.length,
           limit: SAMPLES_PER_PAGE,
         });
         setLassoResults(res.samples, res.total, true);
       } catch (err) {
+        if (
+          err instanceof ApiError &&
+          err.status === 404 &&
+          typeof err.detail === "string" &&
+          err.detail.includes("Layout not found")
+        ) {
+          clearLassoSelection();
+          void refreshDatasetMetadata();
+          return;
+        }
+
         console.error("Failed to load more lasso samples:", err);
       } finally {
         setLoadingMore(false);
@@ -194,8 +242,10 @@ export default function Home() {
     lassoQuery,
     lassoSamples.length,
     lassoTotal,
+    clearLassoSelection,
     samplesLoaded,
     totalSamples,
+    refreshDatasetMetadata,
     setLassoResults,
     labelFilter,
   ]);

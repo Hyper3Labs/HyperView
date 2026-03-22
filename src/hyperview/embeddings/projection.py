@@ -10,7 +10,13 @@ logger = logging.getLogger(__name__)
 
 
 class ProjectionEngine:
-    """Engine for projecting high-dimensional embeddings to 2D."""
+    """Engine for projecting high-dimensional embeddings to low-dimensional layouts."""
+
+    def l2_normalize_rows(self, embeddings: np.ndarray) -> np.ndarray:
+        """L2-normalize embeddings row-wise with numerical safeguards."""
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        norms = np.maximum(norms, 1e-12)
+        return (embeddings / norms).astype(np.float32)
 
     def to_poincare_ball(
         self,
@@ -39,18 +45,18 @@ class ProjectionEngine:
         if c <= 0:
             raise ValueError(f"curvature must be > 0, got {c}")
 
-        # Radius R = 1/sqrt(c) for curvature -c
-        R = 1.0 / np.sqrt(c)
+        # Radius is 1/sqrt(c) for curvature -c.
+        radius = 1.0 / np.sqrt(c)
 
         t = hyperboloid_embeddings[:, :1]
         x = hyperboloid_embeddings[:, 1:]
 
-        # Map to ball radius R: u_R = x / (t + R)
-        denom = t + R
-        u_R = x / denom
+        # Map to the ball with the target radius.
+        denom = t + radius
+        ball_coords = x / denom
 
-        # Rescale to unit ball: u = u_R / R = sqrt(c) * u_R
-        u = u_R / R
+        # Rescale to the unit ball.
+        u = ball_coords / radius
 
         # Numerical guard: ensure inside the unit ball
         radii = np.linalg.norm(u, axis=1)
@@ -66,14 +72,17 @@ class ProjectionEngine:
         *,
         input_geometry: str = "euclidean",
         output_geometry: str = "euclidean",
+        n_components: int = 2,
+        normalize_input: bool = False,
         curvature: float | None = None,
         method: str = "umap",
         n_neighbors: int = 15,
         min_dist: float = 0.1,
         metric: str = "cosine",
         random_state: int = 42,
+        verbose: bool = False,
     ) -> np.ndarray:
-        """Project embeddings to 2D with geometry-aware preprocessing.
+        """Project embeddings with geometry-aware preprocessing.
 
         This separates two concerns:
         1) Geometry/model transforms for the *input* embeddings (e.g. hyperboloid -> Poincaré)
@@ -82,7 +91,9 @@ class ProjectionEngine:
         Args:
             embeddings: Input embeddings (N x D) or hyperboloid (N x D+1).
             input_geometry: Geometry/model of the input embeddings (euclidean, hyperboloid).
-            output_geometry: Geometry of the output coordinates (euclidean, poincare).
+            output_geometry: Geometry of the output coordinates (euclidean, poincare, spherical).
+            n_components: Number of output dimensions.
+            normalize_input: Whether to L2-normalize vectors before projection.
             curvature: Curvature parameter for hyperbolic embeddings (positive c).
             method: Layout method (currently only 'umap').
             n_neighbors: UMAP neighbors.
@@ -91,13 +102,18 @@ class ProjectionEngine:
             random_state: Random seed.
 
         Returns:
-            2D coordinates (N x 2).
+            Layout coordinates (N x n_components).
         """
         if method != "umap":
             raise ValueError(f"Invalid method: {method}. Only 'umap' is supported.")
+        if n_components < 2:
+            raise ValueError(f"n_components must be >= 2, got {n_components}")
 
         prepared = embeddings
         prepared_metric: str = metric
+
+        if normalize_input:
+            prepared = self.l2_normalize_rows(prepared)
 
         if input_geometry == "hyperboloid":
             # Convert to unit Poincaré ball and use UMAP's built-in hyperbolic distance.
@@ -105,26 +121,31 @@ class ProjectionEngine:
             prepared_metric = "poincare"
 
         if output_geometry == "poincare":
+            if n_components != 2:
+                raise ValueError("Poincare layouts currently require 2D output")
             return self.project_to_poincare(
                 prepared,
                 n_neighbors=n_neighbors,
                 min_dist=min_dist,
                 metric=prepared_metric,
                 random_state=random_state,
+                verbose=verbose,
             )
 
-        if output_geometry == "euclidean":
+        if output_geometry in ("euclidean", "spherical"):
             return self.project_umap(
                 prepared,
                 n_neighbors=n_neighbors,
                 min_dist=min_dist,
                 metric=prepared_metric,
-                n_components=2,
+                n_components=n_components,
                 random_state=random_state,
+                verbose=verbose,
             )
 
         raise ValueError(
-            f"Invalid output_geometry: {output_geometry}. Must be 'euclidean' or 'poincare'."
+            f"Invalid output_geometry: {output_geometry}. "
+            "Must be 'euclidean', 'poincare', or 'spherical'."
         )
 
     def project_umap(
@@ -135,8 +156,9 @@ class ProjectionEngine:
         metric: str = "cosine",
         n_components: int = 2,
         random_state: int = 42,
+        verbose: bool = False,
     ) -> np.ndarray:
-        """Project embeddings to Euclidean 2D using UMAP."""
+        """Project embeddings to Euclidean layout coordinates using UMAP."""
         n_neighbors = min(n_neighbors, len(embeddings) - 1)
         if n_neighbors < 2:
             n_neighbors = 2
@@ -150,6 +172,7 @@ class ProjectionEngine:
             metric=metric,
             random_state=random_state,
             n_jobs=n_jobs,
+            verbose=verbose,
         )
 
         coords = reducer.fit_transform(embeddings)
@@ -164,6 +187,7 @@ class ProjectionEngine:
         min_dist: float = 0.1,
         metric: str = "cosine",
         random_state: int = 42,
+        verbose: bool = False,
     ) -> np.ndarray:
         """Project embeddings to the Poincaré disk using UMAP with hyperboloid output."""
         n_neighbors = min(n_neighbors, len(embeddings) - 1)
@@ -183,6 +207,7 @@ class ProjectionEngine:
                 output_metric="hyperboloid",
                 random_state=random_state,
                 n_jobs=n_jobs,
+                verbose=verbose,
             )
             spatial_coords = reducer.fit_transform(embeddings)
 
