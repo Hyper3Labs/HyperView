@@ -119,9 +119,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--method",
-        choices=["umap"],
+        choices=["umap", "pca"],
         default="umap",
-        help="Projection method (currently only 'umap')",
+        help="Projection method: 'umap' (default) or 'pca'",
     )
     parser.add_argument(
         "--layout",

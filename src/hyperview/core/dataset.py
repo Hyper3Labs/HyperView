@@ -588,12 +588,12 @@ class Dataset:
 
         Args:
             space_key: Embedding space to project. If None, uses the first available.
-            method: Projection method ('umap' supported).
+            method: Projection method ('umap' or 'pca').
             layout: Layout spec like 'euclidean', 'euclidean:3d', or 'spherical'.
                 Omitting the suffix defaults to 2D for Euclidean/Poincare and 3D for spherical.
-            n_neighbors: Number of neighbors for UMAP.
-            min_dist: Minimum distance for UMAP.
-            metric: Distance metric for UMAP.
+            n_neighbors: Number of neighbors for UMAP (ignored for PCA).
+            min_dist: Minimum distance for UMAP (ignored for PCA).
+            metric: Distance metric for UMAP (ignored for PCA).
             force: Force recomputation even if layout exists.
 
         Returns:

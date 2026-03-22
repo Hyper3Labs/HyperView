@@ -137,7 +137,7 @@ def compute_layout(
     Args:
         storage: Storage backend with embeddings.
         space_key: Embedding space to project. If None, uses the first available.
-        method: Projection method ('umap' supported).
+        method: Projection method ('umap' or 'pca').
         geometry: Output geometry type ('euclidean', 'poincare', or 'spherical').
         layout_dimension: Visualization dimension (2D or 3D).
         n_neighbors: Number of neighbors for UMAP.
@@ -154,8 +154,10 @@ def compute_layout(
     """
     from hyperview.embeddings.projection import ProjectionEngine
 
-    if method != "umap":
-        raise ValueError(f"Invalid method: {method}. Only 'umap' is supported.")
+    if method not in ("umap", "pca"):
+        raise ValueError(
+            f"Invalid method: {method}. Supported methods: 'umap', 'pca'."
+        )
     layout_dimension = normalize_layout_dimension(layout_dimension)
 
     if geometry not in ("euclidean", "poincare", "spherical"):
@@ -191,14 +193,21 @@ def compute_layout(
     if len(ids) == 0:
         raise ValueError(f"No embeddings in space '{space_key}'. Call compute_embeddings() first.")
 
-    if len(ids) < 3:
-        raise ValueError(f"Need at least 3 samples for visualization, have {len(ids)}")
+    min_samples = 3 if method == "umap" else 2
+    if len(ids) < min_samples:
+        raise ValueError(
+            f"Need at least {min_samples} samples for {method} visualization, have {len(ids)}"
+        )
 
-    layout_params = {
-        "n_neighbors": n_neighbors,
-        "min_dist": min_dist,
-        "metric": metric,
-    }
+    layout_params: dict[str, Any] | None
+    if method == "umap":
+        layout_params = {
+            "n_neighbors": n_neighbors,
+            "min_dist": min_dist,
+            "metric": metric,
+        }
+    else:
+        layout_params = None
 
     normalize_input = geometry == "spherical"
 
