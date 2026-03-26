@@ -151,7 +151,7 @@ class StorageBackend(ABC):
 
     @abstractmethod
     def add_layout_coords(self, layout_key: str, ids: list[str], coords: np.ndarray) -> None:
-        """Add layout coordinates (N x 2)."""
+        """Add layout coordinates (N x D)."""
 
     @abstractmethod
     def get_layout_coords(
@@ -170,6 +170,7 @@ class StorageBackend(ABC):
         x_max: float,
         y_min: float,
         y_max: float,
+        label_filter: str | None = None,
     ) -> tuple[list[str], np.ndarray]:
         """Return candidate (id, xy) rows within an axis-aligned bounding box."""
 

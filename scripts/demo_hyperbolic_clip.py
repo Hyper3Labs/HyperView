@@ -27,9 +27,9 @@ def main() -> None:
     print(f"Loaded {len(dataset)} samples")
 
     clip_space = dataset.compute_embeddings(CLIP_MODEL_ID)
-    dataset.compute_visualization(space_key=clip_space, geometry="euclidean")
+    dataset.compute_visualization(space_key=clip_space, layout="euclidean")
     hyper_space = dataset.compute_embeddings(model=HYPER_MODELS_MODEL_ID)
-    dataset.compute_visualization(space_key=hyper_space, geometry="poincare")
+    dataset.compute_visualization(space_key=hyper_space, layout="poincare")
 
     print("Launching at http://127.0.0.1:6262")
 

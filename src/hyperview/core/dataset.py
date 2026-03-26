@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import threading
+import time
 import uuid
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -15,7 +18,79 @@ from PIL import Image
 
 from hyperview.core.sample import Sample
 from hyperview.storage.backend import StorageBackend
-from hyperview.storage.schema import make_layout_key
+from hyperview.storage.schema import (
+    make_layout_key,
+    normalize_layout_dimension,
+    parse_layout_dimension,
+)
+
+DEFAULT_VISUALIZATION_LAYOUT = "euclidean"
+VALID_VISUALIZATION_GEOMETRIES = ("euclidean", "poincare", "spherical")
+
+
+def _format_elapsed(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    total_seconds = int(round(seconds))
+    minutes, secs = divmod(total_seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m {secs:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes:02d}m {secs:02d}s"
+
+
+def _format_eta(seconds: float) -> str:
+    if not math.isfinite(seconds) or seconds < 0:
+        return "unknown"
+    return _format_elapsed(seconds)
+
+
+def _fallback_huggingface_fingerprint(
+    dataset_name: str,
+    config_name: str,
+    split: str,
+    version: str | None,
+) -> str:
+    identity = f"{dataset_name}:{config_name}:{split}:{version or 'unknown'}"
+    return hashlib.md5(identity.encode()).hexdigest()
+
+
+def parse_visualization_layout(layout: str) -> tuple[str, int]:
+    """Parse a public visualization layout spec like ``euclidean:3d``.
+
+    Omitting the suffix defaults to 2D for Euclidean and Poincare layouts,
+    and to 3D for spherical layouts.
+    """
+    layout_spec = layout.strip().lower()
+    if not layout_spec:
+        raise ValueError("layout must be a non-empty string")
+
+    if ":" in layout_spec:
+        geometry, dimension_spec = layout_spec.rsplit(":", 1)
+    else:
+        geometry = layout_spec
+        dimension_spec = "3d" if geometry.strip() == "spherical" else "2d"
+
+    geometry = geometry.strip()
+    dimension_spec = dimension_spec.strip()
+
+    if geometry not in VALID_VISUALIZATION_GEOMETRIES:
+        raise ValueError(
+            "layout geometry must be one of "
+            f"{VALID_VISUALIZATION_GEOMETRIES}, got '{geometry}'"
+        )
+
+    if dimension_spec not in ("2d", "3d"):
+        raise ValueError(
+            "layout must use the form '<geometry>:2d' or '<geometry>:3d', "
+            f"got '{layout}'"
+        )
+
+    layout_dimension = normalize_layout_dimension(int(dimension_spec[0]))
+    if geometry == "poincare" and layout_dimension != 2:
+        raise ValueError("Poincare layouts currently require 2D output.")
+
+    return geometry, layout_dimension
 
 
 class Dataset:
@@ -27,15 +102,7 @@ class Dataset:
     - Efficient storage and retrieval
 
     Embeddings are stored separately from samples, keyed by model_id.
-    Layouts (2D projections) are stored per layout_key (space + method).
-
-    Examples:
-        # Create a new dataset (auto-persisted)
-        dataset = hv.Dataset("my_dataset")
-        dataset.add_images_dir("/path/to/images")
-
-        # Create an in-memory dataset (for testing)
-        dataset = hv.Dataset("temp", persist=False)
+    Layouts (2D/3D projections) are stored per layout_key (space + method).
     """
 
     def __init__(
@@ -44,17 +111,8 @@ class Dataset:
         persist: bool = True,
         storage: StorageBackend | None = None,
     ):
-        """Initialize a new dataset.
-
-        Args:
-            name: Optional name for the dataset.
-            persist: If True (default), use LanceDB for persistence.
-                    If False, use in-memory storage.
-            storage: Optional custom storage backend. If provided, persist is ignored.
-        """
         self.name = name or f"dataset_{uuid.uuid4().hex[:8]}"
 
-        # Initialize storage backend
         if storage is not None:
             self._storage = storage
         elif persist:
@@ -64,7 +122,10 @@ class Dataset:
             self._storage = LanceDBBackend(self.name, config)
         else:
             from hyperview.storage import MemoryBackend
+
             self._storage = MemoryBackend(self.name)
+
+        self.last_requested_sample_ids: list[str] = []
 
     def __len__(self) -> int:
         return len(self._storage)
@@ -88,26 +149,18 @@ class Dataset:
         *,
         skip_existing: bool = True,
     ) -> tuple[int, int]:
-        """Shared ingestion helper for batch sample insertion.
+        """Shared ingestion helper for batch sample insertion."""
+        self.last_requested_sample_ids = [sample.id for sample in samples]
 
-        Handles deduplication uniformly.
-
-        Args:
-            samples: List of samples to ingest.
-            skip_existing: If True, skip samples that already exist in storage.
-
-        Returns:
-            Tuple of (num_added, num_skipped).
-        """
         if not samples:
             return 0, 0
 
         skipped = 0
         if skip_existing:
-            all_ids = [s.id for s in samples]
+            all_ids = [sample.id for sample in samples]
             existing_ids = self._storage.get_existing_ids(all_ids)
             if existing_ids:
-                samples = [s for s in samples if s.id not in existing_ids]
+                samples = [sample for sample in samples if sample.id not in existing_ids]
                 skipped = len(all_ids) - len(samples)
 
         if not samples:
@@ -124,17 +177,7 @@ class Dataset:
         metadata: dict[str, Any] | None = None,
         sample_id: str | None = None,
     ) -> Sample:
-        """Add a single image to the dataset.
-
-        Args:
-            filepath: Path to the image file.
-            label: Optional label for the image.
-            metadata: Optional metadata dictionary.
-            sample_id: Optional custom ID. If not provided, one will be generated.
-
-        Returns:
-            The created Sample.
-        """
+        """Add a single image to the dataset."""
         if sample_id is None:
             sample_id = hashlib.md5(filepath.encode()).hexdigest()[:12]
 
@@ -155,18 +198,7 @@ class Dataset:
         recursive: bool = True,
         skip_existing: bool = True,
     ) -> tuple[int, int]:
-        """Add all images from a directory.
-
-        Args:
-            directory: Path to the directory containing images.
-            extensions: Tuple of valid file extensions.
-            label_from_folder: If True, use parent folder name as label.
-            recursive: If True, search subdirectories.
-            skip_existing: If True (default), skip samples that already exist.
-
-        Returns:
-            Tuple of (num_added, num_skipped).
-        """
+        """Add all images from a directory."""
         directory_path = Path(directory)
         if not directory_path.exists():
             raise ValueError(f"Directory does not exist: {directory_path}")
@@ -186,12 +218,12 @@ class Dataset:
                 )
                 samples.append(sample)
 
-        # Use shared ingestion helper
         return self._ingest_samples(samples, skip_existing=skip_existing)
 
     def add_from_huggingface(
         self,
         dataset_name: str,
+        config: str | None = None,
         split: str = "train",
         image_key: str = "img",
         label_key: str | None = "fine_label",
@@ -199,68 +231,54 @@ class Dataset:
         max_samples: int | None = None,
         shuffle: bool = False,
         seed: int = 42,
+        streaming: bool = False,
+        shuffle_buffer_size: int = 1000,
         show_progress: bool = True,
         skip_existing: bool = True,
         image_format: str = "auto",
     ) -> tuple[int, int]:
-        """Load samples from a HuggingFace dataset.
-
-        Images are downloaded to disk at ~/.hyperview/media/huggingface/{dataset}/{split}/
-        This ensures images persist across sessions and embeddings can be computed
-        at any time, similar to FiftyOne's approach.
-
-        Args:
-            dataset_name: Name of the HuggingFace dataset.
-            split: Dataset split to use.
-            image_key: Key for the image column.
-            label_key: Key for the label column (can be None).
-            label_names_key: Key for label names in dataset info.
-            max_samples: Maximum number of samples to load.
-            shuffle: If True, shuffle the dataset before sampling (ensures diverse classes).
-            seed: Random seed for shuffling (default: 42).
-            show_progress: Whether to print progress.
-            skip_existing: If True (default), skip samples that already exist in storage.
-            image_format: Image format to save: "auto" (detect from source, fallback PNG),
-                         "png" (lossless), or "jpeg" (smaller files).
-
-        Returns:
-            Tuple of (num_added, num_skipped).
-        """
+        """Load samples from a Hugging Face dataset."""
         from hyperview.storage import StorageConfig
 
-        # HuggingFace `load_dataset()` can be surprisingly slow even when the dataset
-        # is already cached, due to Hub reachability checks in some environments.
-        # For a fast path, first try loading in "offline" mode (cache-only), and
-        # fall back to an online load if the dataset isn't cached yet.
-        try:
+        source_index_key = "__hyperview_source_index"
+
+        def attach_huggingface_source_index(
+            example: dict[str, Any],
+            index: int,
+        ) -> dict[str, Any]:
+            augmented = dict(example)
+            augmented[source_index_key] = index
+            return augmented
+
+        if shuffle_buffer_size < 1:
+            raise ValueError("shuffle_buffer_size must be >= 1")
+
+        if streaming:
             ds = cast(
                 Any,
                 load_dataset(
                     dataset_name,
+                    name=config,
                     split=split,
-                    download_config=DownloadConfig(local_files_only=True),
+                    streaming=True,
                 ),
             )
-        except Exception:
-            ds = cast(Any, load_dataset(dataset_name, split=split))
+        else:
+            try:
+                ds = cast(
+                    Any,
+                    load_dataset(
+                        dataset_name,
+                        name=config,
+                        split=split,
+                        download_config=DownloadConfig(local_files_only=True),
+                    ),
+                )
+            except Exception:
+                ds = cast(Any, load_dataset(dataset_name, name=config, split=split))
 
         source_fingerprint = ds._fingerprint if hasattr(ds, "_fingerprint") else None
 
-        dataset_size = len(ds)
-        total = dataset_size if max_samples is None else min(dataset_size, max_samples)
-
-        # Select source row indices explicitly so sampled subsets are clear and
-        # sample IDs remain stable for the same underlying row.
-        selected_indices: list[int] | None = None
-        if shuffle:
-            rng = np.random.default_rng(seed)
-            selected_indices = rng.permutation(dataset_size)[:total].tolist()
-            ds = ds.select(selected_indices)
-        elif max_samples is not None:
-            selected_indices = list(range(total))
-            ds = ds.select(selected_indices)
-
-        # Get label names if available
         label_names = None
         if label_key and label_names_key:
             if label_names_key in ds.features:
@@ -269,95 +287,222 @@ class Dataset:
             if hasattr(ds.features[label_key], "names"):
                 label_names = ds.features[label_key].names
 
-        # Extract dataset metadata for robust sample IDs
         config_name = getattr(ds.info, "config_name", None) or "default"
-        fingerprint = source_fingerprint[:8] if source_fingerprint else "unknown"
         version = str(ds.info.version) if ds.info.version else None
+        fingerprint_source = source_fingerprint or _fallback_huggingface_fingerprint(
+            dataset_name,
+            config_name,
+            split,
+            version,
+        )
+        fingerprint = fingerprint_source[:8]
 
-        # Get media directory for this dataset
-        config = StorageConfig.default()
-        media_dir = config.get_huggingface_media_dir(dataset_name, split)
+        total: int | None
+        selected_indices: list[int] | None = None
+        iterator: Iterator[Any]
+        if streaming:
+            stream = ds
+            if hasattr(stream, "select_columns"):
+                columns = [image_key]
+                if label_key:
+                    columns.append(label_key)
+                stream = stream.select_columns(list(dict.fromkeys(columns)))
+            stream = stream.map(attach_huggingface_source_index, with_indices=True)
+            if shuffle:
+                if hasattr(stream, "reshard"):
+                    stream = stream.reshard()
+                stream = stream.shuffle(seed=seed, buffer_size=shuffle_buffer_size)
+            if max_samples is not None:
+                total = max_samples
+                iterator = iter(stream.take(max_samples))
+            else:
+                total = None
+                iterator = iter(stream)
+        else:
+            dataset_size = len(ds)
+            total = dataset_size if max_samples is None else min(dataset_size, max_samples)
 
-        samples = []
+            if shuffle:
+                rng = np.random.default_rng(seed)
+                selected_indices = rng.permutation(dataset_size)[:total].tolist()
+                ds = ds.select(selected_indices)
+            elif max_samples is not None:
+                selected_indices = list(range(total))
+                ds = ds.select(selected_indices)
+
+            iterator = (ds[i] for i in range(total))
+
+        storage_config = StorageConfig.default()
+        media_dir = storage_config.get_huggingface_media_dir(dataset_name, split)
+
+        samples: list[Sample] = []
 
         if show_progress:
-            print(f"Loading {total} samples from {dataset_name}...")
-
-        iterator = range(total)
-
-        for i in iterator:
-            item = ds[i]
-            source_index = selected_indices[i] if selected_indices is not None else i
-            image = item[image_key]
-
-            # Handle PIL Image or numpy array
-            if isinstance(image, Image.Image):
-                pil_image = image
+            if total is None:
+                print(f"Loading samples from {dataset_name} via streaming...", flush=True)
             else:
-                pil_image = Image.fromarray(np.asarray(image))
+                mode_suffix = " via streaming" if streaming else ""
+                print(
+                    f"Loading {total} samples from {dataset_name}{mode_suffix}...",
+                    flush=True,
+                )
 
-            # Get label
-            label = None
-            if label_key and label_key in item:
-                label_idx = item[label_key]
-                if label_names and isinstance(label_idx, int):
-                    label = label_names[label_idx]
+        started_at = time.perf_counter()
+        last_report_at = started_at
+        report_every = 50 if total is None else max(25, min(200, total // 20 or 25))
+        loaded = 0
+        progress_stop = threading.Event()
+
+        def emit_progress(now: float, *, waiting_for_first_sample: bool = False) -> None:
+            elapsed = max(now - started_at, 1e-9)
+            if waiting_for_first_sample:
+                if total is None:
+                    print(
+                        "Still waiting for the first streamed sample "
+                        f"(elapsed {_format_elapsed(elapsed)})",
+                        flush=True,
+                    )
                 else:
-                    label = str(label_idx)
+                    print(
+                        "Still waiting for the first streamed sample "
+                        f"(0/{total}, elapsed {_format_elapsed(elapsed)})",
+                        flush=True,
+                    )
+                return
 
-            # Generate robust sample ID with config and fingerprint
-            safe_name = dataset_name.replace("/", "_")
-            sample_id = f"{safe_name}_{config_name}_{fingerprint}_{split}_{source_index}"
+            rate = loaded / elapsed
+            if total is None:
+                print(
+                    f"Loaded {loaded} samples "
+                    f"({rate:.1f}/s, elapsed {_format_elapsed(elapsed)})",
+                    flush=True,
+                )
+                return
 
-            # Determine image format and extension
-            if image_format == "auto":
-                # Try to preserve original format, fallback to PNG
-                original_format = getattr(pil_image, "format", None)
-                if original_format in ("JPEG", "JPG"):
+            remaining = total - loaded
+            eta_seconds = remaining / rate if rate > 0 else float("inf")
+            print(
+                f"Loaded {loaded}/{total} samples "
+                f"({loaded / total:.0%}, {rate:.1f}/s, "
+                f"elapsed {_format_elapsed(elapsed)}, ETA {_format_eta(eta_seconds)})",
+                flush=True,
+            )
+
+        heartbeat: threading.Thread | None = None
+        if show_progress and streaming:
+            def heartbeat_reporter() -> None:
+                while not progress_stop.wait(10.0):
+                    now = time.perf_counter()
+                    if loaded == 0:
+                        emit_progress(now, waiting_for_first_sample=True)
+                    elif now - last_report_at >= 10.0:
+                        emit_progress(now)
+
+            heartbeat = threading.Thread(
+                target=heartbeat_reporter,
+                name="hyperview-hf-progress",
+                daemon=True,
+            )
+            heartbeat.start()
+
+        try:
+            for i, item in enumerate(iterator):
+                if streaming:
+                    source_index = int(item.pop(source_index_key, i))
+                else:
+                    source_index = selected_indices[i] if selected_indices is not None else i
+                image = item[image_key]
+
+                if isinstance(image, Image.Image):
+                    pil_image = image
+                else:
+                    pil_image = Image.fromarray(np.asarray(image))
+
+                label = None
+                if label_key and label_key in item:
+                    label_idx = item[label_key]
+                    if label_names and isinstance(label_idx, int):
+                        label = label_names[label_idx]
+                    else:
+                        label = str(label_idx)
+
+                safe_name = dataset_name.replace("/", "_")
+                sample_id = f"{safe_name}_{config_name}_{fingerprint}_{split}_{source_index}"
+
+                if image_format == "auto":
+                    original_format = getattr(pil_image, "format", None)
+                    if original_format in ("JPEG", "JPG"):
+                        save_format = "JPEG"
+                        ext = ".jpg"
+                    else:
+                        save_format = "PNG"
+                        ext = ".png"
+                elif image_format == "jpeg":
                     save_format = "JPEG"
                     ext = ".jpg"
                 else:
                     save_format = "PNG"
                     ext = ".png"
-            elif image_format == "jpeg":
-                save_format = "JPEG"
-                ext = ".jpg"
-            else:
-                save_format = "PNG"
-                ext = ".png"
 
-            # Enhanced metadata with dataset info
-            metadata = {
-                "source": dataset_name,
-                "config": config_name,
-                "split": split,
-                "index": source_index,
-                "fingerprint": source_fingerprint,
-                "version": version,
-            }
+                metadata = {
+                    "source": dataset_name,
+                    "config": config_name,
+                    "split": split,
+                    "index": source_index,
+                    "fingerprint": source_fingerprint,
+                    "version": version,
+                }
 
-            image_path = media_dir / f"{sample_id}{ext}"
-            if not image_path.exists():
-                if save_format == "JPEG" or pil_image.mode in ("RGBA", "P", "L"):
-                    pil_image = pil_image.convert("RGB")
-                pil_image.save(image_path, format=save_format)
+                image_path = media_dir / f"{sample_id}{ext}"
+                if not image_path.exists():
+                    if save_format == "JPEG" or pil_image.mode in ("RGBA", "P", "L"):
+                        pil_image = pil_image.convert("RGB")
+                    pil_image.save(image_path, format=save_format)
 
-            sample = Sample(
-                id=sample_id,
-                filepath=str(image_path),
-                label=label,
-                metadata=metadata,
-            )
+                sample = Sample(
+                    id=sample_id,
+                    filepath=str(image_path),
+                    label=label,
+                    metadata=metadata,
+                )
 
-            samples.append(sample)
+                samples.append(sample)
+                loaded += 1
 
-        # Use shared ingestion helper
+                if not show_progress:
+                    continue
+
+                now = time.perf_counter()
+                should_report = loaded == 1
+                if total is not None and loaded == total:
+                    should_report = True
+                if loaded % report_every == 0:
+                    should_report = True
+                if now - last_report_at >= 5.0:
+                    should_report = True
+                if not should_report:
+                    continue
+
+                emit_progress(now)
+                last_report_at = now
+        finally:
+            progress_stop.set()
+            if heartbeat is not None:
+                heartbeat.join(timeout=0.1)
+
+        if total is None:
+            total = loaded
+
         num_added, skipped = self._ingest_samples(samples, skip_existing=skip_existing)
 
         if show_progress:
-            print(f"Images saved to: {media_dir}")
+            print(
+                f"Prepared {loaded} samples in {_format_elapsed(time.perf_counter() - started_at)}",
+                flush=True,
+            )
+            print(f"Images saved to: {media_dir}", flush=True)
             if skipped > 0:
-                print(f"Skipped {skipped} existing samples")
+                print(f"Skipped {skipped} existing samples", flush=True)
 
         return num_added, skipped
 
@@ -368,6 +513,7 @@ class Dataset:
         provider: str | None = None,
         checkpoint: str | None = None,
         batch_size: int = 32,
+        sample_ids: list[str] | None = None,
         show_progress: bool = True,
         **provider_kwargs: Any,
     ) -> str:
@@ -384,6 +530,8 @@ class Dataset:
                 Available providers: `hyperview.embeddings.list_embedding_providers()`.
             checkpoint: Checkpoint path/URL (hf://... or local path) for weight-only models.
             batch_size: Batch size for processing.
+            sample_ids: Optional subset of sample IDs to ensure embeddings for.
+                If omitted, computes embeddings for all samples missing them.
             show_progress: Whether to show progress bar.
             **provider_kwargs: Additional kwargs passed to the embedding function.
 
@@ -421,6 +569,7 @@ class Dataset:
             storage=self._storage,
             spec=spec,
             batch_size=batch_size,
+            sample_ids=sample_ids,
             show_progress=show_progress,
         )
         return space_key
@@ -429,19 +578,19 @@ class Dataset:
         self,
         space_key: str | None = None,
         method: str = "umap",
-        geometry: str = "euclidean",
+        layout: str = DEFAULT_VISUALIZATION_LAYOUT,
         n_neighbors: int = 15,
         min_dist: float = 0.1,
         metric: str = "cosine",
         force: bool = False,
     ) -> str:
-        """Compute 2D projections for visualization.
+        """Compute projections for visualization.
 
         Args:
             space_key: Embedding space to project. If None, uses the first available.
-            method: Projection method ('umap' or 'pca'). PCA is faster and
-                deterministic; UMAP captures nonlinear structure better.
-            geometry: Output geometry type ('euclidean' or 'poincare').
+            method: Projection method ('umap' or 'pca').
+            layout: Layout spec like 'euclidean', 'euclidean:3d', or 'spherical'.
+                Omitting the suffix defaults to 2D for Euclidean/Poincare and 3D for spherical.
             n_neighbors: Number of neighbors for UMAP (ignored for PCA).
             min_dist: Minimum distance for UMAP (ignored for PCA).
             metric: Distance metric for UMAP (ignored for PCA).
@@ -452,11 +601,14 @@ class Dataset:
         """
         from hyperview.embeddings.pipelines import compute_layout
 
+        geometry, layout_dimension = parse_visualization_layout(layout)
+
         return compute_layout(
             storage=self._storage,
             space_key=space_key,
             method=method,
             geometry=geometry,
+            layout_dimension=layout_dimension,
             n_neighbors=n_neighbors,
             min_dist=min_dist,
             metric=metric,
@@ -514,41 +666,52 @@ class Dataset:
         ids: list[str],
         coords: np.ndarray | list[list[float]],
     ) -> str:
-        """Set precomputed 2D coordinates for visualization.
+        """Set precomputed coordinates for visualization.
 
-        Use this when you have precomputed 2D projections and want to skip
+        Use this when you have precomputed projections and want to skip
         embedding computation. Useful for smoke tests or external projections.
 
         Args:
-            geometry: "euclidean" or "poincare".
+            geometry: "euclidean", "poincare", or "spherical".
             ids: List of sample IDs.
-            coords: (N, 2) array of coordinates.
+            coords: (N, D) array of coordinates.
 
         Returns:
             The layout_key for the stored coordinates.
 
         Example:
             >>> dataset.set_coords("euclidean", ["s0", "s1"], [[0.1, 0.2], [0.3, 0.4]])
-            >>> dataset.set_coords("poincare", ["s0", "s1"], [[0.1, 0.2], [0.3, 0.4]])
+            >>> dataset.set_coords("spherical", ["s0", "s1"], [[0.1, 0.2, 0.3], [0.3, 0.4, 0.5]])
             >>> hv.launch(dataset)
         """
-        if geometry not in ("euclidean", "poincare"):
-            raise ValueError(f"geometry must be 'euclidean' or 'poincare', got '{geometry}'")
+        if geometry not in ("euclidean", "poincare", "spherical"):
+            raise ValueError(
+                f"geometry must be 'euclidean', 'poincare', or 'spherical', got '{geometry}'"
+            )
 
         coords_arr = np.asarray(coords, dtype=np.float32)
-        if coords_arr.ndim != 2 or coords_arr.shape[1] != 2:
-            raise ValueError(f"coords must be (N, 2), got shape {coords_arr.shape}")
+        if coords_arr.ndim != 2 or coords_arr.shape[1] < 2:
+            raise ValueError(f"coords must be (N, D) with D>=2, got shape {coords_arr.shape}")
+
+        layout_dimension = normalize_layout_dimension(int(coords_arr.shape[1]))
+        if geometry == "poincare" and layout_dimension != 2:
+            raise ValueError("poincare precomputed layouts must be 2D")
 
         # Ensure a synthetic space exists (required by launch())
-        space_key = "precomputed"
+        space_key = f"precomputed_{layout_dimension}d"
         if not any(s.space_key == space_key for s in self._storage.list_spaces()):
             precomputed_config = {
                 "provider": "precomputed",
                 "geometry": "unknown",  # Precomputed coords don't have a source embedding geometry
             }
-            self._storage.ensure_space(space_key, dim=2, config=precomputed_config)
+            self._storage.ensure_space(space_key, dim=layout_dimension, config=precomputed_config)
 
-        layout_key = make_layout_key(space_key, method="precomputed", geometry=geometry)
+        layout_key = make_layout_key(
+            space_key,
+            method="precomputed",
+            geometry=geometry,
+            layout_dimension=layout_dimension,
+        )
 
         # Ensure layout registry entry exists
         self._storage.ensure_layout(
@@ -601,9 +764,11 @@ class Dataset:
         layout_key: str,
     ) -> tuple[list[str], list[str | None], np.ndarray]:
         """Get visualization data (ids, labels, coords) for a layout."""
+        layout_dimension = parse_layout_dimension(layout_key)
+
         layout_ids, layout_coords = self._storage.get_layout_coords(layout_key)
         if not layout_ids:
-            return [], [], np.empty((0, 2), dtype=np.float32)
+            return [], [], np.empty((0, layout_dimension), dtype=np.float32)
 
         labels_by_id = self._storage.get_labels_by_ids(layout_ids)
 
@@ -618,7 +783,7 @@ class Dataset:
                 coords.append(layout_coords[i])
 
         if not coords:
-            return [], [], np.empty((0, 2), dtype=np.float32)
+            return [], [], np.empty((0, layout_dimension), dtype=np.float32)
 
         return ids, labels, np.asarray(coords, dtype=np.float32)
 
@@ -631,6 +796,7 @@ class Dataset:
         x_max: float,
         y_min: float,
         y_max: float,
+        label_filter: str | None = None,
     ) -> tuple[list[str], np.ndarray]:
         """Return candidate (id, xy) rows within an AABB for a layout."""
         return self._storage.get_lasso_candidates_aabb(
@@ -639,6 +805,7 @@ class Dataset:
             x_max=x_max,
             y_min=y_min,
             y_max=y_max,
+            label_filter=label_filter,
         )
 
     def save(self, filepath: str, include_thumbnails: bool = True) -> None:
@@ -670,7 +837,7 @@ class Dataset:
             json.dump(data, f)
 
     @classmethod
-    def load(cls, filepath: str, persist: bool = False) -> "Dataset":
+    def load(cls, filepath: str, persist: bool = False) -> Dataset:
         """Load dataset from a JSON file.
 
         Args:
