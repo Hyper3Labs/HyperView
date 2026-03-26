@@ -77,7 +77,9 @@ AGENTS.md
 .specstory/
 
 # Deployment repo (managed as a separate nested git repository)
-deploy/
+hyper-models/
+hyperview-spaces/
+eval/
 
 # Generated version file (hatch-vcs)
 src/hyperview/_version.py

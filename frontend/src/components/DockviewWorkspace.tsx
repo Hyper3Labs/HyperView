@@ -18,11 +18,11 @@ import {
   type IWatermarkPanelProps,
   themeAbyss,
 } from "dockview";
-import { Circle, Disc, Grid3X3 } from "lucide-react";
+import { Circle, Disc, Globe2, Grid3X3 } from "lucide-react";
 
 import type { Geometry, Sample } from "@/types";
 import { useStore } from "@/store/useStore";
-import { findLayoutByGeometry } from "@/lib/layouts";
+import { findLayoutByGeometry, getLayoutDimension } from "@/lib/layouts";
 import { ImageGrid } from "./ImageGrid";
 import { ScatterPanel } from "./ScatterPanel";
 import { ExplorerPanel } from "./ExplorerPanel";
@@ -30,7 +30,7 @@ import { PlaceholderPanel } from "./PlaceholderPanel";
 import { HyperViewLogo } from "./icons";
 import { PanelTitle } from "./PanelTitle";
 
-const LAYOUT_STORAGE_KEY = "hyperview:dockview-layout:v4";
+const LAYOUT_STORAGE_KEY = "hyperview:dockview-layout:v5";
 
 // Panel IDs
 const PANEL = {
@@ -38,6 +38,9 @@ const PANEL = {
   GRID: "grid",
   SCATTER_EUCLIDEAN: "scatter-euclidean",
   SCATTER_POINCARE: "scatter-poincare",
+  SCATTER_SPHERICAL: "scatter-spherical",
+  SCATTER_EUCLIDEAN_3D: "scatter-euclidean-3d",
+  SCATTER_SPHERICAL_3D: "scatter-spherical-3d",
   SCATTER_DEFAULT: "scatter-default",
   RIGHT_PLACEHOLDER: "right-placeholder",
   BOTTOM_PLACEHOLDER: "bottom-placeholder",
@@ -47,6 +50,9 @@ const CENTER_PANEL_IDS = [
   PANEL.GRID,
   PANEL.SCATTER_EUCLIDEAN,
   PANEL.SCATTER_POINCARE,
+  PANEL.SCATTER_SPHERICAL,
+  PANEL.SCATTER_EUCLIDEAN_3D,
+  PANEL.SCATTER_SPHERICAL_3D,
   PANEL.SCATTER_DEFAULT,
 ] as const;
 
@@ -54,6 +60,9 @@ export const CENTER_PANEL_DEFS = [
   { id: PANEL.GRID, label: "Samples", icon: Grid3X3 },
   { id: PANEL.SCATTER_EUCLIDEAN, label: "Euclidean", icon: Circle },
   { id: PANEL.SCATTER_POINCARE, label: "Hyperbolic", icon: Disc },
+  { id: PANEL.SCATTER_SPHERICAL, label: "Spherical", icon: Globe2 },
+  { id: PANEL.SCATTER_EUCLIDEAN_3D, label: "Euclidean 3D", icon: Circle },
+  { id: PANEL.SCATTER_SPHERICAL_3D, label: "Sphere 3D", icon: Globe2 },
 ] as const;
 
 const NON_ANCHOR_PANEL_IDS = new Set<string>([
@@ -150,8 +159,14 @@ export function useDockviewApi() {
       const baseOptions = position ? { position } : {};
 
       const layouts = datasetInfo?.layouts ?? [];
-      const euclideanLayout = findLayoutByGeometry(layouts, "euclidean");
-      const poincareLayout = findLayoutByGeometry(layouts, "poincare");
+      const renderableLayouts2d = layouts.filter((layout) => getLayoutDimension(layout.layout_key) === 2);
+      const renderableLayouts3d = layouts.filter((layout) => getLayoutDimension(layout.layout_key) === 3);
+
+      const euclideanLayout2d = findLayoutByGeometry(renderableLayouts2d, "euclidean", 2);
+      const poincareLayout2d = findLayoutByGeometry(renderableLayouts2d, "poincare", 2);
+      const sphericalLayout2d = findLayoutByGeometry(renderableLayouts2d, "spherical", 2);
+      const euclideanLayout3d = findLayoutByGeometry(renderableLayouts3d, "euclidean", 3);
+      const sphericalLayout3d = findLayoutByGeometry(renderableLayouts3d, "spherical", 3);
 
       // Don't add if already exists - just focus it
       if (api.getPanel(panelId)) {
@@ -178,8 +193,9 @@ export function useDockviewApi() {
             title: "Euclidean",
             tabComponent: "euclideanTab",
             params: {
-              layoutKey: euclideanLayout?.layout_key,
+              layoutKey: euclideanLayout2d?.layout_key,
               geometry: "euclidean" as Geometry,
+              layoutDimension: 2 as const,
             },
             renderer: "always",
             ...baseOptions,
@@ -193,8 +209,57 @@ export function useDockviewApi() {
             title: "Hyperbolic",
             tabComponent: "hyperbolicTab",
             params: {
-              layoutKey: poincareLayout?.layout_key,
+              layoutKey: poincareLayout2d?.layout_key,
               geometry: "poincare" as Geometry,
+              layoutDimension: 2 as const,
+            },
+            renderer: "always",
+            ...baseOptions,
+          });
+          break;
+
+        case PANEL.SCATTER_SPHERICAL:
+          api.addPanel({
+            id: PANEL.SCATTER_SPHERICAL,
+            component: "scatter",
+            title: "Spherical",
+            tabComponent: "sphericalTab",
+            params: {
+              layoutKey: sphericalLayout2d?.layout_key,
+              geometry: "spherical" as Geometry,
+              layoutDimension: 2 as const,
+            },
+            renderer: "always",
+            ...baseOptions,
+          });
+          break;
+
+        case PANEL.SCATTER_EUCLIDEAN_3D:
+          api.addPanel({
+            id: PANEL.SCATTER_EUCLIDEAN_3D,
+            component: "scatter",
+            title: "Euclidean 3D",
+            tabComponent: "euclidean3dTab",
+            params: {
+              layoutKey: euclideanLayout3d?.layout_key,
+              geometry: "euclidean" as Geometry,
+              layoutDimension: 3 as const,
+            },
+            renderer: "always",
+            ...baseOptions,
+          });
+          break;
+
+        case PANEL.SCATTER_SPHERICAL_3D:
+          api.addPanel({
+            id: PANEL.SCATTER_SPHERICAL_3D,
+            component: "scatter",
+            title: "Sphere 3D",
+            tabComponent: "spherical3dTab",
+            params: {
+              layoutKey: sphericalLayout3d?.layout_key,
+              geometry: "spherical" as Geometry,
+              layoutDimension: 3 as const,
             },
             renderer: "always",
             ...baseOptions,
@@ -323,6 +388,7 @@ export function useDockviewApi() {
 type ScatterPanelParams = {
   layoutKey?: string;
   geometry?: Geometry;
+  layoutDimension?: 2 | 3;
 };
 
 const ScatterDockPanel = React.memo(function ScatterDockPanel(
@@ -334,6 +400,7 @@ const ScatterDockPanel = React.memo(function ScatterDockPanel(
       className="h-full"
       layoutKey={params.layoutKey}
       geometry={params.geometry}
+      layoutDimension={params.layoutDimension}
     />
   );
 });
@@ -362,6 +429,18 @@ const EuclideanTab = React.memo(function EuclideanTab(props: IDockviewPanelHeade
 
 const HyperbolicTab = React.memo(function HyperbolicTab(props: IDockviewPanelHeaderProps) {
   return <TabWithIcon {...props} icon={<Disc className="h-3.5 w-3.5" />} />;
+});
+
+const SphericalTab = React.memo(function SphericalTab(props: IDockviewPanelHeaderProps) {
+  return <TabWithIcon {...props} icon={<Globe2 className="h-3.5 w-3.5" />} />;
+});
+
+const Euclidean3DTab = React.memo(function Euclidean3DTab(props: IDockviewPanelHeaderProps) {
+  return <TabWithIcon {...props} icon={<Circle className="h-3.5 w-3.5" />} />;
+});
+
+const Spherical3DTab = React.memo(function Spherical3DTab(props: IDockviewPanelHeaderProps) {
+  return <TabWithIcon {...props} icon={<Globe2 className="h-3.5 w-3.5" />} />;
 });
 
 const SamplesTab = React.memo(function SamplesTab(props: IDockviewPanelHeaderProps) {
@@ -419,6 +498,9 @@ const COMPONENTS = {
 const TAB_COMPONENTS = {
   euclideanTab: EuclideanTab,
   hyperbolicTab: HyperbolicTab,
+  sphericalTab: SphericalTab,
+  euclidean3dTab: Euclidean3DTab,
+  spherical3dTab: Spherical3DTab,
   samplesTab: SamplesTab,
 };
 
@@ -489,10 +571,25 @@ export function DockviewWorkspace() {
   const buildDefaultLayout = useCallback(
     (api: DockviewApi) => {
       const layouts = datasetInfo?.layouts ?? [];
-      const euclideanLayout = findLayoutByGeometry(layouts, "euclidean");
-      const poincareLayout = findLayoutByGeometry(layouts, "poincare");
-      const fallbackLayout = !euclideanLayout && !poincareLayout ? layouts[0] : null;
-      const hasLayouts = layouts.length > 0;
+      const renderableLayouts2d = layouts.filter((layout) => getLayoutDimension(layout.layout_key) === 2);
+      const renderableLayouts3d = layouts.filter((layout) => getLayoutDimension(layout.layout_key) === 3);
+
+      const euclideanLayout2d = findLayoutByGeometry(renderableLayouts2d, "euclidean", 2);
+      const poincareLayout2d = findLayoutByGeometry(renderableLayouts2d, "poincare", 2);
+      const sphericalLayout2d = findLayoutByGeometry(renderableLayouts2d, "spherical", 2);
+      const euclideanLayout3d = findLayoutByGeometry(renderableLayouts3d, "euclidean", 3);
+      const sphericalLayout3d = findLayoutByGeometry(renderableLayouts3d, "spherical", 3);
+
+      const fallbackLayout2d =
+        !euclideanLayout2d && !poincareLayout2d && !sphericalLayout2d
+          ? renderableLayouts2d[0]
+          : null;
+      const fallbackLayout3d =
+        !euclideanLayout3d && !sphericalLayout3d
+          ? renderableLayouts3d[0]
+          : null;
+
+      const hasLayouts = renderableLayouts2d.length > 0 || renderableLayouts3d.length > 0;
 
       // Create the grid panel first (center zone)
       const gridPanel =
@@ -507,49 +604,100 @@ export function DockviewWorkspace() {
 
       let scatterPanel: typeof gridPanel | null = null;
 
-      if (hasLayouts && euclideanLayout) {
-        scatterPanel =
-          api.getPanel(PANEL.SCATTER_EUCLIDEAN) ??
-          api.addPanel({
-            id: PANEL.SCATTER_EUCLIDEAN,
-            component: "scatter",
-            title: "Euclidean",
-            tabComponent: "euclideanTab",
-            params: {
-              layoutKey: euclideanLayout.layout_key,
-              geometry: "euclidean" as Geometry,
-            },
-            position: {
-              referencePanel: gridPanel.id,
-              direction: "right",
-            },
-            renderer: "always",
-          });
-      }
-
-      if (hasLayouts && poincareLayout) {
+      const addScatterPanel = (config: {
+        id: string;
+        title: string;
+        tabComponent?: string;
+        params?: {
+          layoutKey?: string;
+          geometry?: Geometry;
+          layoutDimension?: 2 | 3;
+        };
+      }) => {
         const position = scatterPanel
           ? { referencePanel: scatterPanel.id, direction: "within" as const }
           : { referencePanel: gridPanel.id, direction: "right" as const };
 
-        const poincarePanel =
-          api.getPanel(PANEL.SCATTER_POINCARE) ??
+        const panel =
+          api.getPanel(config.id) ??
           api.addPanel({
-            id: PANEL.SCATTER_POINCARE,
+            id: config.id,
             component: "scatter",
-            title: "Hyperbolic",
-            tabComponent: "hyperbolicTab",
-            params: {
-              layoutKey: poincareLayout.layout_key,
-              geometry: "poincare" as Geometry,
-            },
+            title: config.title,
+            tabComponent: config.tabComponent,
+            params: config.params,
             position,
             renderer: "always",
           });
 
         if (!scatterPanel) {
-          scatterPanel = poincarePanel;
+          scatterPanel = panel;
         }
+      };
+
+      if (hasLayouts && euclideanLayout2d) {
+        addScatterPanel({
+          id: PANEL.SCATTER_EUCLIDEAN,
+          title: "Euclidean",
+          tabComponent: "euclideanTab",
+          params: {
+            layoutKey: euclideanLayout2d.layout_key,
+            geometry: "euclidean" as Geometry,
+            layoutDimension: 2 as const,
+          },
+        });
+      }
+
+      if (hasLayouts && poincareLayout2d) {
+        addScatterPanel({
+          id: PANEL.SCATTER_POINCARE,
+          title: "Hyperbolic",
+          tabComponent: "hyperbolicTab",
+          params: {
+            layoutKey: poincareLayout2d.layout_key,
+            geometry: "poincare" as Geometry,
+            layoutDimension: 2 as const,
+          },
+        });
+      }
+
+      if (hasLayouts && sphericalLayout2d) {
+        addScatterPanel({
+          id: PANEL.SCATTER_SPHERICAL,
+          title: "Spherical",
+          tabComponent: "sphericalTab",
+          params: {
+            layoutKey: sphericalLayout2d.layout_key,
+            geometry: "spherical" as Geometry,
+            layoutDimension: 2 as const,
+          },
+        });
+      }
+
+      if (hasLayouts && euclideanLayout3d) {
+        addScatterPanel({
+          id: PANEL.SCATTER_EUCLIDEAN_3D,
+          title: "Euclidean 3D",
+          tabComponent: "euclidean3dTab",
+          params: {
+            layoutKey: euclideanLayout3d.layout_key,
+            geometry: "euclidean" as Geometry,
+            layoutDimension: 3 as const,
+          },
+        });
+      }
+
+      if (hasLayouts && sphericalLayout3d) {
+        addScatterPanel({
+          id: PANEL.SCATTER_SPHERICAL_3D,
+          title: "Sphere 3D",
+          tabComponent: "spherical3dTab",
+          params: {
+            layoutKey: sphericalLayout3d.layout_key,
+            geometry: "spherical" as Geometry,
+            layoutDimension: 3 as const,
+          },
+        });
       }
 
       if (!hasLayouts) {
@@ -562,6 +710,7 @@ export function DockviewWorkspace() {
             tabComponent: "euclideanTab",
             params: {
               geometry: "euclidean" as Geometry,
+              layoutDimension: 2 as const,
             },
             position: {
               referencePanel: gridPanel.id,
@@ -578,6 +727,24 @@ export function DockviewWorkspace() {
             tabComponent: "hyperbolicTab",
             params: {
               geometry: "poincare" as Geometry,
+              layoutDimension: 2 as const,
+            },
+            position: {
+              referencePanel: euclideanPanel.id,
+              direction: "within" as const,
+            },
+            renderer: "always",
+          });
+
+        api.getPanel(PANEL.SCATTER_SPHERICAL) ??
+          api.addPanel({
+            id: PANEL.SCATTER_SPHERICAL,
+            component: "scatter",
+            title: "Spherical",
+            tabComponent: "sphericalTab",
+            params: {
+              geometry: "spherical" as Geometry,
+              layoutDimension: 2 as const,
             },
             position: {
               referencePanel: euclideanPanel.id,
@@ -589,14 +756,33 @@ export function DockviewWorkspace() {
         scatterPanel = euclideanPanel;
       }
 
-      if (fallbackLayout && !scatterPanel) {
+      if (fallbackLayout2d && !scatterPanel) {
         api.getPanel(PANEL.SCATTER_DEFAULT) ??
           api.addPanel({
             id: PANEL.SCATTER_DEFAULT,
             component: "scatter",
             title: "Embeddings",
             params: {
-              layoutKey: fallbackLayout.layout_key,
+              layoutKey: fallbackLayout2d.layout_key,
+              layoutDimension: 2 as const,
+            },
+            position: {
+              referencePanel: gridPanel.id,
+              direction: "right",
+            },
+            renderer: "always",
+          });
+      }
+
+      if (fallbackLayout3d && !scatterPanel) {
+        api.getPanel(PANEL.SCATTER_DEFAULT) ??
+          api.addPanel({
+            id: PANEL.SCATTER_DEFAULT,
+            component: "scatter",
+            title: "Embeddings",
+            params: {
+              layoutKey: fallbackLayout3d.layout_key,
+              layoutDimension: 3 as const,
             },
             position: {
               referencePanel: gridPanel.id,
@@ -746,6 +932,9 @@ export function DockviewWorkspace() {
     const hasScatter =
       ctx.api.getPanel(PANEL.SCATTER_EUCLIDEAN) ||
       ctx.api.getPanel(PANEL.SCATTER_POINCARE) ||
+      ctx.api.getPanel(PANEL.SCATTER_SPHERICAL) ||
+      ctx.api.getPanel(PANEL.SCATTER_EUCLIDEAN_3D) ||
+      ctx.api.getPanel(PANEL.SCATTER_SPHERICAL_3D) ||
       ctx.api.getPanel(PANEL.SCATTER_DEFAULT);
 
     if (!hasScatter) {

@@ -6,6 +6,7 @@ registry using the @register decorator.
 Providers:
 - embed-anything: CLIP-based image embeddings (torch-free, default)
 - hyper-models: Non-Euclidean model zoo via `hyper-models` (torch-free ONNX; downloads from HF Hub)
+- timm-image: Image backbones loaded with timm (e.g. MegaDescriptor)
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from pydantic import PrivateAttr
 __all__ = [
     "EmbedAnythingEmbeddings",
     "HyperModelsEmbeddings",
+    "TimmImageEmbeddings",
 ]
 
 
@@ -189,6 +191,182 @@ class HyperModelsEmbeddings(EmbeddingFunction):
             all_embeddings.append(vec)
 
         return all_embeddings
+
+    def compute_query_embeddings(
+        self, query: Any, *args: Any, **kwargs: Any
+    ) -> list[np.ndarray | None]:
+        return self.compute_source_embeddings([query], *args, **kwargs)
+
+
+@register("timm-image")
+class TimmImageEmbeddings(EmbeddingFunction):
+    """Image embeddings via timm backbones.
+
+    This provider supports timm models, including Hugging Face-hosted timm
+    checkpoints like ``hf-hub:BVRA/MegaDescriptor-L-384``.
+
+    Args:
+        name: timm model name (local timm id or ``hf-hub:<repo>``).
+        batch_size: Batch size for image encoding.
+        device: Explicit torch device (e.g. ``cpu``, ``cuda``). If omitted,
+            selects ``cuda`` when available, otherwise ``cpu``.
+    """
+
+    name: str = "hf-hub:BVRA/MegaDescriptor-L-384"
+    batch_size: int = 8
+    device: str | None = None
+
+    _model: Any = PrivateAttr(default=None)
+    _transform: Any = PrivateAttr(default=None)
+    _torch: Any = PrivateAttr(default=None)
+    _device: str | None = PrivateAttr(default=None)
+    _ndims: int | None = PrivateAttr(default=None)
+    _show_progress: bool = PrivateAttr(default=False)
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._model = None
+        self._transform = None
+        self._torch = None
+        self._device = None
+        self._ndims = None
+        self._show_progress = False
+        if self.batch_size <= 0:
+            raise ValueError("batch_size must be > 0")
+
+    def set_progress_enabled(self, enabled: bool) -> None:
+        self._show_progress = bool(enabled)
+
+    def _import_ml_stack(self) -> tuple[Any, Any, Any]:
+        try:
+            import timm
+            import torch
+            from torchvision import transforms as tv_transforms
+        except ImportError as e:
+            raise ImportError(
+                "Provider 'timm-image' requires torch/timm/torchvision. "
+                "Install with: `uv sync --extra ml`"
+            ) from e
+        return torch, timm, tv_transforms
+
+    def _ensure_model(self) -> None:
+        if self._model is not None:
+            return
+
+        torch, timm, tv_transforms = self._import_ml_stack()
+        resolved_device = self.device or (
+            "cuda"
+            if torch.cuda.is_available()
+            else "mps"
+            if hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+            else "cpu"
+        )
+
+        if self._show_progress:
+            print(
+                f"Initializing timm model '{self.name}' on {resolved_device}...",
+                flush=True,
+            )
+
+        model = timm.create_model(self.name, num_classes=0, pretrained=True)
+        model.eval()
+        model.to(resolved_device)
+
+        cfg = getattr(model, "pretrained_cfg", {}) or {}
+        input_size = cfg.get("input_size", (3, 384, 384))
+        image_size = int(input_size[-1]) if isinstance(input_size, (tuple, list)) and input_size else 384
+        mean = cfg.get("mean", (0.5, 0.5, 0.5))
+        std = cfg.get("std", (0.5, 0.5, 0.5))
+
+        self._transform = tv_transforms.Compose(
+            [
+                tv_transforms.Resize((image_size, image_size)),
+                tv_transforms.ToTensor(),
+                tv_transforms.Normalize(mean, std),
+            ]
+        )
+
+        ndims = int(getattr(model, "num_features", 0))
+        if ndims <= 0:
+            dummy = torch.zeros((1, 3, image_size, image_size), device=resolved_device)
+            with torch.inference_mode():
+                out = model(dummy)
+            if isinstance(out, (tuple, list)):
+                out = out[0]
+            ndims = int(out.shape[-1])
+
+        self._model = model
+        self._torch = torch
+        self._device = resolved_device
+        self._ndims = ndims
+
+        if self._show_progress:
+            print(
+                f"timm model ready ({self._ndims} dims on {self._device})",
+                flush=True,
+            )
+
+    def ndims(self) -> int:
+        self._ensure_model()
+        assert self._ndims is not None
+        return self._ndims
+
+    @property
+    def geometry(self) -> str:
+        return "euclidean"
+
+    def _load_pil_image(self, inp: Any) -> Any:
+        from PIL import Image
+
+        from hyperview.core.sample import Sample
+
+        if isinstance(inp, Sample):
+            with inp.load_image() as img:
+                img.load()
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+                return img.copy()
+        if isinstance(inp, str):
+            with Image.open(inp) as img:
+                img.load()
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+                return img.copy()
+        if isinstance(inp, Image.Image):
+            return inp.convert("RGB") if inp.mode != "RGB" else inp
+        raise TypeError(f"Unsupported input type: {type(inp)}")
+
+    def compute_source_embeddings(
+        self, inputs: Any, *args: Any, **kwargs: Any
+    ) -> list[np.ndarray | None]:
+        self._ensure_model()
+        assert self._model is not None
+        assert self._transform is not None
+        assert self._torch is not None
+        assert self._device is not None
+
+        pil_images = [self._load_pil_image(inp) for inp in self.sanitize_input(inputs)]
+        embeddings: list[np.ndarray | None] = []
+
+        for start in range(0, len(pil_images), self.batch_size):
+            batch_imgs = pil_images[start:start + self.batch_size]
+            batch_tensors = [self._transform(img) for img in batch_imgs]
+            batch = self._torch.stack(batch_tensors).to(self._device)
+
+            with self._torch.inference_mode():
+                out = self._model(batch)
+
+            if isinstance(out, (tuple, list)):
+                out = out[0]
+
+            out_arr = np.asarray(out.detach().cpu().numpy(), dtype=np.float32)
+            if out_arr.ndim == 1:
+                out_arr = out_arr[None, :]
+
+            for vec in out_arr:
+                embeddings.append(np.asarray(vec, dtype=np.float32))
+
+        return embeddings
 
     def compute_query_embeddings(
         self, query: Any, *args: Any, **kwargs: Any

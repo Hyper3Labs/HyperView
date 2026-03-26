@@ -20,6 +20,7 @@ from hyperview.storage.schema import (
     create_spaces_schema,
     dict_to_sample,
     make_space_key,
+    parse_layout_dimension,
     sample_to_dict,
 )
 
@@ -27,6 +28,13 @@ from hyperview.storage.schema import (
 def _sql_escape(value: str) -> str:
     """Escape single quotes for SQL WHERE clauses."""
     return value.replace("'", "''")
+
+
+def _sql_float(value: float) -> str:
+    """Format finite floats for SQL WHERE clauses."""
+    if not np.isfinite(value):
+        raise ValueError("Expected finite float for SQL predicate")
+    return format(float(value), ".17g")
 
 
 class LanceDBBackend(StorageBackend):
@@ -41,6 +49,9 @@ class LanceDBBackend(StorageBackend):
 
         self._samples_table = self._get_or_create_samples_table()
         self._spaces_table = self._get_or_create_spaces_table()
+        if "layouts_registry" in self._table_names():
+            self._ensure_layouts_registry_table()
+        self._prune_stale_layouts()
 
     def _table_names(self) -> set[str]:
         """Return the set of table names in this LanceDB database."""
@@ -148,7 +159,7 @@ class LanceDBBackend(StorageBackend):
             return []
         import pyarrow.compute as pc
         labels = pc.unique(self._samples_table.search().select(["label"]).to_arrow().column("label")).to_pylist()
-        return sorted([l for l in labels if l is not None])
+        return sorted([label for label in labels if label is not None])
 
     def get_existing_ids(self, sample_ids: list[str]) -> set[str]:
         if self._samples_table is None or not sample_ids:
@@ -281,10 +292,101 @@ class LanceDBBackend(StorageBackend):
     def _get_layouts_registry_table(self) -> lancedb.table.Table | None:
         return self._db.open_table("layouts_registry") if "layouts_registry" in self._table_names() else None
 
+    def _layout_table_name(self, layout_key: str) -> str:
+        return f"layouts__{layout_key}"
+
+    def _layout_table_has_expected_schema(
+        self,
+        table: lancedb.table.Table,
+        *,
+        layout_dimension: int,
+    ) -> bool:
+        return table.schema.equals(create_layouts_schema(layout_dimension=layout_dimension))
+
+    def _normalize_layout_registry_rows(self, rows: list[dict]) -> list[dict]:
+        return [
+            {
+                "layout_key": row["layout_key"],
+                "space_key": row["space_key"],
+                "method": row["method"],
+                "geometry": row["geometry"],
+                "count": row["count"],
+                "created_at": row["created_at"],
+                "params_json": row.get("params_json"),
+            }
+            for row in rows
+        ]
+
+    def _prune_stale_layouts(self) -> None:
+        """Remove legacy layout rows/tables that no longer match the current contract."""
+        table_names = self._table_names()
+        registry = self._get_layouts_registry_table()
+        registered_layout_keys: set[str] = set()
+        stale_layout_keys: set[str] = set()
+
+        if registry is not None:
+            for row in registry.to_arrow().to_pylist():
+                layout_key = row["layout_key"]
+                registered_layout_keys.add(layout_key)
+                table_name = self._layout_table_name(layout_key)
+
+                try:
+                    layout_dimension = parse_layout_dimension(layout_key)
+                except ValueError:
+                    stale_layout_keys.add(layout_key)
+                    continue
+
+                if table_name not in table_names:
+                    stale_layout_keys.add(layout_key)
+                    continue
+
+                table = self._db.open_table(table_name)
+                if not self._layout_table_has_expected_schema(
+                    table,
+                    layout_dimension=layout_dimension,
+                ):
+                    stale_layout_keys.add(layout_key)
+
+        for table_name in table_names:
+            if not table_name.startswith("layouts__"):
+                continue
+
+            layout_key = table_name.removeprefix("layouts__")
+            if layout_key in registered_layout_keys:
+                continue
+
+            try:
+                layout_dimension = parse_layout_dimension(layout_key)
+            except ValueError:
+                stale_layout_keys.add(layout_key)
+                continue
+
+            table = self._db.open_table(table_name)
+            if not self._layout_table_has_expected_schema(
+                table,
+                layout_dimension=layout_dimension,
+            ):
+                stale_layout_keys.add(layout_key)
+
+        for layout_key in stale_layout_keys:
+            self.delete_layout(layout_key)
+
     def _ensure_layouts_registry_table(self) -> lancedb.table.Table:
+        schema = create_layouts_registry_schema()
         if "layouts_registry" not in self._table_names():
-            self._db.create_table("layouts_registry", schema=create_layouts_registry_schema())
-        return self._db.open_table("layouts_registry")
+            self._db.create_table("layouts_registry", schema=schema)
+            return self._db.open_table("layouts_registry")
+
+        table = self._db.open_table("layouts_registry")
+        if table.schema.equals(schema):
+            return table
+
+        rows = self._normalize_layout_registry_rows(table.to_arrow().to_pylist())
+        self._db.drop_table("layouts_registry")
+        rebuilt = self._db.create_table("layouts_registry", schema=schema)
+        if rows:
+            rebuilt.add(pa.Table.from_pylist(rows, schema=schema))
+        return rebuilt
 
     def list_layouts(self) -> list[LayoutInfo]:
         table = self._get_layouts_registry_table()
@@ -309,20 +411,24 @@ class LanceDBBackend(StorageBackend):
         if existing is not None:
             return existing
 
+        layout_dimension = parse_layout_dimension(layout_key)
+
         layout_info = LayoutInfo(
             layout_key=layout_key, space_key=space_key, method=method, geometry=geometry,
-            count=0, created_at=int(time.time()), params=params,
+            count=0,
+            created_at=int(time.time()),
+            params=params,
         )
         registry_table = self._ensure_layouts_registry_table()
         registry_table.add(pa.Table.from_pylist([layout_info.to_dict()], schema=create_layouts_registry_schema()))
 
-        table_name = f"layouts__{layout_key}"
+        table_name = self._layout_table_name(layout_key)
         if table_name not in self._table_names():
-            self._db.create_table(table_name, schema=create_layouts_schema())
+            self._db.create_table(table_name, schema=create_layouts_schema(layout_dimension=layout_dimension))
         return layout_info
 
     def delete_layout(self, layout_key: str) -> bool:
-        table_name = f"layouts__{layout_key}"
+        table_name = self._layout_table_name(layout_key)
         if table_name in self._table_names():
             self._db.drop_table(table_name)
         registry = self._get_layouts_registry_table()
@@ -333,17 +439,57 @@ class LanceDBBackend(StorageBackend):
     def add_layout_coords(self, layout_key: str, ids: list[str], coords: np.ndarray) -> None:
         if len(ids) != len(coords) or len(ids) == 0:
             return
-        if self.get_layout(layout_key) is None:
+        layout_info = self.get_layout(layout_key)
+        if layout_info is None:
             raise ValueError(f"Layout '{layout_key}' not registered")
 
-        table_name = f"layouts__{layout_key}"
+        layout_dimension = parse_layout_dimension(layout_key)
+
+        coords_arr = np.asarray(coords, dtype=np.float32)
+        if coords_arr.ndim != 2:
+            raise ValueError(f"coords must be a 2D array, got shape {coords_arr.shape}")
+        if coords_arr.shape[1] != layout_dimension:
+            raise ValueError(
+                f"coords must have shape (N, {layout_dimension}), got {coords_arr.shape}"
+            )
+
+        table_name = self._layout_table_name(layout_key)
         if table_name not in self._table_names():
-            self._db.create_table(table_name, schema=create_layouts_schema())
+            self._db.create_table(
+                table_name,
+                schema=create_layouts_schema(layout_dimension=layout_dimension),
+            )
 
         table = self._db.open_table(table_name)
-        data = [{"id": id_, "x": float(c[0]), "y": float(c[1])} for id_, c in zip(ids, coords)]
+        if not self._layout_table_has_expected_schema(table, layout_dimension=layout_dimension):
+            raise ValueError(
+                f"Layout '{layout_key}' uses an unsupported persisted schema. "
+                "Delete the stale dataset storage and recompute layouts."
+            )
+
+        if layout_dimension == 2:
+            data = [
+                {
+                    "id": id_,
+                    "x": float(c[0]),
+                    "y": float(c[1]),
+                }
+                for id_, c in zip(ids, coords_arr, strict=False)
+            ]
+        else:
+            data = [
+                {
+                    "id": id_,
+                    "x": float(c[0]),
+                    "y": float(c[1]),
+                    "z": float(c[2]),
+                }
+                for id_, c in zip(ids, coords_arr, strict=False)
+            ]
+        schema = create_layouts_schema(layout_dimension=layout_dimension)
+
         table.merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(
-            pa.Table.from_pylist(data, schema=create_layouts_schema())
+            pa.Table.from_pylist(data, schema=schema)
         )
 
         # Update count
@@ -352,20 +498,40 @@ class LanceDBBackend(StorageBackend):
             registry.update(where=f"layout_key = '{_sql_escape(layout_key)}'", values={"count": table.count_rows()})
 
     def get_layout_coords(self, layout_key: str, ids: list[str] | None = None) -> tuple[list[str], np.ndarray]:
-        table_name = f"layouts__{layout_key}"
+        layout_dimension = parse_layout_dimension(layout_key)
+
+        table_name = self._layout_table_name(layout_key)
         if table_name not in self._table_names():
-            return [], np.empty((0, 2), dtype=np.float32)
+            return [], np.empty((0, layout_dimension), dtype=np.float32)
 
         table = self._db.open_table(table_name)
+        select_cols = ["id", "x", "y"]
+        if layout_dimension == 3:
+            select_cols.append("z")
+
         if ids is not None:
+            if not ids:
+                return [], np.empty((0, layout_dimension), dtype=np.float32)
             id_list = "', '".join(_sql_escape(sid) for sid in ids)
-            rows = table.search().where(f"id IN ('{id_list}')").to_list()
+            rows = table.search().select(select_cols).where(f"id IN ('{id_list}')").to_list()
         else:
-            rows = table.to_arrow().to_pylist()
+            rows = table.search().select(select_cols).to_list()
 
         if not rows:
-            return [], np.empty((0, 2), dtype=np.float32)
-        return [r["id"] for r in rows], np.array([[r["x"], r["y"]] for r in rows], dtype=np.float32)
+            return [], np.empty((0, layout_dimension), dtype=np.float32)
+
+        if not self._layout_table_has_expected_schema(table, layout_dimension=layout_dimension):
+            raise ValueError(
+                f"Layout '{layout_key}' uses an unsupported persisted schema. "
+                "Delete the stale dataset storage and recompute layouts."
+            )
+
+        if layout_dimension == 2:
+            coords = np.array([[r["x"], r["y"]] for r in rows], dtype=np.float32)
+        else:
+            coords = np.array([[r["x"], r["y"], r["z"]] for r in rows], dtype=np.float32)
+
+        return [r["id"] for r in rows], coords
 
     def get_lasso_candidates_aabb(
         self,
@@ -375,18 +541,55 @@ class LanceDBBackend(StorageBackend):
         x_max: float,
         y_min: float,
         y_max: float,
+        label_filter: str | None = None,
     ) -> tuple[list[str], np.ndarray]:
-        table_name = f"layouts__{layout_key}"
+        layout_dimension = parse_layout_dimension(layout_key)
+        if layout_dimension != 2:
+            raise ValueError(
+                f"Lasso AABB is only supported for 2D layouts, got {layout_dimension}D"
+            )
+
+        table_name = self._layout_table_name(layout_key)
         if table_name not in self._table_names():
             return [], np.empty((0, 2), dtype=np.float32)
 
-        rows = self._db.open_table(table_name).search().where(
-            f"x >= {x_min} AND x <= {x_max} AND y >= {y_min} AND y <= {y_max}"
-        ).to_list()
+        table = self._db.open_table(table_name)
+        if not self._layout_table_has_expected_schema(table, layout_dimension=layout_dimension):
+            raise ValueError(
+                f"Layout '{layout_key}' uses an unsupported persisted schema. "
+                "Delete the stale dataset storage and recompute layouts."
+            )
+
+        where = (
+            f"x >= {_sql_float(x_min)} AND x <= {_sql_float(x_max)} "
+            f"AND y >= {_sql_float(y_min)} AND y <= {_sql_float(y_max)}"
+        )
+        rows = table.search().select(["id", "x", "y"]).where(where).to_list()
+
+        if label_filter is not None and rows:
+            if self._samples_table is None:
+                return [], np.empty((0, 2), dtype=np.float32)
+
+            matching_ids: set[str] = set()
+            escaped_label = _sql_escape(label_filter)
+            candidate_ids = [r["id"] for r in rows]
+            for i in range(0, len(candidate_ids), 1000):
+                chunk = candidate_ids[i : i + 1000]
+                if not chunk:
+                    continue
+                id_list = "', '".join(_sql_escape(sid) for sid in chunk)
+                where = f"id IN ('{id_list}') AND label = '{escaped_label}'"
+                for r in self._samples_table.search().select(["id"]).where(where).to_list():
+                    matching_ids.add(r["id"])
+
+            rows = [r for r in rows if r["id"] in matching_ids]
 
         if not rows:
             return [], np.empty((0, 2), dtype=np.float32)
-        return [r["id"] for r in rows], np.array([[r["x"], r["y"]] for r in rows], dtype=np.float32)
+
+        coords = np.array([[r["x"], r["y"]] for r in rows], dtype=np.float32)
+
+        return [r["id"] for r in rows], coords
 
     def find_similar(self, sample_id: str, k: int = 10, space_key: str | None = None) -> list[tuple[Sample, float]]:
         if space_key is None:

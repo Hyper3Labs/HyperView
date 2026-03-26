@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import time
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -21,6 +23,23 @@ __all__ = [
 ]
 
 HYPERBOLIC_PROVIDERS = frozenset({"hyper-models"})
+
+
+def _format_elapsed(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    total_seconds = int(round(seconds))
+    minutes, secs = divmod(total_seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m {secs:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes:02d}m {secs:02d}s"
+
+
+def _format_eta(seconds: float) -> str:
+    if not math.isfinite(seconds) or seconds < 0:
+        return "unknown"
+    return _format_elapsed(seconds)
 
 
 @dataclass
@@ -183,18 +202,60 @@ class EmbeddingEngine:
         Returns:
             Array of shape (N, D) where N is len(samples) and D is embedding dim.
         """
+        provider_target = spec.model_id or spec.checkpoint or spec.provider
+        if show_progress:
+            print(
+                f"Preparing embedding provider '{spec.provider}' ({provider_target})...",
+                flush=True,
+            )
+
         func = self.get_function(spec)
 
+        if hasattr(func, "set_progress_enabled"):
+            func.set_progress_enabled(show_progress)
+
         if show_progress:
-            print(f"Computing embeddings for {len(samples)} samples...")
+            print(f"Computing embeddings for {len(samples)} samples...", flush=True)
 
         all_embeddings: list[np.ndarray] = []
-        for i in range(0, len(samples), batch_size):
+        total_samples = len(samples)
+        total_batches = max(1, math.ceil(total_samples / batch_size))
+        report_every_batches = 1 if total_batches <= 20 else max(1, total_batches // 20)
+        started_at = time.perf_counter()
+        last_report_at = started_at
+
+        for batch_index, i in enumerate(range(0, len(samples), batch_size), start=1):
             batch_samples = samples[i:i + batch_size]
 
             batch_paths = [s.filepath for s in batch_samples]
             batch_embeddings = func.compute_source_embeddings(batch_paths)
             all_embeddings.extend(batch_embeddings)
+
+            if not show_progress:
+                continue
+
+            completed = len(all_embeddings)
+            now = time.perf_counter()
+            should_report = batch_index == 1 or batch_index == total_batches
+            if batch_index % report_every_batches == 0:
+                should_report = True
+            if now - last_report_at >= 10.0:
+                should_report = True
+            if not should_report:
+                continue
+
+            elapsed = max(now - started_at, 1e-9)
+            rate = completed / elapsed
+            remaining = total_samples - completed
+            eta_seconds = remaining / rate if rate > 0 else float("inf")
+            print(
+                f"Embedded {completed}/{total_samples} samples "
+                f"({completed / total_samples:.0%}, batch {batch_index}/{total_batches}, "
+                f"{rate:.1f}/s, elapsed {_format_elapsed(elapsed)}, "
+                f"ETA {_format_eta(eta_seconds)})",
+                flush=True,
+            )
+            last_report_at = now
 
         return np.array(all_embeddings, dtype=np.float32)
 

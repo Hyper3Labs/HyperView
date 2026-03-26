@@ -3,11 +3,23 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { EmbeddingsData } from "@/types";
 import type { ScatterLabelsInfo } from "@/lib/labelLegend";
-import type { Dataset, GeometryMode, Modifiers, Renderer } from "hyper-scatter";
+import { getLayoutDimension } from "@/lib/layouts";
+import type {
+  Dataset,
+  Dataset3D,
+  GeometryMode,
+  GeometryMode3D,
+  Modifiers,
+  OrbitViewState3D,
+  Renderer,
+  Renderer3D,
+} from "hyper-scatter";
 
 type HyperScatterModule = typeof import("hyper-scatter");
+type AnyRenderer = Renderer | Renderer3D;
 
 const MAX_LASSO_VERTS = 512;
+const SELECTION_HIGHLIGHT_COLOR = "#f59e0b";
 
 function supportsWebGL2(): boolean {
   try {
@@ -32,16 +44,56 @@ function capInterleavedXY(points: ArrayLike<number>, maxVerts: number): number[]
   return out;
 }
 
+function buildCategoryVisibilityMask(labelsInfo: ScatterLabelsInfo, labelFilter: string | null): Uint8Array {
+  const mask = new Uint8Array(labelsInfo.uniqueLabels.length);
+
+  if (!labelFilter || !labelsInfo.uniqueLabels.includes(labelFilter)) {
+    mask.fill(1);
+    return mask;
+  }
+
+  for (let i = 0; i < labelsInfo.uniqueLabels.length; i++) {
+    mask[i] = labelsInfo.uniqueLabels[i] === labelFilter ? 1 : 0;
+  }
+
+  return mask;
+}
+
 
 interface UseHyperScatterArgs {
   embeddings: EmbeddingsData | null;
   labelsInfo: ScatterLabelsInfo | null;
+  labelFilter: string | null;
   selectedIds: Set<string>;
   hoveredId: string | null;
   setSelectedIds: (ids: Set<string>, source?: "scatter" | "grid") => void;
-  beginLassoSelection: (query: { layoutKey: string; polygon: number[] }) => void;
+  beginLassoSelection: (query: {
+    layoutKey: string;
+    polygon: number[];
+    labelFilter: string | null;
+    view3d: {
+      yaw: number;
+      pitch: number;
+      distance: number;
+      target_x: number;
+      target_y: number;
+      target_z: number;
+      ortho_scale: number;
+    } | null;
+    viewportWidth: number | null;
+    viewportHeight: number | null;
+  }) => void;
   setHoveredId: (id: string | null) => void;
-  hoverEnabled?: boolean;
+}
+
+function resolveLayoutDimension(embeddings: EmbeddingsData): 2 | 3 {
+  try {
+    return getLayoutDimension(embeddings.layout_key);
+  } catch {
+    const first = embeddings.coords[0];
+    if (Array.isArray(first) && first.length >= 3) return 3;
+    return 2;
+  }
 }
 
 function toModifiers(e: { shiftKey: boolean; ctrlKey: boolean; altKey: boolean; metaKey: boolean }): Modifiers {
@@ -50,6 +102,26 @@ function toModifiers(e: { shiftKey: boolean; ctrlKey: boolean; altKey: boolean; 
     ctrl: e.ctrlKey,
     alt: e.altKey,
     meta: e.metaKey,
+  };
+}
+
+function toServerView3D(view: OrbitViewState3D): {
+  yaw: number;
+  pitch: number;
+  distance: number;
+  target_x: number;
+  target_y: number;
+  target_z: number;
+  ortho_scale: number;
+} {
+  return {
+    yaw: view.yaw,
+    pitch: view.pitch,
+    distance: view.distance,
+    target_x: view.targetX,
+    target_y: view.targetY,
+    target_z: view.targetZ,
+    ortho_scale: view.orthoScale,
   };
 }
 
@@ -88,18 +160,18 @@ function drawLassoOverlay(canvas: HTMLCanvasElement | null, points: number[]): v
 export function useHyperScatter({
   embeddings,
   labelsInfo,
+  labelFilter,
   selectedIds,
   hoveredId,
   setSelectedIds,
   beginLassoSelection,
   setHoveredId,
-  hoverEnabled = true,
 }: UseHyperScatterArgs) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const rendererRef = useRef<Renderer | null>(null);
+  const rendererRef = useRef<AnyRenderer | null>(null);
 
   const [rendererError, setRendererError] = useState<string | null>(null);
 
@@ -124,6 +196,11 @@ export function useHyperScatter({
       m.set(embeddings.ids[i], i);
     }
     return m;
+  }, [embeddings]);
+
+  const layoutDimension = useMemo(() => {
+    if (!embeddings) return 2;
+    return resolveLayoutDimension(embeddings);
   }, [embeddings]);
 
   const requestRender = useCallback(() => {
@@ -237,18 +314,11 @@ export function useHyperScatter({
           redrawOverlay();
         }
 
-        // Use coords from embeddings response directly
+        // Use coords from embeddings response directly.
         const coords = embeddings.coords;
-        const positions = new Float32Array(coords.length * 2);
-        for (let i = 0; i < coords.length; i++) {
-          positions[i * 2] = coords[i][0];
-          positions[i * 2 + 1] = coords[i][1];
-        }
+        const resolvedLayoutDimension = resolveLayoutDimension(embeddings);
 
-        const geometry = embeddings.geometry as GeometryMode;
-        const dataset: Dataset = viz.createDataset(geometry, positions, labelsInfo.categories);
-
-        const opts = {
+        const rendererOpts = {
           width,
           height,
           devicePixelRatio: window.devicePixelRatio,
@@ -257,13 +327,68 @@ export function useHyperScatter({
           backgroundColor: "#161b22", // Match HyperView theme: --card is #161b22
         };
 
-        const renderer: Renderer =
-          geometry === "euclidean" ? new viz.EuclideanWebGLCandidate() : new viz.HyperbolicWebGLCandidate();
+        let renderer: AnyRenderer;
 
-        renderer.init(canvas, opts);
+        if (resolvedLayoutDimension === 3) {
+          const positions = new Float32Array(coords.length * 3);
+          for (let i = 0; i < coords.length; i++) {
+            if (coords[i].length < 3) {
+              throw new Error(`3D layout coords must have at least 3 components (row ${i}).`);
+            }
+            positions[i * 3] = coords[i][0];
+            positions[i * 3 + 1] = coords[i][1];
+            positions[i * 3 + 2] = coords[i][2];
+          }
 
-        renderer.setDataset(dataset);
+          const geometry: GeometryMode3D =
+            embeddings.geometry === "spherical" ? "sphere" : "euclidean3d";
+          const dataset: Dataset3D = viz.createDataset3D(geometry, positions, labelsInfo.categories);
+
+          renderer =
+            geometry === "sphere"
+              ? new viz.Spherical3DWebGLCandidate()
+              : new viz.Euclidean3DWebGLCandidate();
+
+          renderer.init(canvas, {
+            ...rendererOpts,
+            sphereGuideColor: "#94a3b8",
+            sphereGuideOpacity: 0.2,
+          });
+          renderer.setDataset(dataset);
+        } else {
+          const positions = new Float32Array(coords.length * 2);
+          for (let i = 0; i < coords.length; i++) {
+            if (coords[i].length < 2) {
+              throw new Error(`Layout coords must have at least 2 components (row ${i}).`);
+            }
+            positions[i * 2] = coords[i][0];
+            positions[i * 2 + 1] = coords[i][1];
+          }
+
+          // Spherical 2D layouts currently use the planar renderer interaction model.
+          const geometry: GeometryMode =
+            embeddings.geometry === "poincare" ? "poincare" : "euclidean";
+          const dataset: Dataset = viz.createDataset(geometry, positions, labelsInfo.categories);
+
+          renderer =
+            geometry === "euclidean" ? new viz.EuclideanWebGLCandidate() : new viz.HyperbolicWebGLCandidate();
+
+          renderer.init(canvas, rendererOpts);
+          renderer.setDataset(dataset);
+        }
+
         rendererRef.current = renderer;
+
+        // Apply mutable display-state contract at init so label filtering does
+        // not rely on renderer recreation.
+        renderer.setPalette(labelsInfo.palette);
+        renderer.setCategoryVisibility(buildCategoryVisibilityMask(labelsInfo, null));
+        renderer.setCategoryAlpha(1);
+        renderer.setInteractionStyle({
+          selectionColor: SELECTION_HIGHLIGHT_COLOR,
+          hoverColor: "#ffffff",
+          hoverFillColor: null,
+        });
 
         // Force a first render to surface WebGL2 context creation failures early.
         try {
@@ -306,6 +431,23 @@ export function useHyperScatter({
     };
   }, [embeddings, labelsInfo, redrawOverlay, requestRender, stopInteraction]);
 
+  // Runtime display-state sync (no renderer re-init).
+  useEffect(() => {
+    const renderer = rendererRef.current;
+    if (!renderer || !labelsInfo) return;
+
+    renderer.setPalette(labelsInfo.palette);
+    renderer.setCategoryVisibility(buildCategoryVisibilityMask(labelsInfo, labelFilter));
+    renderer.setCategoryAlpha(1);
+    renderer.setInteractionStyle({
+      selectionColor: SELECTION_HIGHLIGHT_COLOR,
+      hoverColor: "#ffffff",
+      hoverFillColor: null,
+    });
+
+    requestRender();
+  }, [labelFilter, labelsInfo, requestRender]);
+
   // Store -> renderer sync
   useEffect(() => {
     const renderer = rendererRef.current;
@@ -319,19 +461,12 @@ export function useHyperScatter({
 
     renderer.setSelection(indices);
 
-    if (!hoverEnabled) {
-      renderer.setHovered(-1);
-      hoveredIndexRef.current = -1;
-      requestRender();
-      return;
-    }
-
     const hoveredIdx = hoveredId ? (idToIndex.get(hoveredId) ?? -1) : -1;
     renderer.setHovered(hoveredIdx);
     hoveredIndexRef.current = hoveredIdx;
 
     requestRender();
-  }, [embeddings, hoveredId, hoverEnabled, idToIndex, requestRender, selectedIds]);
+  }, [embeddings, hoveredId, idToIndex, requestRender, selectedIds]);
 
   // Resize handling
   useEffect(() => {
@@ -461,15 +596,6 @@ export function useHyperScatter({
         return;
       }
 
-      if (!hoverEnabled) {
-        if (hoveredIndexRef.current !== -1) {
-          hoveredIndexRef.current = -1;
-          renderer.setHovered(-1);
-          requestRender();
-        }
-        return;
-      }
-
       // Hover
       const hit = renderer.hitTest(pos.x, pos.y);
       const nextIndex = hit ? hit.index : -1;
@@ -486,7 +612,7 @@ export function useHyperScatter({
 
       requestRender();
     },
-    [embeddings, getCanvasPos, hoverEnabled, requestRender, setHoveredId]
+    [embeddings, getCanvasPos, requestRender, setHoveredId]
   );
 
   const handlePointerUp = useCallback(
@@ -505,22 +631,71 @@ export function useHyperScatter({
 
         if (pts.length >= 6) {
           try {
-            const polyline = new Float32Array(pts);
-            const result = renderer.lassoSelect(polyline);
+            if (layoutDimension === 3) {
+              const renderer3d = renderer as Renderer3D;
+              const view = renderer3d.getView();
+              const rect = containerRef.current?.getBoundingClientRect();
+              const viewportWidth = rect
+                ? Math.max(1, Math.floor(rect.width))
+                : Math.max(
+                    1,
+                    overlayCanvasRef.current?.clientWidth ??
+                      canvasRef.current?.clientWidth ??
+                      overlayCanvasRef.current?.width ??
+                      canvasRef.current?.width ??
+                      0
+                  );
+              const viewportHeight = rect
+                ? Math.max(1, Math.floor(rect.height))
+                : Math.max(
+                    1,
+                    overlayCanvasRef.current?.clientHeight ??
+                      canvasRef.current?.clientHeight ??
+                      overlayCanvasRef.current?.height ??
+                      canvasRef.current?.height ??
+                      0
+                  );
 
-            // Enter server-driven lasso mode by sending a data-space polygon.
-            // Backend selection runs in the same coordinate system returned by /api/embeddings.
-            const dataCoords = result.geometry?.coords;
-            if (!dataCoords || dataCoords.length < 6) return;
+              // Clear any existing manual selection highlights immediately.
+              renderer.setSelection(new Set());
 
-            // Clear any existing manual selection highlights immediately.
-            renderer.setSelection(new Set());
+              // Cap vertex count to keep request payload + backend runtime bounded.
+              const polygon = capInterleavedXY(pts, MAX_LASSO_VERTS);
+              if (polygon.length < 6) return;
 
-            // Cap vertex count to keep request payload + backend runtime bounded.
-            const polygon = capInterleavedXY(dataCoords, MAX_LASSO_VERTS);
-            if (polygon.length < 6) return;
+              beginLassoSelection({
+                layoutKey: embeddings.layout_key,
+                polygon,
+                labelFilter: labelFilter ?? null,
+                view3d: toServerView3D(view),
+                viewportWidth,
+                viewportHeight,
+              });
+            } else {
+              const polyline = new Float32Array(pts);
+              const result = renderer.lassoSelect(polyline);
 
-            beginLassoSelection({ layoutKey: embeddings.layout_key, polygon });
+              // Enter server-driven lasso mode by sending a data-space polygon.
+              // Backend selection runs in the same coordinate system returned by /api/embeddings.
+              const dataCoords = (result as { geometry?: { coords?: Float32Array } }).geometry?.coords;
+              if (!dataCoords || dataCoords.length < 6) return;
+
+              // Clear any existing manual selection highlights immediately.
+              renderer.setSelection(new Set());
+
+              // Cap vertex count to keep request payload + backend runtime bounded.
+              const polygon = capInterleavedXY(dataCoords, MAX_LASSO_VERTS);
+              if (polygon.length < 6) return;
+
+              beginLassoSelection({
+                layoutKey: embeddings.layout_key,
+                polygon,
+                labelFilter: labelFilter ?? null,
+                view3d: null,
+                viewportWidth: null,
+                viewportHeight: null,
+              });
+            }
           } catch (err) {
             console.error("Lasso selection failed:", err);
           }
@@ -568,6 +743,8 @@ export function useHyperScatter({
       selectedIds,
       setSelectedIds,
       stopInteraction,
+      layoutDimension,
+      labelFilter,
     ]
   );
 

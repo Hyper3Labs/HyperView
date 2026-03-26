@@ -38,9 +38,8 @@ export function useLabelLegend({
         datasetLabels: datasetInfo?.labels ?? [],
         embeddings,
         labelColorMapId,
-        labelFilter,
       }),
-    [datasetInfo?.labels, embeddings, labelColorMapId, labelFilter]
+    [datasetInfo?.labels, embeddings, labelColorMapId]
   );
 
   const labelColorMap = useMemo(

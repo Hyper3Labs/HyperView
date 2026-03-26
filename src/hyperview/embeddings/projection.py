@@ -8,36 +8,25 @@ import umap
 
 logger = logging.getLogger(__name__)
 
-_MIN_SAMPLES = 2
+_MIN_PCA_SAMPLES = 2
 _EPS = 1e-7
 
+
 class ProjectionEngine:
-    """Engine for projecting high-dimensional embeddings to 2D."""
+    """Engine for projecting high-dimensional embeddings to low-dimensional layouts."""
+
+    def l2_normalize_rows(self, embeddings: np.ndarray) -> np.ndarray:
+        """L2-normalize embeddings row-wise with numerical safeguards."""
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        norms = np.maximum(norms, 1e-12)
+        return (embeddings / norms).astype(np.float32)
 
     def logmap_0_hyperboloid(
         self,
         embeddings: np.ndarray,
         curvature: float = 1.0,
     ) -> np.ndarray:
-        """Logarithmic map from the hyperboloid to the tangent space at the origin.
-
-        Maps points on the hyperboloid H^D (Lorentz model) to the tangent space
-        T_o H^D at the origin o = (1, 0, ..., 0).  The tangent space is Euclidean
-        R^D, so standard PCA can be applied afterward.
-
-        Simplification at the origin:
-            <o, x>_L = -x_0  (Lorentz inner product with north pole)
-            d_L(o, x) = arccosh(x_0)
-            spatial = x[1:]
-            tangent = d_L * spatial / ||spatial||   (if ||spatial|| > 0)
-
-        Args:
-            embeddings: (N, D+1) array on the hyperboloid (first column is time-like).
-            curvature: Positive curvature parameter c (sectional curvature is -c).
-
-        Returns:
-            (N, D) array of tangent vectors at the origin.
-        """
+        """Map hyperboloid points to the tangent space at the origin."""
         if embeddings.ndim != 2 or embeddings.shape[1] < 2:
             raise ValueError(
                 "embeddings must have shape (N, D+1) with D >= 1, "
@@ -47,55 +36,24 @@ class ProjectionEngine:
         c = float(curvature)
         sqrt_c = np.sqrt(c)
 
-        t = embeddings[:, 0]  # time component, shape (N,)
-        x = embeddings[:, 1:]  # spatial components, shape (N, D)
+        t = embeddings[:, 0]
+        x = embeddings[:, 1:]
 
-        # Hyperbolic distance from origin: d = (1/sqrt(c)) * arccosh(sqrt(c) * t)
-        # For c=1 this simplifies to arccosh(t).
-        arg = np.clip(sqrt_c * t, 1.0 + _EPS, None)  # ensure > 1 for arccosh
-        theta = np.arccosh(arg) / sqrt_c  # shape (N,)
+        arg = np.clip(sqrt_c * t, 1.0, None)
+        theta = np.arccosh(arg) / sqrt_c
 
-        norm_x = np.linalg.norm(x, axis=1)  # shape (N,)
-        # For points very close to the origin, norm_x ≈ 0 and theta ≈ 0.
-        # The tangent vector is simply 0 in that case.
+        norm_x = np.linalg.norm(x, axis=1)
         safe_norm = np.where(norm_x > _EPS, norm_x, 1.0)
         scale = np.where(norm_x > _EPS, theta / safe_norm, 0.0)
 
-        tangent = x * scale[:, np.newaxis]
-
-        logger.debug(
-            "logmap_0: input %s -> tangent %s, max_dist=%.4f",
-            embeddings.shape,
-            tangent.shape,
-            float(theta.max()) if len(theta) else 0.0,
-        )
-        return tangent.astype(np.float32)
+        return (x * scale[:, np.newaxis]).astype(np.float32)
 
     def expmap_0_hyperboloid(
         self,
         tangent_vectors: np.ndarray,
         curvature: float = 1.0,
     ) -> np.ndarray:
-        """Exponential map from the tangent space at the origin back to the hyperboloid.
-
-        Inverse of ``logmap_0_hyperboloid``.
-
-        expmap_0(v):
-            norm_v = ||v||
-            t = cosh(sqrt(c) * norm_v) / sqrt(c)   ... but for unit hyperboloid (c=1): t = cosh(norm_v)
-            spatial = sinh(sqrt(c) * norm_v) / (sqrt(c) * norm_v) * v
-
-        For c = 1:
-            t = cosh(norm_v)
-            spatial = sinh(norm_v) * v / norm_v
-
-        Args:
-            tangent_vectors: (N, D) array in the tangent space at the origin.
-            curvature: Positive curvature parameter c.
-
-        Returns:
-            (N, D+1) array of points on the hyperboloid.
-        """
+        """Map tangent vectors at the origin back to the hyperboloid."""
         if tangent_vectors.ndim != 2:
             raise ValueError(
                 f"tangent_vectors must be 2-D, got shape {tangent_vectors.shape}"
@@ -104,11 +62,10 @@ class ProjectionEngine:
         c = float(curvature)
         sqrt_c = np.sqrt(c)
 
-        norm_v = np.linalg.norm(tangent_vectors, axis=1)  # (N,)
+        norm_v = np.linalg.norm(tangent_vectors, axis=1)
         scaled_norm = sqrt_c * norm_v
 
-        t = np.cosh(scaled_norm) / sqrt_c  # time component
-        # sinh(x)/x -> 1 as x -> 0
+        t = np.cosh(scaled_norm) / sqrt_c
         safe_scaled = np.where(scaled_norm > _EPS, scaled_norm, 1.0)
         coeff = np.where(
             scaled_norm > _EPS,
@@ -117,14 +74,7 @@ class ProjectionEngine:
         )
         spatial = tangent_vectors * coeff[:, np.newaxis]
 
-        result = np.column_stack([t, spatial])
-
-        logger.debug(
-            "expmap_0: tangent %s -> hyperboloid %s",
-            tangent_vectors.shape,
-            result.shape,
-        )
-        return result.astype(np.float32)
+        return np.column_stack([t, spatial]).astype(np.float32)
 
     def to_poincare_ball(
         self,
@@ -153,19 +103,20 @@ class ProjectionEngine:
         if c <= 0:
             raise ValueError(f"curvature must be > 0, got {c}")
 
-        # Radius R = 1/sqrt(c) for curvature -c
-        R = 1.0 / np.sqrt(c)
+        # Radius is 1/sqrt(c) for curvature -c.
+        radius = 1.0 / np.sqrt(c)
 
         t = hyperboloid_embeddings[:, :1]
         x = hyperboloid_embeddings[:, 1:]
 
-        # Map to ball radius R: u_R = x / (t + R)
-        denom = t + R
-        u_R = x / denom
+        # Map to the ball with the target radius.
+        denom = t + radius
+        ball_coords = x / denom
 
-        # Rescale to unit ball: u = u_R / R = sqrt(c) * u_R
-        u = u_R / R
+        # Rescale to the unit ball.
+        u = ball_coords / radius
 
+        # Numerical guard: ensure inside the unit ball
         radii = np.linalg.norm(u, axis=1)
         mask = radii >= clamp_radius
         if np.any(mask):
@@ -179,14 +130,17 @@ class ProjectionEngine:
         *,
         input_geometry: str = "euclidean",
         output_geometry: str = "euclidean",
+        n_components: int = 2,
+        normalize_input: bool = False,
         curvature: float | None = None,
         method: str = "umap",
         n_neighbors: int = 15,
         min_dist: float = 0.1,
         metric: str = "cosine",
         random_state: int = 42,
+        verbose: bool = False,
     ) -> np.ndarray:
-        """Project embeddings to 2D with geometry-aware preprocessing.
+        """Project embeddings with geometry-aware preprocessing.
 
         This separates two concerns:
         1) Geometry/model transforms for the *input* embeddings (e.g. hyperboloid -> Poincaré)
@@ -195,7 +149,9 @@ class ProjectionEngine:
         Args:
             embeddings: Input embeddings (N x D) or hyperboloid (N x D+1).
             input_geometry: Geometry/model of the input embeddings (euclidean, hyperboloid).
-            output_geometry: Geometry of the output coordinates (euclidean, poincare).
+            output_geometry: Geometry of the output coordinates (euclidean, poincare, spherical).
+            n_components: Number of output dimensions.
+            normalize_input: Whether to L2-normalize vectors before projection.
             curvature: Curvature parameter for hyperbolic embeddings (positive c).
             method: Layout method ('umap' or 'pca').
             n_neighbors: UMAP neighbors.
@@ -204,23 +160,31 @@ class ProjectionEngine:
             random_state: Random seed.
 
         Returns:
-            2D coordinates (N x 2).
+            Layout coordinates (N x n_components).
         """
         if method not in ("umap", "pca"):
             raise ValueError(
                 f"Invalid method: {method}. Supported methods: 'umap', 'pca'."
             )
+        if n_components < 2:
+            raise ValueError(f"n_components must be >= 2, got {n_components}")
 
         if method == "pca":
             return self._project_pca(
                 embeddings,
                 input_geometry=input_geometry,
                 output_geometry=output_geometry,
+                n_components=n_components,
+                normalize_input=normalize_input,
                 curvature=curvature or 1.0,
+                verbose=verbose,
             )
 
         prepared = embeddings
         prepared_metric: str = metric
+
+        if normalize_input:
+            prepared = self.l2_normalize_rows(prepared)
 
         if input_geometry == "hyperboloid":
             # Convert to unit Poincaré ball and use UMAP's built-in hyperbolic distance.
@@ -228,156 +192,136 @@ class ProjectionEngine:
             prepared_metric = "poincare"
 
         if output_geometry == "poincare":
+            if n_components != 2:
+                raise ValueError("Poincare layouts currently require 2D output")
             return self.project_to_poincare(
                 prepared,
                 n_neighbors=n_neighbors,
                 min_dist=min_dist,
                 metric=prepared_metric,
                 random_state=random_state,
+                verbose=verbose,
             )
 
-        if output_geometry == "euclidean":
+        if output_geometry in ("euclidean", "spherical"):
             return self.project_umap(
                 prepared,
                 n_neighbors=n_neighbors,
                 min_dist=min_dist,
                 metric=prepared_metric,
-                n_components=2,
+                n_components=n_components,
                 random_state=random_state,
+                verbose=verbose,
             )
 
         raise ValueError(
-            f"Invalid output_geometry: {output_geometry}. Must be 'euclidean' or 'poincare'."
+            f"Invalid output_geometry: {output_geometry}. "
+            "Must be 'euclidean', 'poincare', or 'spherical'."
         )
 
-   
     def _project_pca(
         self,
         embeddings: np.ndarray,
         *,
         input_geometry: str,
         output_geometry: str,
-        curvature: float = 1.0,
+        n_components: int,
+        normalize_input: bool,
+        curvature: float,
+        verbose: bool,
     ) -> np.ndarray:
-        """Dispatch PCA projection based on input/output geometry.
-
-        Handles four combinations:
-        - euclidean  -> euclidean:  Standard PCA, normalize to [-1, 1]
-        - euclidean  -> poincare:   Standard PCA, tanh disk mapping
-        - hyperboloid -> euclidean: logmap_0, PCA, normalize to [-1, 1]
-        - hyperboloid -> poincare:  logmap_0, PCA to 2D, expmap_0 back, stereographic to disk
-        """
-        n_samples = embeddings.shape[0]
-        if n_samples < _MIN_SAMPLES:
+        """Project embeddings with deterministic PCA."""
+        if output_geometry not in ("euclidean", "poincare", "spherical"):
             raise ValueError(
-                f"PCA requires at least {_MIN_SAMPLES} samples, got {n_samples}."
+                f"Invalid output_geometry: {output_geometry}. "
+                "Must be 'euclidean', 'poincare', or 'spherical'."
             )
-
+        if output_geometry == "poincare" and n_components != 2:
+            raise ValueError("Poincare layouts currently require 2D output")
+        if len(embeddings) < _MIN_PCA_SAMPLES:
+            raise ValueError(
+                f"PCA requires at least {_MIN_PCA_SAMPLES} samples, got {len(embeddings)}"
+            )
         if not np.all(np.isfinite(embeddings)):
             raise ValueError("Embeddings contain NaN or Inf values.")
-
-        logger.info(
-            "PCA: input_geometry=%s, output_geometry=%s, N=%d, D=%d",
-            input_geometry,
-            output_geometry,
-            n_samples,
-            embeddings.shape[1],
-        )
 
         if input_geometry == "hyperboloid":
             data = self.logmap_0_hyperboloid(embeddings, curvature=curvature)
         else:
             data = embeddings
+            if normalize_input:
+                data = self.l2_normalize_rows(data)
 
-        pca_2d, explained = self._pca_svd(data, n_components=2)
+        coords, explained = self._pca_svd(data, n_components=n_components)
 
-        logger.info("PCA: explained variance ratio: [%.4f, %.4f]", *explained)
+        if verbose:
+            explained_str = ", ".join(f"{ratio:.4f}" for ratio in explained)
+            logger.info("PCA explained variance ratio: [%s]", explained_str)
 
         if output_geometry == "poincare":
             if input_geometry == "hyperboloid":
-                # Tangent PCA -> expmap back to H^2 -> stereographic to Poincaré disk
-                hyp_points = self.expmap_0_hyperboloid(pca_2d, curvature=curvature)
-                coords = self.to_poincare_ball(hyp_points, curvature=curvature)
-                coords = self._center_poincare(coords)
-                coords = self._scale_poincare(coords, factor=0.65)
+                hyperboloid_coords = self.expmap_0_hyperboloid(coords, curvature=curvature)
+                projected = self.to_poincare_ball(hyperboloid_coords, curvature=curvature)
             else:
-                # Euclidean PCA -> tanh disk mapping
-                coords = self._pca_to_poincare_disk(pca_2d)
-            return coords.astype(np.float32)
+                projected = self._map_to_poincare_disk(coords)
 
-        return self._normalize_coords(pca_2d).astype(np.float32)
+            projected = self._center_poincare(projected)
+            projected = self._scale_poincare(projected, factor=0.65)
+            return projected.astype(np.float32)
+
+        projected = self._normalize_coords(coords)
+        if output_geometry == "spherical":
+            projected = self.l2_normalize_rows(projected)
+
+        return projected.astype(np.float32)
 
     def _pca_svd(
         self,
         data: np.ndarray,
         n_components: int = 2,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Compute PCA via NumPy SVD. No scikit-learn dependency.
+        """Compute PCA with NumPy SVD and pad missing components with zeros."""
+        data = data.astype(np.float64, copy=False)
+        centered = data - data.mean(axis=0, keepdims=True)
 
-        Args:
-            data: (N, D) array of data points.
-            n_components: Number of principal components to keep.
+        _u, singular_values, vh = np.linalg.svd(centered, full_matrices=False)
 
-        Returns:
-            Tuple of:
-            - (N, n_components) projected data
-            - (n_components,) explained variance ratios
-        """
-        data = data.astype(np.float64)
-        mean = data.mean(axis=0)
-        centered = data - mean
-
-        # Economy SVD (full_matrices=False) is O(N * D * min(N,D))
-        _U, S, Vt = np.linalg.svd(centered, full_matrices=False)
-
-        # SVD produces min(N, D) components; clamp to what's available
-        k = min(n_components, Vt.shape[0])
-        projected = centered @ Vt[:k].T
-        if k < n_components:
-            pad = np.zeros((projected.shape[0], n_components - k), dtype=projected.dtype)
-            projected = np.hstack([projected, pad])
-
-        variance = S**2 / max(len(data) - 1, 1)
-        total_var = variance.sum()
-        if total_var > 0:
-            explained = np.zeros(n_components)
-            explained[:k] = variance[:k] / total_var
+        k = min(n_components, vh.shape[0])
+        if k > 0:
+            projected = centered @ vh[:k].T
         else:
-            explained = np.zeros(n_components)
+            projected = np.empty((len(data), 0), dtype=np.float64)
+
+        if k < n_components:
+            padding = np.zeros((projected.shape[0], n_components - k), dtype=projected.dtype)
+            projected = np.hstack([projected, padding])
+
+        variance = singular_values**2 / max(len(data) - 1, 1)
+        explained = np.zeros(n_components, dtype=np.float32)
+        total_variance = float(variance.sum())
+        if total_variance > 0 and k > 0:
+            explained[:k] = variance[:k] / total_variance
 
         return projected.astype(np.float32), explained
 
-    def _pca_to_poincare_disk(
+    def _map_to_poincare_disk(
         self,
         coords_2d: np.ndarray,
         alpha: float = 1.0,
     ) -> np.ndarray:
-        """Map 2D Euclidean PCA output into the Poincaré disk via tanh scaling.
+        """Map 2D Euclidean coordinates into the open Poincare disk."""
+        if coords_2d.ndim != 2 or coords_2d.shape[1] != 2:
+            raise ValueError(f"coords_2d must have shape (N, 2), got {coords_2d.shape}")
 
-        tanh(alpha * r) * z / r   for each point z with r = ||z||
-
-        This is a homeomorphism R^2 -> B^2 (open unit ball).
-
-        Args:
-            coords_2d: (N, 2) PCA coordinates.
-            alpha: Scaling factor controlling radial compression (default 1.0).
-
-        Returns:
-            (N, 2) Poincaré disk coordinates.
-        """
         max_abs = np.abs(coords_2d).max()
-        if max_abs > _EPS:
-            coords_2d = coords_2d / max_abs
+        normalized = coords_2d if max_abs <= _EPS else coords_2d / max_abs
 
-        radii = np.linalg.norm(coords_2d, axis=1)
+        radii = np.linalg.norm(normalized, axis=1)
         safe_radii = np.where(radii > _EPS, radii, 1.0)
         mapped_radii = np.tanh(alpha * radii)
         scale = np.where(radii > _EPS, mapped_radii / safe_radii, 0.0)
-        poincare = coords_2d * scale[:, np.newaxis]
-        poincare = self._center_poincare(poincare)
-        poincare = self._scale_poincare(poincare, factor=0.65)
 
-        return poincare.astype(np.float32)
+        return (normalized * scale[:, np.newaxis]).astype(np.float32)
 
     def project_umap(
         self,
@@ -387,8 +331,9 @@ class ProjectionEngine:
         metric: str = "cosine",
         n_components: int = 2,
         random_state: int = 42,
+        verbose: bool = False,
     ) -> np.ndarray:
-        """Project embeddings to Euclidean 2D using UMAP."""
+        """Project embeddings to Euclidean layout coordinates using UMAP."""
         n_neighbors = min(n_neighbors, len(embeddings) - 1)
         if n_neighbors < 2:
             n_neighbors = 2
@@ -402,6 +347,7 @@ class ProjectionEngine:
             metric=metric,
             random_state=random_state,
             n_jobs=n_jobs,
+            verbose=verbose,
         )
 
         coords = reducer.fit_transform(embeddings)
@@ -416,6 +362,7 @@ class ProjectionEngine:
         min_dist: float = 0.1,
         metric: str = "cosine",
         random_state: int = 42,
+        verbose: bool = False,
     ) -> np.ndarray:
         """Project embeddings to the Poincaré disk using UMAP with hyperboloid output."""
         n_neighbors = min(n_neighbors, len(embeddings) - 1)
@@ -435,6 +382,7 @@ class ProjectionEngine:
                 output_metric="hyperboloid",
                 random_state=random_state,
                 n_jobs=n_jobs,
+                verbose=verbose,
             )
             spatial_coords = reducer.fit_transform(embeddings)
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 
 from hyperview import Dataset, launch
+from hyperview.core.dataset import parse_visualization_layout
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -37,6 +38,12 @@ def _build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="HuggingFace split to use (required with --hf-dataset)",
+    )
+    parser.add_argument(
+        "--hf-config",
+        type=str,
+        default=None,
+        help="Optional HuggingFace subset/configuration to use",
     )
     parser.add_argument(
         "--image-key",
@@ -73,6 +80,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Maximum number of ingested samples (omit to load all)",
     )
     parser.add_argument(
+        "--hf-streaming",
+        action="store_true",
+        help=(
+            "Stream HuggingFace rows instead of materializing the full split first. "
+            "Useful for loading subsets without eager full-split downloads."
+        ),
+    )
+    parser.add_argument(
         "--shuffle",
         action="store_true",
         help="Shuffle HuggingFace dataset before sampling",
@@ -82,6 +97,15 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=42,
         help="Random seed used when --shuffle is enabled (default: 42)",
+    )
+    parser.add_argument(
+        "--hf-shuffle-buffer-size",
+        type=int,
+        default=1000,
+        help=(
+            "Shuffle buffer size used with --hf-streaming and --shuffle. "
+            "Streaming shuffle is approximate and trades larger buffers for more read-ahead."
+        ),
     )
 
     parser.add_argument(
@@ -100,12 +124,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Projection method: 'umap' (default) or 'pca'",
     )
     parser.add_argument(
-        "--geometry",
-        choices=["auto", "euclidean", "poincare", "both"],
-        default="both",
+        "--layout",
+        action="append",
+        dest="layouts",
+        metavar="GEOMETRY[:2d|3d]",
         help=(
-            "Layout geometry to compute when embeddings are computed. "
-            "auto chooses based on embedding geometry; both computes both layouts."
+            "Visualization layout to compute. Repeat this flag to request multiple layouts, "
+            "for example '--layout euclidean --layout spherical'. "
+            "Omitting the suffix defaults to 2D for euclidean/poincare and 3D for spherical. "
+            "If omitted, HyperView picks one sensible default layout for the selected embedding space."
         ),
     )
     parser.add_argument(
@@ -162,6 +189,23 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    if args.layouts:
+        canonical_layouts: list[str] = []
+        seen_layouts: set[str] = set()
+        for layout_spec in args.layouts:
+            try:
+                geometry, layout_dimension = parse_visualization_layout(layout_spec)
+            except ValueError as exc:
+                parser.error(str(exc))
+
+            canonical_layout = f"{geometry}:{layout_dimension}d"
+            if canonical_layout in seen_layouts:
+                continue
+            seen_layouts.add(canonical_layout)
+            canonical_layouts.append(canonical_layout)
+
+        args.layouts = canonical_layouts
+
     if args.hf_dataset and args.images_dir:
         parser.error("Use either --hf-dataset or --images-dir, not both.")
 
@@ -181,6 +225,8 @@ def _validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
             parser.error("--split is required when using --hf-dataset.")
         if not args.image_key:
             parser.error("--image-key is required when using --hf-dataset.")
+        if args.hf_shuffle_buffer_size < 1:
+            parser.error("--hf-shuffle-buffer-size must be at least 1.")
 
 
 def _print_ingestion_result(added: int, skipped: int) -> None:
@@ -191,9 +237,11 @@ def _print_ingestion_result(added: int, skipped: int) -> None:
 
 
 def _ingest_huggingface(dataset: Dataset, args: argparse.Namespace, dataset_name: str) -> None:
-    print(f"Loading HuggingFace dataset {dataset_name}...")
+    config_suffix = f" [{args.hf_config}]" if args.hf_config else ""
+    print(f"Loading HuggingFace dataset {dataset_name}{config_suffix}...")
     added, skipped = dataset.add_from_huggingface(
         dataset_name,
+        config=args.hf_config,
         split=args.split,
         image_key=args.image_key,
         label_key=args.label_key,
@@ -201,6 +249,8 @@ def _ingest_huggingface(dataset: Dataset, args: argparse.Namespace, dataset_name
         max_samples=args.samples,
         shuffle=args.shuffle,
         seed=args.seed,
+        streaming=args.hf_streaming,
+        shuffle_buffer_size=args.hf_shuffle_buffer_size,
     )
     _print_ingestion_result(added, skipped)
 
@@ -228,37 +278,35 @@ def _prepare_dataset(args: argparse.Namespace) -> Dataset:
     return dataset
 
 
-def _resolve_geometry_targets(
+def _resolve_default_layouts(
     dataset: Dataset,
-    geometry: str,
     space_key: str | None,
 ) -> list[str]:
-    if geometry == "both":
-        return ["euclidean", "poincare"]
-
-    if geometry in ("euclidean", "poincare"):
-        return [geometry]
-
-    if space_key is None:
-        return ["euclidean"]
-
     spaces = dataset.list_spaces()
     selected = next((space for space in spaces if space.space_key == space_key), None)
-    if selected is not None and selected.geometry == "hyperboloid":
-        return ["poincare"]
 
-    return ["euclidean"]
+    if selected is not None:
+        if selected.geometry == "hyperboloid":
+            return ["poincare:2d"]
+        if selected.geometry == "hypersphere":
+            return ["spherical:3d"]
+        return ["euclidean:2d"]
 
+    if any(space.geometry not in ("hyperboloid", "hypersphere") for space in spaces):
+        return ["euclidean:2d"]
+    if any(space.geometry == "hypersphere" for space in spaces):
+        return ["spherical:3d"]
+    return ["poincare:2d"]
 
 def _compute_layouts(dataset: Dataset, args: argparse.Namespace, space_key: str | None) -> None:
-    targets = _resolve_geometry_targets(dataset, args.geometry, space_key)
+    target_layouts = args.layouts or _resolve_default_layouts(dataset, space_key)
 
     print("Computing visualizations...")
-    for target_geometry in targets:
+    for target_layout in target_layouts:
         dataset.compute_visualization(
             space_key=space_key,
             method=args.method,
-            geometry=target_geometry,
+            layout=target_layout,
             n_neighbors=args.n_neighbors,
             min_dist=args.min_dist,
             metric=args.metric,
