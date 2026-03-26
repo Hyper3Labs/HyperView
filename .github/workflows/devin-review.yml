@@ -2,28 +2,136 @@ name: Devin Review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to review
+        required: true
+        type: string
 
 jobs:
   devin-review:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Run Devin Review
-        # Use script to emulate a TTY as devin-review requires terminal features
-        # The -q flag suppresses script output, -e exits with command exit code,
-        # and -c runs the command. /dev/null discards script's own output.
+      - name: Resolve Devin Review URL
+        id: review
+        uses: actions/github-script@v8
         env:
-          CI: true  # Ensures the tool runs in non-interactive CI mode
+          WORKFLOW_PR_NUMBER: ${{ inputs.pr_number }}
+        with:
+          script: |
+            const prNumber = context.eventName === 'workflow_dispatch'
+              ? Number(process.env.WORKFLOW_PR_NUMBER)
+              : context.payload.pull_request.number;
+
+            if (!Number.isInteger(prNumber) || prNumber <= 0) {
+              core.setFailed(`Invalid pull request number: ${prNumber}`);
+              return;
+            }
+
+            const { owner, repo } = context.repo;
+            const reviewUrl = `https://devinreview.com/${owner}/${repo}/pull/${prNumber}`;
+            const prUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
+
+            core.setOutput('number', String(prNumber));
+            core.setOutput('pr_url', prUrl);
+            core.setOutput('review_url', reviewUrl);
+
+      - name: Warm Devin Review page
+        env:
+          REVIEW_URL: ${{ steps.review.outputs.review_url }}
         run: |
-          script -q -e -c "npx devin-review ${{ github.event.pull_request.html_url }}" /dev/null
+          curl --fail --silent --show-error --location "$REVIEW_URL" --output /dev/null
+
+      - name: Publish Devin Review summary
+        env:
+          PR_NUMBER: ${{ steps.review.outputs.number }}
+          PR_URL: ${{ steps.review.outputs.pr_url }}
+          REVIEW_URL: ${{ steps.review.outputs.review_url }}
+        run: |
+          {
+            echo "Devin Review is available for PR #${PR_NUMBER}."
+            echo
+            echo "- GitHub PR: ${PR_URL}"
+            echo "- Devin Review: ${REVIEW_URL}"
+            echo
+            echo "This workflow intentionally does not use DEVIN_API_KEY."
+            echo "For automatic Devin statuses or comments inside GitHub, connect the Devin GitHub integration and enable auto-review in Devin settings."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upsert PR comment with Devin Review link
+        id: comment
+        uses: actions/github-script@v8
+        env:
+          PR_NUMBER: ${{ steps.review.outputs.number }}
+          PR_URL: ${{ steps.review.outputs.pr_url }}
+          REVIEW_URL: ${{ steps.review.outputs.review_url }}
+        with:
+          script: |
+            const marker = '<!-- devin-review-link -->';
+            const issue_number = Number(process.env.PR_NUMBER);
+            core.setOutput('posted', 'false');
+            const body = [
+              marker,
+              'Devin Review is available for this pull request.',
+              '',
+              `- GitHub PR: ${process.env.PR_URL}`,
+              `- Devin Review: ${process.env.REVIEW_URL}`,
+              '',
+              'This link opens the hosted Devin Review page for the current PR.',
+            ].join('\n');
+
+            try {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number,
+                per_page: 100,
+              });
+
+              const existing = comments.find((comment) => comment.body && comment.body.includes(marker));
+
+              if (existing) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existing.id,
+                  body,
+                });
+                core.info(`Updated existing Devin Review comment: ${existing.html_url}`);
+              } else {
+                const created = await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number,
+                  body,
+                });
+                core.info(`Created Devin Review comment: ${created.data.html_url}`);
+              }
+
+              core.setOutput('posted', 'true');
+            } catch (error) {
+              if (error && error.status === 403) {
+                core.warning('PR comment was not posted because this repository grants GitHub Actions a read-only GITHUB_TOKEN.');
+              } else {
+                throw error;
+              }
+            }
+
+      - name: Report comment permission limitation
+        if: ${{ steps.comment.outputs.posted != 'true' }}
+        run: |
+          {
+            echo
+            echo "PR comment was not posted automatically."
+            echo
+            echo "This repository currently sets GitHub Actions GITHUB_TOKEN to read-only permissions, so the workflow cannot create issue comments."
+            echo "If repository workflow permissions are changed to read/write, this step will start posting or updating the PR comment automatically."
+          } >> "$GITHUB_STEP_SUMMARY"
