@@ -130,3 +130,16 @@ Development setup, frontend hot-reload, and backend API notes live in [CONTRIBUT
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
+
+
+## Citation
+
+If you use HyperView in your research, please cite:
+```bibtex
+@software{hyperview2025,
+  author  = {Mahmood, Matin and Rueda-Toicen, Antonio and Morozov, Daniil},
+  title   = {HyperView: Open-source Dataset Curation and Model Analysis},
+  year    = {2025},
+  url     = {https://github.com/Hyper3Labs/HyperView/tree/main}
+}
+```
