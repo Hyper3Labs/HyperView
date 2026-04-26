@@ -4,6 +4,7 @@ export interface Sample {
   filename: string;
   label: string | null;
   thumbnail: string | null;
+  media_url?: string | null;
   metadata: Record<string, unknown>;
   width: number | null;
   height: number | null;
@@ -51,4 +52,53 @@ export interface SamplesResponse {
   offset: number;
   limit: number;
   samples: Sample[];
+}
+
+export interface SimilarSample extends Sample {
+  distance: number;
+}
+
+export interface SimilaritySearchResponse {
+  query_id: string;
+  query_sample: Sample | null;
+  space_key: string | null;
+  metric: string;
+  k: number;
+  results: SimilarSample[];
+}
+
+export interface RuntimePanelData {
+  module_src: string | null;
+}
+
+export interface RuntimePanel {
+  id: string;
+  kind: "module";
+  title: string;
+  position: "center" | "right" | "bottom";
+  module_file: string | null;
+  data: RuntimePanelData;
+}
+
+export interface WorkspaceSummary {
+  id: string;
+  dataset_name: string | null;
+}
+
+export interface RuntimeWorkspaceState {
+  id: string;
+  dataset_name: string | null;
+  ui: {
+    active_layout_key: string | null;
+    selected_ids: string[];
+    custom_panels: RuntimePanel[];
+  };
+}
+
+export interface RuntimeSnapshot {
+  runtime_id: string;
+  version: number;
+  active_workspace_id: string | null;
+  workspaces: WorkspaceSummary[];
+  workspace: RuntimeWorkspaceState;
 }

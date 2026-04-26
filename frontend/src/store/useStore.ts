@@ -1,6 +1,55 @@
 import { create } from "zustand";
-import type { DatasetInfo, EmbeddingsData, Sample } from "@/types";
+import type {
+  DatasetInfo,
+  EmbeddingsData,
+  RuntimePanel,
+  RuntimeSnapshot,
+  Sample,
+  SimilarSample,
+  WorkspaceSummary,
+} from "@/types";
 import { normalizeLabel } from "@/lib/labelColors";
+
+function createClearedLassoState() {
+  return {
+    isLassoSelection: false,
+    lassoQuery: null,
+    lassoSamples: [] as Sample[],
+    lassoTotal: 0,
+    lassoIsLoading: false,
+  };
+}
+
+function createClearedNeighborsState() {
+  return {
+    neighborsResults: [] as SimilarSample[],
+    neighborsLoading: false,
+    neighborsError: null,
+  };
+}
+
+function createClearedDatasetScopedState() {
+  return {
+    datasetInfo: null as DatasetInfo | null,
+    samples: [] as Sample[],
+    totalSamples: 0,
+    samplesLoaded: 0,
+    embeddingsByLayoutKey: {} as Record<string, EmbeddingsData>,
+    activeLayoutKey: null as string | null,
+    labelFilter: null as string | null,
+    hoveredId: null as string | null,
+    isLoading: false,
+    error: null as string | null,
+  };
+}
+
+function areSetsEqual<T>(left: Set<T>, right: Set<T>) {
+  if (left.size !== right.size) return false;
+  for (const value of left) {
+    if (!right.has(value)) return false;
+  }
+  return true;
+}
 
 export interface OrbitView3DPayload {
   yaw: number;
@@ -33,6 +82,14 @@ interface AppState {
   // Dataset info
   datasetInfo: DatasetInfo | null;
   setDatasetInfo: (info: DatasetInfo) => void;
+
+  // Runtime / workspace state
+  activeWorkspaceId: string | null;
+  workspaces: WorkspaceSummary[];
+  runtimeDatasetName: string | null;
+  customPanels: RuntimePanel[];
+  requestedLayoutKey: string | null;
+  applyRuntimeSnapshot: (snapshot: RuntimeSnapshot) => void;
 
   // Samples
   samples: Sample[];
@@ -73,6 +130,15 @@ interface AppState {
   setLassoResults: (samples: Sample[], total: number, append?: boolean) => void;
   clearLassoSelection: () => void;
 
+  // Neighbors / KNN state
+  neighborsResults: SimilarSample[];
+  neighborsLoading: boolean;
+  neighborsError: string | null;
+  beginNeighborsQuery: (resetResults?: boolean) => void;
+  setNeighborsResults: (samples: SimilarSample[]) => void;
+  setNeighborsError: (error: string) => void;
+  clearNeighbors: () => void;
+
   // Hover state
   hoveredId: string | null;
   setHoveredId: (id: string | null) => void;
@@ -84,9 +150,15 @@ interface AppState {
   // Error state
   error: string | null;
   setError: (error: string | null) => void;
+
+  // UI state
+  sampleGridSize: "small" | "medium" | "large";
+  setSampleGridSize: (size: "small" | "medium" | "large") => void;
+  scatterLabelOverlayMode: "off" | "auto" | "coarse" | "fine";
+  setScatterLabelOverlayMode: (mode: "off" | "auto" | "coarse" | "fine") => void;
 }
 
-export const useStore = create<AppState>((set, get) => ({
+export const useStore = create<AppState>((set) => ({
   // Panel visibility (for header toggles)
   leftPanelOpen: false,
   rightPanelOpen: false,
@@ -98,6 +170,35 @@ export const useStore = create<AppState>((set, get) => ({
   // Dataset info
   datasetInfo: null,
   setDatasetInfo: (info) => set({ datasetInfo: info }),
+
+  // Runtime / workspace state
+  activeWorkspaceId: null,
+  workspaces: [],
+  runtimeDatasetName: null,
+  customPanels: [],
+  requestedLayoutKey: null,
+  applyRuntimeSnapshot: (snapshot) =>
+    set((state) => {
+      const nextWorkspaceId = snapshot.active_workspace_id;
+      const nextDatasetName = snapshot.workspace.dataset_name;
+      const runtimeScopeChanged =
+        state.activeWorkspaceId !== nextWorkspaceId ||
+        state.runtimeDatasetName !== nextDatasetName;
+
+      return {
+        activeWorkspaceId: nextWorkspaceId,
+        workspaces: snapshot.workspaces,
+        runtimeDatasetName: nextDatasetName,
+        customPanels: snapshot.workspace.ui.custom_panels,
+        requestedLayoutKey: snapshot.workspace.ui.active_layout_key,
+        selectedIds: new Set(snapshot.workspace.ui.selected_ids),
+        selectionSource:
+          snapshot.workspace.ui.selected_ids.length > 0 ? "scatter" : null,
+        ...(runtimeScopeChanged ? createClearedDatasetScopedState() : {}),
+        ...createClearedLassoState(),
+        ...createClearedNeighborsState(),
+      };
+    }),
 
   // Samples
   samples: [],
@@ -141,12 +242,9 @@ export const useStore = create<AppState>((set, get) => ({
     set({
       labelFilter: nextLabel,
       selectedIds: new Set<string>(),
-      isLassoSelection: false,
       selectionSource: null,
-      lassoQuery: null,
-      lassoSamples: [],
-      lassoTotal: 0,
-      lassoIsLoading: false,
+      ...createClearedLassoState(),
+      ...createClearedNeighborsState(),
     });
   },
 
@@ -155,14 +253,25 @@ export const useStore = create<AppState>((set, get) => ({
   isLassoSelection: false,
   selectionSource: null,
   setSelectedIds: (ids, source = "grid") =>
-    set({
-      selectedIds: ids,
-      selectionSource: ids.size > 0 ? source : null,
-      isLassoSelection: false,
-      lassoQuery: null,
-      lassoSamples: [],
-      lassoTotal: 0,
-      lassoIsLoading: false,
+    set((state) => {
+      const nextSelectionSource = ids.size > 0 ? source : null;
+
+      if (!state.isLassoSelection && areSetsEqual(state.selectedIds, ids)) {
+        if (state.selectionSource === nextSelectionSource) {
+          return state;
+        }
+
+        return {
+          selectionSource: nextSelectionSource,
+        };
+      }
+
+      return {
+        selectedIds: ids,
+        selectionSource: nextSelectionSource,
+        ...createClearedLassoState(),
+        ...createClearedNeighborsState(),
+      };
     }),
   toggleSelection: (id) =>
     set((state) => {
@@ -176,11 +285,8 @@ export const useStore = create<AppState>((set, get) => ({
       return {
         selectedIds: newSet,
         selectionSource: newSet.size > 0 ? "grid" : null,
-        isLassoSelection: false,
-        lassoQuery: null,
-        lassoSamples: [],
-        lassoTotal: 0,
-        lassoIsLoading: false,
+        ...createClearedLassoState(),
+        ...createClearedNeighborsState(),
       };
     }),
   addToSelection: (ids) =>
@@ -191,22 +297,16 @@ export const useStore = create<AppState>((set, get) => ({
       return {
         selectedIds: newSet,
         selectionSource: newSet.size > 0 ? "grid" : null,
-        isLassoSelection: false,
-        lassoQuery: null,
-        lassoSamples: [],
-        lassoTotal: 0,
-        lassoIsLoading: false,
+        ...createClearedLassoState(),
+        ...createClearedNeighborsState(),
       };
     }),
   clearSelection: () =>
     set({
       selectedIds: new Set<string>(),
       selectionSource: null,
-      isLassoSelection: false,
-      lassoQuery: null,
-      lassoSamples: [],
-      lassoTotal: 0,
-      lassoIsLoading: false,
+      ...createClearedLassoState(),
+      ...createClearedNeighborsState(),
     }),
 
   // Lasso selection (server-driven)
@@ -216,13 +316,14 @@ export const useStore = create<AppState>((set, get) => ({
   lassoIsLoading: false,
   beginLassoSelection: (query) =>
     set({
-      isLassoSelection: true,
       selectedIds: new Set<string>(),
       selectionSource: "lasso",
+      isLassoSelection: true,
       lassoQuery: query,
       lassoSamples: [],
       lassoTotal: 0,
       lassoIsLoading: true,
+      ...createClearedNeighborsState(),
     }),
   setLassoResults: (samples, total, append = false) =>
     set((state) => ({
@@ -232,13 +333,30 @@ export const useStore = create<AppState>((set, get) => ({
     })),
   clearLassoSelection: () =>
     set({
-      isLassoSelection: false,
       selectionSource: null,
-      lassoQuery: null,
-      lassoSamples: [],
-      lassoTotal: 0,
-      lassoIsLoading: false,
+      ...createClearedLassoState(),
     }),
+
+  // Neighbors
+  ...createClearedNeighborsState(),
+  beginNeighborsQuery: (resetResults = true) =>
+    set((state) => ({
+      neighborsResults: resetResults ? [] : state.neighborsResults,
+      neighborsLoading: true,
+      neighborsError: null,
+    })),
+  setNeighborsResults: (samples) =>
+    set({
+      neighborsResults: samples,
+      neighborsLoading: false,
+      neighborsError: null,
+    }),
+  setNeighborsError: (error) =>
+    set({
+      neighborsLoading: false,
+      neighborsError: error,
+    }),
+  clearNeighbors: () => set(createClearedNeighborsState()),
 
   // Hover
   hoveredId: null,
@@ -251,4 +369,10 @@ export const useStore = create<AppState>((set, get) => ({
   // Error
   error: null,
   setError: (error) => set({ error }),
+
+  // UI state
+  sampleGridSize: "medium",
+  setSampleGridSize: (size) => set({ sampleGridSize: size }),
+  scatterLabelOverlayMode: "off",
+  setScatterLabelOverlayMode: (mode) => set({ scatterLabelOverlayMode: mode }),
 }));

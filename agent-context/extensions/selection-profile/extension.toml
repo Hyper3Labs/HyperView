@@ -1,0 +1,11 @@
+name = "selection-profile"
+description = "Selection profile panel that summarizes the active sample selection"
+
+[[tools]]
+file = "tools.py"
+
+[[panels]]
+id = "selection-profile"
+title = "Selection Profile"
+position = "right"
+file = "panel.jsx"

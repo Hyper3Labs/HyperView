@@ -63,6 +63,7 @@ scripts_ignored/
 
 # AI Context (Agent files)
 .claude/
+agent-context/
 context/
 CLAUDE.md
 TASKS.md
@@ -80,6 +81,8 @@ AGENTS.md
 hyper-models/
 hyperview-spaces/
 eval/
+hyper-lrp/
 
 # Generated version file (hatch-vcs)
 src/hyperview/_version.py
+node_modules/

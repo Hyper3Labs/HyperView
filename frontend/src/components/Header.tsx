@@ -2,9 +2,11 @@
 
 import { useStore } from "@/store/useStore";
 import { Button } from "@/components/ui/button";
+import { CENTER_PANEL_DEFS } from "@/panels/registry";
 import { HyperViewLogo } from "./icons";
 import { FaDiscord } from "react-icons/fa";
-import { CENTER_PANEL_DEFS, useDockviewApi } from "./DockviewWorkspace";
+import { useDockviewApi } from "./DockviewWorkspace";
+import { useDockviewOpenPanelIds } from "./DockviewContext";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -41,6 +43,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
+import { setActiveWorkspace } from "@/lib/api";
 import { isLabelColorMapId } from "@/lib/labelColors";
 import {
   LABEL_COLOR_MAP_OPTIONS,
@@ -48,15 +51,26 @@ import {
 } from "@/store/useColorSettings";
 
 const PANEL_CONFIG = CENTER_PANEL_DEFS;
+const VIEW_MENU_PANEL_IDS = PANEL_CONFIG.map((panel) => panel.id);
 const GITHUB_URL = "https://github.com/Hyper3Labs/HyperView";
 const DISCORD_URL = process.env.NEXT_PUBLIC_DISCORD_URL ?? "https://discord.gg/Qf2pXtY4Vf";
 
 export function Header() {
-  const { datasetInfo, leftPanelOpen, rightPanelOpen, bottomPanelOpen } = useStore();
+  const {
+    datasetInfo,
+    leftPanelOpen,
+    rightPanelOpen,
+    bottomPanelOpen,
+    activeWorkspaceId,
+    workspaces,
+  } = useStore();
+  const applyRuntimeSnapshot = useStore((state) => state.applyRuntimeSnapshot);
   const dockview = useDockviewApi();
+  const openPanels = useDockviewOpenPanelIds(VIEW_MENU_PANEL_IDS);
   const [datasetPickerOpen, setDatasetPickerOpen] = useState(false);
   const labelColorMapId = useColorSettings((state) => state.labelColorMapId);
   const setLabelColorMapId = useColorSettings((state) => state.setLabelColorMapId);
+  const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null;
 
   const handleLabelColorMapChange = (nextValue: string) => {
     if (!isLabelColorMapId(nextValue)) return;
@@ -72,12 +86,6 @@ export function Header() {
     }
     dockview.addPanel(panelId);
   };
-
-  // Check which panels are currently open
-  const openPanels = new Set(
-    PANEL_CONFIG.map((p) => p.id).filter((id) => dockview?.api?.getPanel(id))
-  );
-
   return (
     <header className="h-7 min-h-[28px] bg-card border-b border-border flex items-center justify-between px-2">
         {/* Left side: Logo + View menu */}
@@ -149,35 +157,43 @@ export function Header() {
               >
                 <Search className="h-3 w-3 flex-shrink-0 opacity-50" />
                 <span className="truncate flex-1 text-center text-foreground/70">
-                  {datasetInfo?.name ?? "No dataset loaded"}
+                  {activeWorkspaceId ? `${activeWorkspaceId} / ` : ""}
+                  {datasetInfo?.name ?? activeWorkspace?.dataset_name ?? "No dataset loaded"}
                 </span>
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-[280px] p-0" align="center">
               <Command>
                 <CommandInput
-                  placeholder="Search datasets..."
+                  placeholder="Search workspaces..."
                   className="h-6 text-[12px] leading-[16px]"
                 />
                 <CommandList>
                   <CommandEmpty className="py-4 text-xs text-center">
                     No datasets found.
                   </CommandEmpty>
-                  <CommandGroup>
-                    {/* Currently only show the loaded dataset */}
-                    {datasetInfo && (
+                  <CommandGroup heading="Workspaces">
+                    {workspaces.map((workspace) => (
                       <CommandItem
-                        value={datasetInfo.name}
-                        onSelect={() => setDatasetPickerOpen(false)}
+                        key={workspace.id}
+                        value={`workspace-${workspace.id}`}
+                        onSelect={async () => {
+                          try {
+                            const snapshot = await setActiveWorkspace(workspace.id);
+                            applyRuntimeSnapshot(snapshot);
+                          } catch (err) {
+                            console.error("Failed to switch workspace:", err);
+                          }
+                          setDatasetPickerOpen(false);
+                        }}
                         className="text-[12px] leading-[16px]"
                       >
-                        <span className="flex-1 truncate">{datasetInfo.name}</span>
-                        <span className="text-[10px] text-muted-foreground ml-2">
-                          {datasetInfo.num_samples.toLocaleString()} samples
-                        </span>
-                        <Check className="h-3 w-3 ml-2 text-primary" />
+                        <span className="flex-1 truncate">{workspace.id}</span>
+                        {workspace.id === activeWorkspaceId && (
+                          <Check className="h-3 w-3 ml-2 text-primary" />
+                        )}
                       </CommandItem>
-                    )}
+                    ))}
                   </CommandGroup>
                 </CommandList>
               </Command>

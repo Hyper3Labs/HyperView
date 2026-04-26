@@ -26,7 +26,8 @@ dependencies = [
     "fastapi>=0.128.0",
     "uvicorn[standard]>=0.40.0",
     "embed-anything>=0.7.0",
-    "hyper-models>=0.1.0",  # PyPI package: https://pypi.org/project/hyper-models/
+    "huggingface-hub>=1.11.0,<2.0",
+    "hyper-models>=0.2.0",  # PyPI package: https://pypi.org/project/hyper-models/
     "numpy>=1.26.4,<2.4",
     "umap-learn>=0.5.11",
     "pillow>=12.1.0",
@@ -35,6 +36,9 @@ dependencies = [
     "datasets>=4.5.0",
     "lancedb>=0.26.1",
     "pyarrow>=22.0.0",
+    "esbuild-py>=0.1.6",
+    "tomli>=2.0; python_version<'3.11'",
+    "setuptools>=80.9.0",
 ]
 
 [project.optional-dependencies]

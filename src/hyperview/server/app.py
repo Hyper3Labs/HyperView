@@ -1,5 +1,7 @@
 """FastAPI application for HyperView."""
 
+import asyncio
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -7,7 +9,7 @@ from typing import Any
 import numpy as np
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -17,10 +19,16 @@ from hyperview.core.selection import (
     points_in_polygon,
     select_ids_for_3d_lasso,
 )
+from hyperview.runtime import CustomPanelSpec, HyperViewRuntime
 from hyperview.storage.schema import parse_layout_dimension
 
-# Global dataset reference (set by launch())
-_current_dataset: Dataset | None = None
+
+# Extensions whose content is handed off to esbuild for JSX transformation.
+_JSX_SUFFIXES = {".jsx"}
+_PASSTHROUGH_JS_SUFFIXES = {".js", ".mjs"}
+
+# Global runtime reference (set by launch()/serve)
+_current_runtime: HyperViewRuntime | None = None
 _current_session_id: str | None = None
 
 
@@ -48,6 +56,89 @@ class LassoSelectionRequest(BaseModel):
     include_thumbnails: bool = True
 
 
+class ProviderRegisterRequest(BaseModel):
+    alias: str
+    import_path: str
+    description: str | None = None
+    defaults: dict[str, Any] | None = None
+    overwrite: bool = False
+
+
+class WorkspaceCreateRequest(BaseModel):
+    workspace_id: str
+    dataset_name: str | None = None
+    activate: bool = False
+
+
+class WorkspaceActivateRequest(BaseModel):
+    workspace_id: str
+
+
+class UiLayoutRequest(BaseModel):
+    workspace_id: str
+    layout_key: str | None
+
+
+class UiSelectionRequest(BaseModel):
+    workspace_id: str
+    sample_ids: list[str]
+
+
+class UiPanelRequest(BaseModel):
+    workspace_id: str
+    panel_id: str
+    title: str
+    module_file: str
+    position: str = "right"
+
+
+class UiPanelRemoveRequest(BaseModel):
+    workspace_id: str
+    panel_id: str
+
+
+class EmbeddingsComputeRequest(BaseModel):
+    workspace_id: str
+    dataset_name: str
+    model: str
+    provider: str | None = None
+    checkpoint: str | None = None
+    provider_kwargs: dict[str, Any] | None = None
+    layouts: list[str] | None = None
+    method: str = "umap"
+    n_neighbors: int = 15
+    min_dist: float = 0.1
+    metric: str = "cosine"
+    activate_layout: bool = True
+
+
+class LayoutComputeRequest(BaseModel):
+    workspace_id: str
+    dataset_name: str
+    space_key: str | None = None
+    layouts: list[str]
+    method: str = "umap"
+    n_neighbors: int = 15
+    min_dist: float = 0.1
+    metric: str = "cosine"
+    activate_layout: bool = True
+
+
+class ToolRunRequest(BaseModel):
+    tool: str
+    workspace_id: str
+    params: dict[str, Any] | None = None
+
+
+class ExtensionInstallRequest(BaseModel):
+    workspace_id: str
+    folder: str
+
+
+class ExtensionRemoveRequest(BaseModel):
+    name: str
+
+
 class SampleResponse(BaseModel):
     """Response model for a sample."""
 
@@ -56,6 +147,7 @@ class SampleResponse(BaseModel):
     filename: str
     label: str | None
     thumbnail: str | None
+    media_url: str | None = None
     metadata: dict
     width: int | None = None
     height: int | None = None
@@ -104,27 +196,40 @@ class EmbeddingsResponse(BaseModel):
     coords: list[list[float]]
 
 
-class SimilarSampleResponse(BaseModel):
+class SimilarSampleResponse(SampleResponse):
     """Response model for a similar sample with distance."""
 
-    id: str
-    filepath: str
-    filename: str
-    label: str | None
-    thumbnail: str | None
     distance: float
-    metadata: dict
 
 
 class SimilaritySearchResponse(BaseModel):
     """Response model for similarity search results."""
 
     query_id: str
+    query_sample: SampleResponse | None
+    space_key: str | None
+    metric: str
     k: int
     results: list[SimilarSampleResponse]
 
 
-def create_app(dataset: Dataset | None = None, session_id: str | None = None) -> FastAPI:
+def serialize_sample_for_response(sample: Any, include_thumbnail: bool = True) -> dict[str, Any]:
+    payload = sample.to_api_dict(include_thumbnail=False)
+    payload["thumbnail"] = None
+    payload["media_url"] = f"/api/samples/{sample.id}/content"
+    if include_thumbnail:
+        try:
+            payload["thumbnail"] = sample.get_thumbnail_base64()
+        except Exception:
+            payload["thumbnail"] = None
+    return payload
+
+
+def create_app(
+    dataset: Dataset | None = None,
+    runtime: HyperViewRuntime | None = None,
+    session_id: str | None = None,
+) -> FastAPI:
     """Create the FastAPI application.
 
     Args:
@@ -133,9 +238,14 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
     Returns:
         FastAPI application instance.
     """
-    global _current_dataset, _current_session_id
+    global _current_runtime, _current_session_id
+    if runtime is None:
+        runtime = _current_runtime
+    if runtime is None:
+        runtime = HyperViewRuntime()
     if dataset is not None:
-        _current_dataset = dataset
+        runtime.attach_dataset_instance("default", dataset, activate_workspace=True)
+    _current_runtime = runtime
     if session_id is not None:
         _current_session_id = session_id
 
@@ -145,11 +255,22 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
         version="0.1.0",
     )
 
-    def get_dataset() -> Dataset:
-        """Dependency that returns the current dataset or raises 404."""
-        if _current_dataset is None:
-            raise HTTPException(status_code=404, detail="No dataset loaded")
-        return _current_dataset
+    def get_runtime() -> HyperViewRuntime:
+        """Dependency that returns the current runtime or raises 404."""
+        if _current_runtime is None:
+            raise HTTPException(status_code=404, detail="No runtime loaded")
+        return _current_runtime
+
+    def get_dataset(
+        workspace_id: str | None = Query(None),
+        dataset_name: str | None = Query(None),
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+    ) -> Dataset:
+        """Dependency that resolves the current dataset from the active workspace."""
+        try:
+            return runtime_dep.get_dataset(workspace_id=workspace_id, dataset_name=dataset_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     # CORS middleware for development
     app.add_middleware(
@@ -162,13 +283,302 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
 
     @app.get("/__hyperview__/health")
     async def hyperview_health():
+        snapshot = _current_runtime.snapshot() if _current_runtime is not None else None
         return {
             "name": "hyperview",
             "version": app.version,
             "session_id": _current_session_id,
-            "dataset": _current_dataset.name if _current_dataset is not None else None,
+            "workspace_id": snapshot["workspace"]["id"] if snapshot is not None else None,
+            "dataset": snapshot["workspace"]["dataset_name"] if snapshot is not None else None,
             "pid": os.getpid(),
         }
+
+    @app.get("/api/runtime")
+    async def get_runtime_state(
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+        workspace_id: str | None = Query(None),
+    ):
+        return runtime_dep.snapshot(workspace_id)
+
+    @app.get("/api/events")
+    async def stream_runtime_events(
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+        workspace_id: str | None = Query(None),
+    ):
+        async def event_stream():
+            last_version = -1
+            while True:
+                snapshot = runtime_dep.snapshot(workspace_id)
+                if snapshot["version"] != last_version:
+                    payload = json.dumps(snapshot)
+                    yield f"data: {payload}\n\n"
+                    last_version = snapshot["version"]
+                await asyncio.sleep(0.5)
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+    @app.get("/api/panels/content/{workspace_id}/{panel_id}/{asset_path:path}")
+    async def get_panel_asset(
+        workspace_id: str,
+        panel_id: str,
+        asset_path: str,
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+    ):
+        def resolve_asset(root_dir: Path) -> tuple[Path | None, bool]:
+            requested = (root_dir / asset_path).resolve()
+            if requested != root_dir and root_dir not in requested.parents:
+                return None, True
+            if requested.exists() and requested.is_file():
+                return requested, False
+            return None, False
+
+        panel_error: ValueError | None = None
+        module_file: Path | None = None
+        try:
+            panel = runtime_dep.get_custom_panel(workspace_id, panel_id)
+            module_file = panel.resolved_module_file()
+        except ValueError as exc:
+            panel_error = exc
+
+        requested_asset: Path | None = None
+        escaped = False
+        if module_file is not None:
+            requested_asset, escaped = resolve_asset(module_file.parent.resolve())
+        if requested_asset is None:
+            try:
+                storage_dir = runtime_dep.extension_storage_dir(panel_id).resolve()
+            except ValueError:
+                storage_dir = None
+            if storage_dir is not None:
+                requested_asset, storage_escaped = resolve_asset(storage_dir)
+                escaped = escaped or storage_escaped
+
+        if requested_asset is None:
+            if module_file is None and panel_error is not None and runtime_dep.get_extension(panel_id) is None:
+                raise HTTPException(status_code=404, detail=str(panel_error))
+            if module_file is None and panel_error is None:
+                raise HTTPException(status_code=404, detail="Panel module file is not available")
+            if escaped:
+                raise HTTPException(status_code=404, detail="Panel asset path escapes panel root")
+            raise HTTPException(status_code=404, detail=f"Panel asset not found: {asset_path}")
+
+        suffix = requested_asset.suffix.lower()
+        if suffix in _JSX_SUFFIXES:
+            try:
+                from esbuild_py import transform as _esbuild_transform
+            except ImportError as exc:
+                raise HTTPException(
+                    status_code=500,
+                    detail="esbuild_py is required to serve .jsx panel files",
+                ) from exc
+            try:
+                source = requested_asset.read_text(encoding="utf-8")
+                transformed = _esbuild_transform(source)
+            except Exception as exc:  # pragma: no cover - transformation errors
+                raise HTTPException(
+                    status_code=500, detail=f"JSX transform failed: {exc}"
+                ) from exc
+            if transformed is None:
+                raise HTTPException(status_code=500, detail="JSX transform produced no output")
+            return Response(content=transformed, media_type="application/javascript")
+
+        if suffix in _PASSTHROUGH_JS_SUFFIXES:
+            return FileResponse(requested_asset, media_type="application/javascript")
+
+        return FileResponse(requested_asset)
+
+    @app.get("/api/jobs")
+    async def list_jobs(runtime_dep: HyperViewRuntime = Depends(get_runtime)):
+        return {"jobs": [job.to_dict() for job in runtime_dep.list_jobs()]}
+
+    @app.get("/api/jobs/{job_id}")
+    async def get_job(job_id: str, runtime_dep: HyperViewRuntime = Depends(get_runtime)):
+        job = runtime_dep.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+        return job.to_dict()
+
+    @app.post("/api/control/provider/register")
+    async def register_provider(
+        request: ProviderRegisterRequest,
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+    ):
+        try:
+            registration = runtime_dep.provider_registry.register_python(
+                request.alias,
+                request.import_path,
+                description=request.description,
+                defaults=request.defaults,
+                overwrite=request.overwrite,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        runtime_dep._bump_version()
+        return {"provider": registration.to_dict()}
+
+    @app.post("/api/control/workspaces/create")
+    async def create_workspace_endpoint(
+        request: WorkspaceCreateRequest,
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+    ):
+        try:
+            workspace = runtime_dep.create_workspace(request.workspace_id, activate=request.activate)
+            if request.dataset_name:
+                workspace = runtime_dep.set_workspace_dataset(request.workspace_id, request.dataset_name)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"workspace": workspace.to_dict()}
+
+    @app.post("/api/control/workspaces/set-active")
+    async def set_active_workspace_endpoint(
+        request: WorkspaceActivateRequest,
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+    ):
+        try:
+            workspace = runtime_dep.set_active_workspace(request.workspace_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"workspace": workspace.to_dict()}
+
+    @app.post("/api/control/embeddings/compute")
+    async def compute_embeddings_endpoint(
+        request: EmbeddingsComputeRequest,
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+    ):
+        job = runtime_dep.submit_embedding_job(
+            workspace_id=request.workspace_id,
+            dataset_name=request.dataset_name,
+            model=request.model,
+            provider=request.provider,
+            checkpoint=request.checkpoint,
+            provider_kwargs=request.provider_kwargs,
+            layouts=request.layouts,
+            method=request.method,
+            n_neighbors=request.n_neighbors,
+            min_dist=request.min_dist,
+            metric=request.metric,
+            activate_layout=request.activate_layout,
+        )
+        return {"job": job.to_dict()}
+
+    @app.post("/api/control/layouts/compute")
+    async def compute_layouts_endpoint(
+        request: LayoutComputeRequest,
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+    ):
+        job = runtime_dep.submit_layout_job(
+            workspace_id=request.workspace_id,
+            dataset_name=request.dataset_name,
+            space_key=request.space_key,
+            layouts=request.layouts,
+            method=request.method,
+            n_neighbors=request.n_neighbors,
+            min_dist=request.min_dist,
+            metric=request.metric,
+            activate_layout=request.activate_layout,
+        )
+        return {"job": job.to_dict()}
+
+    @app.post("/api/control/ui/layout")
+    async def set_ui_layout_endpoint(
+        request: UiLayoutRequest,
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+    ):
+        workspace = runtime_dep.set_active_layout(request.workspace_id, request.layout_key)
+        return {"workspace": workspace.to_dict()}
+
+    @app.post("/api/control/ui/selection")
+    async def set_ui_selection_endpoint(
+        request: UiSelectionRequest,
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+    ):
+        workspace = runtime_dep.set_selection(request.workspace_id, request.sample_ids)
+        return {"workspace": workspace.to_dict()}
+
+    @app.post("/api/control/ui/panels")
+    async def add_ui_panel_endpoint(
+        request: UiPanelRequest,
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+    ):
+        module_file = Path(request.module_file).expanduser().resolve()
+        if not module_file.exists() or not module_file.is_file():
+            raise HTTPException(status_code=400, detail=f"Panel module file not found: {module_file}")
+
+        panel = CustomPanelSpec(
+            id=request.panel_id,
+            title=request.title,
+            module_file=str(module_file),
+            position=request.position,
+        )
+        workspace = runtime_dep.add_custom_panel(request.workspace_id, panel)
+        return {"workspace": workspace.to_dict()}
+
+    @app.delete("/api/control/ui/panels")
+    async def remove_ui_panel_endpoint(
+        request: UiPanelRemoveRequest,
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+    ):
+        workspace = runtime_dep.remove_custom_panel(request.workspace_id, request.panel_id)
+        return {"workspace": workspace.to_dict()}
+
+    @app.get("/api/tools")
+    async def list_tools_endpoint(
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+    ):
+        return {"tools": [record.to_dict() for record in runtime_dep.tools.list()]}
+
+    @app.post("/api/tools/run")
+    async def run_tool_endpoint(
+        request: ToolRunRequest,
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+    ):
+        try:
+            result = runtime_dep.run_tool(
+                request.tool,
+                workspace_id=request.workspace_id,
+                params=request.params or {},
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:  # pragma: no cover - tool-defined errors
+            return {
+                "ok": False,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        return {"ok": True, "result": result}
+
+    @app.get("/api/extensions")
+    async def list_extensions_endpoint(
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+    ):
+        return {
+            "extensions": [item.to_dict() for item in runtime_dep.list_extensions()],
+        }
+
+    @app.post("/api/control/extensions/install")
+    async def install_extension_endpoint(
+        request: ExtensionInstallRequest,
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+    ):
+        folder = Path(request.folder).expanduser().resolve()
+        if not folder.exists() or not folder.is_dir():
+            raise HTTPException(status_code=400, detail=f"Extension folder not found: {folder}")
+        try:
+            installation = runtime_dep.install_extension(request.workspace_id, folder)
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"extension": installation.to_dict()}
+
+    @app.delete("/api/control/extensions/remove")
+    async def remove_extension_endpoint(
+        request: ExtensionRemoveRequest,
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+    ):
+        installation = runtime_dep.uninstall_extension(request.name)
+        if installation is None:
+            raise HTTPException(status_code=404, detail=f"Unknown extension: {request.name}")
+        return {"extension": installation.to_dict()}
 
     @app.get("/api/dataset", response_model=DatasetResponse)
     async def get_dataset_info(ds: Dataset = Depends(get_dataset)):
@@ -191,7 +601,7 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
     async def get_samples(
         ds: Dataset = Depends(get_dataset),
         offset: int = Query(0, ge=0),
-        limit: int = Query(100, ge=1, le=1000),
+        limit: int = Query(100, ge=1),
         label: str | None = None,
     ):
         """Get paginated samples with thumbnails."""
@@ -203,7 +613,7 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
             "total": total,
             "offset": offset,
             "limit": limit,
-            "samples": [s.to_api_dict(include_thumbnail=True) for s in samples],
+            "samples": [serialize_sample_for_response(s, include_thumbnail=True) for s in samples],
         }
 
     @app.get("/api/samples/{sample_id}", response_model=SampleResponse)
@@ -211,15 +621,31 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
         """Get a single sample by ID."""
         try:
             sample = ds[sample_id]
-            return SampleResponse(**sample.to_api_dict())
+            return SampleResponse(**serialize_sample_for_response(sample, include_thumbnail=True))
         except KeyError:
             raise HTTPException(status_code=404, detail=f"Sample not found: {sample_id}")
+
+    @app.get("/api/samples/{sample_id}/content")
+    async def get_sample_content(sample_id: str, ds: Dataset = Depends(get_dataset)):
+        """Serve the source media file for a sample."""
+        try:
+            sample = ds[sample_id]
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Sample not found: {sample_id}") from exc
+
+        file_path = Path(sample.filepath).expanduser().resolve()
+        if not file_path.exists() or not file_path.is_file():
+            raise HTTPException(status_code=404, detail=f"Sample media not found: {sample.filepath}")
+
+        return FileResponse(file_path)
 
     @app.post("/api/samples/batch")
     async def get_samples_batch(request: SelectionRequest, ds: Dataset = Depends(get_dataset)):
         """Get multiple samples by their IDs."""
         samples = ds.get_samples_by_ids(request.sample_ids)
-        return {"samples": [s.to_api_dict(include_thumbnail=True) for s in samples]}
+        return {
+            "samples": [serialize_sample_for_response(s, include_thumbnail=True) for s in samples]
+        }
 
     @app.get("/api/embeddings", response_model=EmbeddingsResponse)
     async def get_embeddings(ds: Dataset = Depends(get_dataset), layout_key: str | None = None):
@@ -255,23 +681,6 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
             labels=labels,
             coords=coords.tolist(),
         )
-
-    @app.get("/api/spaces")
-    async def get_spaces(ds: Dataset = Depends(get_dataset)):
-        """Get all embedding spaces."""
-        spaces = ds.list_spaces()
-        return {"spaces": [s.to_api_dict() for s in spaces]}
-
-    @app.get("/api/layouts")
-    async def get_layouts(ds: Dataset = Depends(get_dataset)):
-        """Get all available layouts."""
-        layouts = ds.list_layouts()
-        return {"layouts": [layout.to_api_dict() for layout in layouts]}
-
-    @app.post("/api/selection")
-    async def sync_selection(request: SelectionRequest):
-        """Sync selection state (for future use)."""
-        return {"status": "ok", "selected": request.sample_ids}
 
     @app.post("/api/selection/lasso")
     async def lasso_selection(request: LassoSelectionRequest, ds: Dataset = Depends(get_dataset)):
@@ -440,7 +849,10 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
         sample_ids = selected_ids[start:end]
 
         samples = ds.get_samples_by_ids(sample_ids)
-        sample_dicts = [s.to_api_dict(include_thumbnail=request.include_thumbnails) for s in samples]
+        sample_dicts = [
+            serialize_sample_for_response(s, include_thumbnail=request.include_thumbnails)
+            for s in samples
+        ]
 
         return {
             "total": total,
@@ -458,9 +870,17 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
         space_key: str | None = None,
     ):
         """Return k nearest neighbors for a given sample."""
+        resolved_space_key = space_key
+        if resolved_space_key is None:
+            spaces = ds.list_spaces()
+            if not spaces:
+                raise HTTPException(status_code=400, detail="No embedding spaces available")
+            resolved_space_key = spaces[0].space_key
+
         try:
+            query_sample = ds[sample_id]
             similar = ds.find_similar(
-                sample_id, k=k, space_key=space_key
+                sample_id, k=k, space_key=resolved_space_key
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -469,38 +889,21 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
 
         results = []
         for sample, distance in similar:
-            try:
-                thumbnail = sample.get_thumbnail_base64()
-            except Exception:
-                thumbnail = None
-
             results.append(
                 SimilarSampleResponse(
-                    id=sample.id,
-                    filepath=sample.filepath,
-                    filename=sample.filename,
-                    label=sample.label,
-                    thumbnail=thumbnail,
+                    **serialize_sample_for_response(sample),
                     distance=distance,
-                    metadata=sample.metadata,
                 )
             )
 
         return SimilaritySearchResponse(
             query_id=sample_id,
+            query_sample=SampleResponse(**serialize_sample_for_response(query_sample)),
+            space_key=resolved_space_key,
+            metric="cosine",
             k=k,
             results=results,
         )
-
-    @app.get("/api/thumbnail/{sample_id}")
-    async def get_thumbnail(sample_id: str, ds: Dataset = Depends(get_dataset)):
-        """Get thumbnail image for a sample."""
-        try:
-            sample = ds[sample_id]
-            thumbnail_b64 = sample.get_thumbnail_base64()
-            return JSONResponse({"thumbnail": thumbnail_b64})
-        except KeyError:
-            raise HTTPException(status_code=404, detail=f"Sample not found: {sample_id}")
 
     # Serve static frontend files
     static_dir = Path(__file__).parent / "static"
@@ -515,7 +918,7 @@ def create_app(dataset: Dataset | None = None, session_id: str | None = None) ->
     return app
 
 
-def set_dataset(dataset: Dataset) -> None:
-    """Set the global dataset for the server."""
-    global _current_dataset
-    _current_dataset = dataset
+def set_runtime(runtime: HyperViewRuntime) -> None:
+    """Set the global runtime for the server."""
+    global _current_runtime
+    _current_runtime = runtime

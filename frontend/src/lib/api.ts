@@ -1,4 +1,11 @@
-import type { DatasetInfo, EmbeddingsData, Sample, SamplesResponse } from "@/types";
+import type {
+  DatasetInfo,
+  EmbeddingsData,
+  RuntimeSnapshot,
+  Sample,
+  SamplesResponse,
+  SimilaritySearchResponse,
+} from "@/types";
 
 const API_BASE = process.env.NODE_ENV === "development" ? "http://127.0.0.1:6262" : "";
 const MISSING_LABEL_SENTINEL = "undefined";
@@ -20,6 +27,19 @@ export class ApiError extends Error {
     this.status = status;
     this.detail = detail;
   }
+}
+
+export function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+export function isLayoutNotFoundError(error: unknown): error is ApiError {
+  return (
+    error instanceof ApiError &&
+    error.status === 404 &&
+    typeof error.detail === "string" &&
+    error.detail.includes("Layout not found")
+  );
 }
 
 async function readErrorDetail(res: Response): Promise<string | null> {
@@ -44,18 +64,45 @@ async function throwApiError(res: Response, context: string): Promise<never> {
   throw new ApiError(`${context}: ${res.status} ${res.statusText}${suffix}`.trim(), res.status, detail);
 }
 
-export async function fetchDataset(): Promise<DatasetInfo> {
-  const res = await fetch(`${API_BASE}/api/dataset`);
+export function getRuntimeEventsUrl(): string {
+  return `${API_BASE}/api/events`;
+}
+
+export async function fetchDataset(signal?: AbortSignal): Promise<DatasetInfo> {
+  const res = await fetch(`${API_BASE}/api/dataset`, signal ? { signal } : undefined);
   if (!res.ok) {
     await throwApiError(res, "Failed to fetch dataset");
   }
   return res.json();
 }
 
+export async function fetchRuntimeState(): Promise<RuntimeSnapshot> {
+  const res = await fetch(`${API_BASE}/api/runtime`);
+  if (!res.ok) {
+    await throwApiError(res, "Failed to fetch runtime state");
+  }
+  return res.json();
+}
+
+export async function setActiveWorkspace(workspaceId: string): Promise<RuntimeSnapshot> {
+  const res = await fetch(`${API_BASE}/api/control/workspaces/set-active`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ workspace_id: workspaceId }),
+  });
+  if (!res.ok) {
+    await throwApiError(res, "Failed to set active workspace");
+  }
+  return fetchRuntimeState();
+}
+
 export async function fetchSamples(
   offset: number = 0,
   limit: number = 100,
-  label?: string
+  label?: string,
+  signal?: AbortSignal
 ): Promise<SamplesResponse> {
   const apiLabel = toApiLabel(label);
   const params = new URLSearchParams({
@@ -66,7 +113,7 @@ export async function fetchSamples(
     params.set("label", apiLabel);
   }
 
-  const res = await fetch(`${API_BASE}/api/samples?${params}`);
+  const res = await fetch(`${API_BASE}/api/samples?${params}`, signal ? { signal } : undefined);
   if (!res.ok) {
     await throwApiError(res, "Failed to fetch samples");
   }
@@ -86,14 +133,6 @@ export async function fetchEmbeddings(layoutKey?: string): Promise<EmbeddingsDat
   return res.json();
 }
 
-export async function fetchSample(sampleId: string): Promise<Sample> {
-  const res = await fetch(`${API_BASE}/api/samples/${sampleId}`);
-  if (!res.ok) {
-    await throwApiError(res, "Failed to fetch sample");
-  }
-  return res.json();
-}
-
 export async function fetchSamplesBatch(sampleIds: string[]): Promise<Sample[]> {
   const res = await fetch(`${API_BASE}/api/samples/batch`, {
     method: "POST",
@@ -107,6 +146,33 @@ export async function fetchSamplesBatch(sampleIds: string[]): Promise<Sample[]> 
   }
   const data = await res.json();
   return data.samples;
+}
+
+export async function fetchSimilarSamples(
+  sampleId: string,
+  args: {
+    k?: number;
+    spaceKey?: string;
+    signal?: AbortSignal;
+  } = {}
+): Promise<SimilaritySearchResponse> {
+  const params = new URLSearchParams({
+    k: String(args.k ?? 10),
+  });
+  if (args.spaceKey) {
+    params.set("space_key", args.spaceKey);
+  }
+
+  const res = await fetch(
+    `${API_BASE}/api/search/similar/${encodeURIComponent(sampleId)}?${params.toString()}`,
+    {
+      signal: args.signal,
+    }
+  );
+  if (!res.ok) {
+    await throwApiError(res, "Failed to fetch similar samples");
+  }
+  return res.json();
 }
 
 export interface LassoSelectionResponse {

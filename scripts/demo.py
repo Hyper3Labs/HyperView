@@ -3,11 +3,6 @@
 
 import argparse
 import os
-import sys
-from pathlib import Path
-
-# Add src to path for development
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 
 DATASET_NAME = "cifar10_demo"
@@ -15,7 +10,8 @@ HF_DATASET = "uoft-cs/cifar10"
 HF_SPLIT = "train"
 HF_IMAGE_KEY = "img"
 HF_LABEL_KEY = "label"
-MODEL_ID = "openai/clip-vit-base-patch32"
+CLIP_MODEL_ID = "openai/clip-vit-base-patch32"
+HYPERBOLIC_MODEL_ID = "hycoclip-vit-s"
 DEFAULT_SAMPLE_COUNT = 500
 DEFAULT_PORT = 6262
 
@@ -73,13 +69,21 @@ def main() -> None:
         max_samples=args.samples,
     )
 
-    space_key = dataset.compute_embeddings(model=MODEL_ID, show_progress=True)
+    clip_space_key = dataset.compute_embeddings(model=CLIP_MODEL_ID, show_progress=True)
+    hyperbolic_space_key = dataset.compute_embeddings(
+        model=HYPERBOLIC_MODEL_ID,
+        show_progress=True,
+    )
 
-    dataset.compute_visualization(space_key=space_key, layout="euclidean:3d")
-    dataset.compute_visualization(space_key=space_key, layout="euclidean")
-    dataset.compute_visualization(space_key=space_key, method="pca", layout="euclidean")
-    dataset.compute_visualization(space_key=space_key, layout="poincare")
-    dataset.compute_visualization(space_key=space_key, layout="spherical")
+    dataset.compute_visualization(space_key=clip_space_key, layout="euclidean:3d")
+    dataset.compute_visualization(space_key=clip_space_key, layout="euclidean")
+    dataset.compute_visualization(
+        space_key=clip_space_key,
+        method="pca",
+        layout="euclidean",
+    )
+    dataset.compute_visualization(space_key=hyperbolic_space_key, layout="poincare")
+    dataset.compute_visualization(space_key=clip_space_key, layout="spherical")
 
     hv.launch(dataset, port=args.port, open_browser=not args.no_browser)
 

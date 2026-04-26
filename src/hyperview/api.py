@@ -15,7 +15,8 @@ from uuid import uuid4
 import uvicorn
 
 from hyperview.core.dataset import Dataset
-from hyperview.server.app import create_app, set_dataset
+from hyperview.runtime import HyperViewRuntime
+from hyperview.server.app import create_app, set_runtime
 
 __all__ = ["Dataset", "launch", "Session"]
 
@@ -24,6 +25,7 @@ __all__ = ["Dataset", "launch", "Session"]
 class _HealthResponse:
     name: str | None
     session_id: str | None
+    workspace_id: str | None
     dataset: str | None
     pid: int | None
 
@@ -51,6 +53,7 @@ def _read_health(url: str, timeout_s: float) -> _HealthResponse:
     return _HealthResponse(
         name=data.get("name"),
         session_id=data.get("session_id"),
+        workspace_id=data.get("workspace_id"),
         dataset=data.get("dataset"),
         pid=data.get("pid") if isinstance(data.get("pid"), int) else None,
     )
@@ -69,7 +72,14 @@ def _resolve_default_launch_layout(dataset: Dataset) -> str:
 class Session:
     """A session for the HyperView visualizer."""
 
-    def __init__(self, dataset: Dataset, host: str, port: int):
+    def __init__(
+        self,
+        runtime: HyperViewRuntime,
+        host: str,
+        port: int,
+        dataset: Dataset | None = None,
+    ):
+        self.runtime = runtime
         self.dataset = dataset
         self.host = host
         self.port = port
@@ -91,8 +101,8 @@ class Session:
 
     def _run_server(self):
         try:
-            set_dataset(self.dataset)
-            app = create_app(self.dataset, session_id=self.session_id)
+            set_runtime(self.runtime)
+            app = create_app(runtime=self.runtime, session_id=self.session_id)
             config = uvicorn.Config(app, host=self.host, port=self.port, log_level="warning")
             self._server = uvicorn.Server(config)
             self._server.run()
@@ -300,7 +310,9 @@ def launch(
                     "choose a different port."
                 )
 
-            session = Session(dataset, host, port)
+            runtime = HyperViewRuntime()
+            runtime.attach_dataset_instance("default", dataset, activate_workspace=True)
+            session = Session(runtime, host, port, dataset)
             if health.session_id is not None:
                 session.session_id = health.session_id
 
@@ -350,7 +362,9 @@ def launch(
             layout=default_layout,
         )
 
-    session = Session(dataset, host, port)
+    runtime = HyperViewRuntime()
+    runtime.attach_dataset_instance("default", dataset, activate_workspace=True)
+    session = Session(runtime, host, port, dataset)
 
     if notebook:
         session.start(background=True)

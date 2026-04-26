@@ -84,7 +84,7 @@ const DropdownMenuItem = React.forwardRef<
   <DropdownMenuPrimitive.Item
     ref={ref}
     className={cn(
-      "relative flex h-6 cursor-default select-none items-center gap-1.5 rounded px-1.5 text-[12px] leading-[16px] outline-none focus:bg-accent/70 focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&>svg]:size-3.5 [&>svg]:shrink-0",
+      "relative flex h-7 cursor-default select-none items-center gap-1.5 rounded px-1.5 text-[12px] leading-[16px] outline-none focus:bg-accent/70 focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&>svg]:size-3.5 [&>svg]:shrink-0",
       inset && "pl-8",
       className
     )}
@@ -124,14 +124,14 @@ const DropdownMenuRadioItem = React.forwardRef<
   <DropdownMenuPrimitive.RadioItem
     ref={ref}
     className={cn(
-      "relative flex h-6 cursor-default select-none items-center gap-1.5 rounded py-0 pl-6 pr-1.5 text-[12px] leading-[16px] outline-none focus:bg-accent/70 focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+      "relative flex h-7 cursor-default select-none items-center gap-1.5 rounded py-0 pl-6 pr-1.5 text-[12px] leading-[16px] outline-none focus:bg-accent/70 focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
       className
     )}
     {...props}
   >
     <span className="absolute left-1.5 flex h-3.5 w-3.5 items-center justify-center">
       <DropdownMenuPrimitive.ItemIndicator>
-        <Circle className="h-2.5 w-2.5 fill-current" />
+        <Circle className="h-1.5 w-1.5 fill-current" />
       </DropdownMenuPrimitive.ItemIndicator>
     </span>
     {children}

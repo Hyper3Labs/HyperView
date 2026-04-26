@@ -4,21 +4,18 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Settings2 } from "lucide-react";
 import { useStore } from "@/store/useStore";
 import { Panel } from "./Panel";
-import { Button } from "@/components/ui/button";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
-  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  PanelContextBar,
-  type PanelContextItem,
-  type PanelContextOption,
-} from "./PanelContextBar";
+  PanelToolbar,
+  PanelToolbarMenu,
+  type PanelToolbarItem,
+  type PanelToolbarOption,
+} from "./PanelToolbar";
 import { useHyperScatter } from "./useHyperScatter";
 import { useLabelLegend } from "./useLabelLegend";
 import type { Geometry } from "@/types";
@@ -27,7 +24,11 @@ import {
   getLayoutDimension,
   listAvailableGeometries,
 } from "@/lib/layouts";
-import { ApiError, fetchDataset, fetchEmbeddings } from "@/lib/api";
+import {
+  fetchDataset,
+  fetchEmbeddings,
+  isLayoutNotFoundError,
+} from "@/lib/api";
 
 interface ScatterPanelProps {
   className?: string;
@@ -45,6 +46,7 @@ export function ScatterPanel({
   const {
     datasetInfo,
     embeddingsByLayoutKey,
+    neighborsResults,
     setEmbeddingsForLayout,
     selectedIds,
     setSelectedIds,
@@ -54,7 +56,18 @@ export function ScatterPanel({
     setActiveLayoutKey,
     setDatasetInfo,
     labelFilter,
+    requestedLayoutKey,
+    scatterLabelOverlayMode,
+    setScatterLabelOverlayMode,
   } = useStore();
+
+  const highlightedIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const sample of neighborsResults) {
+      ids.add(sample.id);
+    }
+    return ids;
+  }, [neighborsResults]);
 
   const [localGeometry, setLocalGeometry] = useState<Geometry>("euclidean");
   const [localLayoutKey, setLocalLayoutKey] = useState<string | null>(null);
@@ -79,6 +92,19 @@ export function ScatterPanel({
   }, [availableGeometries, geometry, localGeometry]);
 
   const resolvedGeometry = geometry ?? localGeometry;
+
+  useEffect(() => {
+    if (!requestedLayoutKey) return;
+
+    const requestedLayout = renderableLayouts.find(
+      (layout) => layout.layout_key === requestedLayoutKey
+    );
+    if (!requestedLayout) return;
+
+    if (requestedLayout.geometry !== resolvedGeometry) return;
+
+    setLocalLayoutKey(requestedLayout.layout_key);
+  }, [renderableLayouts, requestedLayoutKey, resolvedGeometry]);
 
   const resolvedLayoutKey = useMemo(() => {
     if (!datasetInfo) return localLayoutKey ?? layoutKey ?? null;
@@ -123,7 +149,7 @@ export function ScatterPanel({
     return renderableLayouts.filter((layout) => layout.geometry === resolvedGeometry);
   }, [renderableLayouts, resolvedGeometry]);
 
-  const modelOptions = useMemo<PanelContextOption[]>(() => {
+  const modelOptions = useMemo<PanelToolbarOption[]>(() => {
     if (!datasetInfo || geometryLayouts.length === 0) return [];
 
     const seenSpaceKeys = new Set<string>();
@@ -201,7 +227,7 @@ export function ScatterPanel({
     [geometryLayouts, selectedSpaceKey]
   );
 
-  const contextItems = useMemo<PanelContextItem[]>(() => {
+  const toolbarItems = useMemo<PanelToolbarItem[]>(() => {
     return [
       {
         id: "model",
@@ -219,26 +245,19 @@ export function ScatterPanel({
     ];
   }, [handleModelChange, modelOptions, selectedModelLabel, selectedSpaceKey]);
 
-  const projectionSettings = useMemo(
+  const toolbarActions = useMemo(
     () => (
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={projectionMethodOptions.length === 0}
-            className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground hover:bg-muted/40"
-            title={
-              selectedProjectionMethod
-                ? `Projection method: ${selectedProjectionMethod}`
-                : "Projection method"
-            }
-            aria-label="Projection method settings"
-          >
-            <Settings2 className="h-3.5 w-3.5" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-[220px]">
+      <PanelToolbarMenu
+        icon={<Settings2 className="h-3.5 w-3.5" />}
+        label="Scatter settings"
+        title={
+          selectedProjectionMethod
+            ? `Projection method: ${selectedProjectionMethod}`
+            : "Scatter settings"
+        }
+        disabled={false}
+        contentClassName="min-w-[220px]"
+      >
           <DropdownMenuLabel>
             Projection method
           </DropdownMenuLabel>
@@ -259,12 +278,41 @@ export function ScatterPanel({
               No projection methods available
             </div>
           )}
-        </DropdownMenuContent>
-      </DropdownMenu>
+          {layoutDimension === 2 && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>
+                Topic labels
+              </DropdownMenuLabel>
+              <DropdownMenuRadioGroup
+                value={scatterLabelOverlayMode}
+                onValueChange={(value) =>
+                  setScatterLabelOverlayMode(value as "off" | "auto" | "coarse" | "fine")
+                }
+              >
+                <DropdownMenuRadioItem value="off">
+                  <span className="truncate">Hidden</span>
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="auto">
+                  <span className="truncate">Auto</span>
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="coarse">
+                  <span className="truncate">Coarse</span>
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="fine">
+                  <span className="truncate">Fine</span>
+                </DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+            </>
+          )}
+      </PanelToolbarMenu>
     ),
     [
       handleProjectionMethodChange,
+      layoutDimension,
       projectionMethodOptions,
+      scatterLabelOverlayMode,
+      setScatterLabelOverlayMode,
       selectedProjectionMethod,
     ]
   );
@@ -290,12 +338,7 @@ export function ScatterPanel({
       .catch(async (err) => {
         if (cancelled) return;
 
-        if (
-          err instanceof ApiError &&
-          err.status === 404 &&
-          typeof err.detail === "string" &&
-          err.detail.includes("Layout not found")
-        ) {
+        if (isLayoutNotFoundError(err)) {
           // The dock layout can reference stale layout keys after backend/session changes.
           // Refresh metadata and let resolvedLayoutKey fall back to currently available layouts.
           if (localLayoutKey === resolvedLayoutKey) {
@@ -345,7 +388,9 @@ export function ScatterPanel({
     embeddings,
     labelsInfo,
     labelFilter,
+    semanticLabelDisplayMode: scatterLabelOverlayMode,
     selectedIds,
+    highlightedIds,
     hoveredId,
     setSelectedIds,
     beginLassoSelection,
@@ -363,7 +408,7 @@ export function ScatterPanel({
 
   return (
     <Panel className={className}>
-      <PanelContextBar items={contextItems} rightContent={projectionSettings} />
+      <PanelToolbar items={toolbarItems} actions={toolbarActions} />
 
       {/* Main content area - min-h-0 prevents flex overflow */}
       <div className="flex-1 flex min-h-0">
@@ -385,7 +430,6 @@ export function ScatterPanel({
             onPointerEnter={focusLayout}
           />
 
-          {/* Lasso overlay (screen-space) */}
           <canvas
             ref={overlayCanvasRef}
             className="absolute inset-0 pointer-events-none"

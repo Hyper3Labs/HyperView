@@ -5,7 +5,7 @@ registry using the @register decorator.
 
 Providers:
 - embed-anything: CLIP-based image embeddings (torch-free, default)
-- hyper-models: Non-Euclidean model zoo via `hyper-models` (torch-free ONNX; downloads from HF Hub)
+- hyper-models: Non-Euclidean model zoo via `hyper-models` (ONNX and torch-backed checkpoints from HF Hub)
 - timm-image: Image backbones loaded with timm (e.g. MegaDescriptor)
 """
 
@@ -98,9 +98,8 @@ class HyperModelsEmbeddings(EmbeddingFunction):
     Args:
         name: Model name in the hyper-models registry (e.g. 'hycoclip-vit-s').
         checkpoint: Optional local path to an ONNX file (skips hub download).
-        batch_size: Batch size hint. Current HyCoCLIP/MERU ONNX exports may only
-            support batch_size=1; HyperView encodes one image at a time for
-            maximum compatibility.
+        batch_size: Batch size hint. HyperView currently encodes one image at a
+            time for broad compatibility across ONNX and torch-backed models.
     """
 
     name: str = "hycoclip-vit-s"

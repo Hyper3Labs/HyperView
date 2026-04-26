@@ -13,6 +13,7 @@ import numpy as np
 
 # Register HyperView providers into LanceDB registry.
 import hyperview.embeddings.providers.lancedb_providers as _lancedb_providers  # noqa: F401
+from hyperview.runtime import ProviderRegistry
 
 __all__ = [
     "EmbeddingSpec",
@@ -149,6 +150,20 @@ class EmbeddingEngine:
         cache_key = spec.content_hash()
         if cache_key in self._cache:
             return self._cache[cache_key]
+
+        custom_registry = ProviderRegistry()
+        custom_registration = custom_registry.get(spec.provider)
+        if custom_registration is not None:
+            create_kwargs: dict[str, Any] = {}
+            if spec.model_id:
+                create_kwargs["name"] = spec.model_id
+            if spec.checkpoint:
+                create_kwargs["checkpoint"] = spec.checkpoint
+            create_kwargs.update(spec.provider_kwargs)
+
+            func = custom_registry.instantiate(spec.provider, **create_kwargs)
+            self._cache[cache_key] = func
+            return func
 
         from lancedb.embeddings import get_registry
 
@@ -338,12 +353,21 @@ def list_embedding_providers(available_only: bool = False) -> list[str]:
     registry = get_registry()
 
     all_providers = list(getattr(registry, "_functions", {}).keys())
+    custom_registry = ProviderRegistry()
+    all_known_providers = sorted(
+        set(all_providers) | {provider.alias for provider in custom_registry.list()}
+    )
 
     if not available_only:
-        return sorted(all_providers)
+        return all_known_providers
 
     available: list[str] = []
-    for provider in all_providers:
+    for provider in all_known_providers:
+        if custom_registry.get(provider) is not None:
+            if custom_registry.is_available(provider):
+                available.append(provider)
+            continue
+
         try:
             factory = registry.get(provider)
             factory.create()
@@ -365,6 +389,18 @@ def get_provider_info(provider: str) -> dict[str, Any]:
     Returns:
         Dict with provider info.
     """
+    custom_registry = ProviderRegistry()
+    custom_registration = custom_registry.get(provider)
+    if custom_registration is not None:
+        return {
+            "provider": provider,
+            "source": "custom",
+            "kind": custom_registration.kind,
+            "import_path": custom_registration.import_path,
+            "installed": custom_registry.is_available(provider),
+            "geometry": "custom",
+        }
+
     from lancedb.embeddings import get_registry
 
     registry = get_registry()

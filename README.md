@@ -1,6 +1,10 @@
 # HyperView
 
-> **Open-source dataset curation + embedding visualization (Euclidean + Poincaré disk)**
+> **An embedding visualizer for agents, plugins, and model analysis**
+
+HyperView is an embedding visualizer for image and multimodal datasets. Use it to inspect clusters, labels, nearest neighbors, and model behavior across Euclidean, hyperbolic, and spherical spaces.
+
+The CLI controls the app. Agents can create workspaces, compute embeddings and layouts, switch the visible UI, select samples, and install plugins with backend tools plus native frontend panels. That means a visualization can be shaped around the dataset, not locked into one fixed dashboard.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Hyper3Labs/HyperView) [![Open in HF Spaces](https://huggingface.co/datasets/huggingface/badges/resolve/main/open-in-hf-spaces-sm.svg)](https://huggingface.co/spaces/hyper3labs/HyperView) [![Discord](https://img.shields.io/badge/Discord-hyper%C2%B3labs-5865F2?logo=discord&logoColor=white)](https://discord.gg/Za3rBkTPSf)
 
@@ -16,10 +20,11 @@
 
 ## Features
 
-- **Dual-Panel UI**: Image grid + scatter plot with bidirectional selection
-- **Multi-Layout Visualizations**: Explore Euclidean, Poincare, and spherical layouts in 2D or 3D with UMAP or PCA projections
-- **HuggingFace Integration**: Load datasets directly from HuggingFace Hub
-- **Fast Embeddings**: Uses EmbedAnything for CLIP-based image embeddings
+- CLI-controlled UI. Use `hyperview` to create workspaces, compute layouts, change the visible panel, and select samples in the running app. Agents can drive the same app humans see.
+- Fast embeddings and nearest neighbors. Compute embeddings with built-in or custom providers, persist them per dataset, and query similarity from the runtime API.
+- One dataset per workspace. A workspace has one active dataset, its computed spaces, its selected layout, its current selection, and its panels.
+- Plugins with backend and frontend. Install a local extension folder with `extension.toml`, Python tools, and a native React panel. The panel can call its backend tools through the shared HyperView panel SDK.
+- Bespoke visualization workbenches. Add dataset-specific panels, providers, tools, and layouts without touching frontend source. Every serious dataset can get the view it needs.
 
 ## Updates
 
@@ -31,13 +36,64 @@
 
 **Docs:** [docs/datasets.md](docs/datasets.md) · [docs/colab.md](docs/colab.md) · [CONTRIBUTING.md](CONTRIBUTING.md) · [TESTS.md](TESTS.md)
 
-### Installation
+### Install CLI and Skill
+
+Install the HyperView CLI first:
 
 ```bash
 uv pip install hyperview
 ```
 
+Then make the HyperView agent skill available to your coding agent. In this repo it lives at:
+
+```text
+.agents/skills/hyperview-cli/
+```
+
+Use that skill before driving workspaces, embeddings, layouts, runtime panels, or plugins from an agent.
+
 ### Run HyperView
+
+Create a workspace, bind one dataset to it, and drive the running app from the CLI.
+
+```bash
+hyperview workspace create imagenette-demo \
+  --dataset imagenette_clip_20260411 \
+  --activate
+
+hyperview serve \
+  --workspace imagenette-demo \
+  --dataset imagenette_clip_20260411 \
+  --no-browser
+```
+
+Then change the live UI from the CLI:
+
+```bash
+hyperview ui layout set \
+  --workspace imagenette-demo \
+  --layout-key <layout-key>
+
+hyperview ui panel add \
+  --workspace imagenette-demo \
+  --panel-id labels \
+  --title "Labels" \
+  --position right \
+  --module-file agent-context/panels/labels/panel.jsx
+```
+
+Plugins use the same runtime path, but add Python tools too:
+
+```bash
+hyperview extension add agent-context/extensions/selection-profile \
+  --workspace imagenette-demo
+
+hyperview tools run selection_profile.summarize \
+  --workspace imagenette-demo \
+  --param 'sample_ids=["sample-1","sample-8"]'
+```
+
+Legacy one-shot launch is still available for quick experiments:
 
 ```bash
 hyperview \
@@ -52,7 +108,7 @@ hyperview \
   --layout poincare
 ```
 
-This will:
+This legacy flow will:
 1. Use dataset `cifar10_demo`
 2. Load up to 500 samples from CIFAR-10
 3. Compute CLIP embeddings

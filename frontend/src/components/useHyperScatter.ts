@@ -1,25 +1,50 @@
 import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { useScatterSemanticLabels } from "@/components/useScatterSemanticLabels";
 import type { EmbeddingsData } from "@/types";
 import type { ScatterLabelsInfo } from "@/lib/labelLegend";
 import { getLayoutDimension } from "@/lib/layouts";
-import type {
-  Dataset,
-  Dataset3D,
-  GeometryMode,
-  GeometryMode3D,
-  Modifiers,
-  OrbitViewState3D,
-  Renderer,
-  Renderer3D,
+import {
+  drawSemanticLabels,
+  layoutSemanticLabels,
+  type Dataset,
+  type Dataset3D,
+  type GeometryMode,
+  type GeometryMode3D,
+  type Modifiers,
+  type OrbitViewState3D,
+  type Renderer,
+  type Renderer3D,
+  type SemanticLabelDisplayMode,
 } from "hyper-scatter";
 
-type HyperScatterModule = typeof import("hyper-scatter");
 type AnyRenderer = Renderer | Renderer3D;
+type LassoOverlayStyle = {
+  strokeColor?: string;
+  strokeWidth?: number;
+  fillColor?: string;
+};
+type EnhancedRenderer = AnyRenderer & {
+  setHighlight: (indices: Set<number> | null) => void;
+  setInactiveOpacity: (alpha: number) => void;
+  setLassoPolygon: (polygon: Float32Array | null, style?: LassoOverlayStyle) => void;
+};
+type HyperScatterModule = typeof import("hyper-scatter") & {
+  createScatterPlot: (canvas: HTMLCanvasElement, options: Record<string, unknown>) => EnhancedRenderer;
+};
 
 const MAX_LASSO_VERTS = 512;
 const SELECTION_HIGHLIGHT_COLOR = "#f59e0b";
+const SECONDARY_HIGHLIGHT_COLOR = "#94a3b8";
+const LASSO_STROKE_COLOR = "#4f46e5";
+const LASSO_FILL_COLOR = "rgba(79,70,229,0.15)";
+const INTERACTION_STYLE = {
+  selectionColor: SELECTION_HIGHLIGHT_COLOR,
+  highlightColor: SECONDARY_HIGHLIGHT_COLOR,
+  hoverColor: "#ffffff",
+  hoverFillColor: null,
+} as const;
 
 function supportsWebGL2(): boolean {
   try {
@@ -64,7 +89,9 @@ interface UseHyperScatterArgs {
   embeddings: EmbeddingsData | null;
   labelsInfo: ScatterLabelsInfo | null;
   labelFilter: string | null;
+  semanticLabelDisplayMode: "off" | SemanticLabelDisplayMode;
   selectedIds: Set<string>;
+  highlightedIds?: Set<string>;
   hoveredId: string | null;
   setSelectedIds: (ids: Set<string>, source?: "scatter" | "grid") => void;
   beginLassoSelection: (query: {
@@ -133,35 +160,13 @@ function clearOverlay(canvas: HTMLCanvasElement | null): void {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 }
 
-function drawLassoOverlay(canvas: HTMLCanvasElement | null, points: number[]): void {
-  if (!canvas) return;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-
-  clearOverlay(canvas);
-  if (points.length < 6) return;
-
-  ctx.save();
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = "rgba(79,70,229,0.9)"; // indigo-ish
-  ctx.fillStyle = "rgba(79,70,229,0.15)";
-
-  ctx.beginPath();
-  ctx.moveTo(points[0], points[1]);
-  for (let i = 2; i < points.length; i += 2) {
-    ctx.lineTo(points[i], points[i + 1]);
-  }
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-  ctx.restore();
-}
-
 export function useHyperScatter({
   embeddings,
   labelsInfo,
   labelFilter,
+  semanticLabelDisplayMode,
   selectedIds,
+  highlightedIds,
   hoveredId,
   setSelectedIds,
   beginLassoSelection,
@@ -171,7 +176,7 @@ export function useHyperScatter({
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const rendererRef = useRef<AnyRenderer | null>(null);
+  const rendererRef = useRef<EnhancedRenderer | null>(null);
 
   const [rendererError, setRendererError] = useState<string | null>(null);
 
@@ -203,6 +208,59 @@ export function useHyperScatter({
     return resolveLayoutDimension(embeddings);
   }, [embeddings]);
 
+  const { semanticLabelModel } = useScatterSemanticLabels({
+    embeddings,
+    layoutDimension,
+    labelFilter,
+    displayMode: semanticLabelDisplayMode,
+  });
+
+  const semanticLabelModelRef = useRef(semanticLabelModel);
+  semanticLabelModelRef.current = semanticLabelModel;
+
+  const semanticLabelDisplayModeRef = useRef<"off" | SemanticLabelDisplayMode>(semanticLabelDisplayMode);
+  semanticLabelDisplayModeRef.current = semanticLabelDisplayMode;
+
+  const redrawOverlay = useCallback(() => {
+    const canvas = overlayCanvasRef.current;
+    if (!canvas) return;
+
+    clearOverlay(canvas);
+
+    const renderer = rendererRef.current;
+    const model = semanticLabelModelRef.current;
+    const displayMode = semanticLabelDisplayModeRef.current;
+    const embs = embeddings;
+
+    if (!renderer || !model || !embs || resolveLayoutDimension(embs) !== 2 || displayMode === "off") {
+      return;
+    }
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const renderer2d = renderer as Renderer;
+    const view = renderer2d.getView();
+    const zoom = view.type === "poincare" ? view.displayZoom : view.zoom;
+    const visibleLabels = layoutSemanticLabels({
+      nodes: model.nodes,
+      zoom,
+      viewportWidth: canvas.width,
+      viewportHeight: canvas.height,
+      displayMode,
+      project: (x, y) => renderer2d.projectToScreen(x, y),
+      measureText: (text, font) => {
+        const previousFont = ctx.font;
+        ctx.font = font;
+        const width = ctx.measureText(text).width;
+        ctx.font = previousFont;
+        return width;
+      },
+      mobile: canvas.width < 720,
+    });
+    drawSemanticLabels(ctx, visibleLabels);
+  }, [embeddings]);
+
   const requestRender = useCallback(() => {
     if (rafPendingRef.current) return;
     rafPendingRef.current = true;
@@ -214,6 +272,7 @@ export function useHyperScatter({
 
       try {
         renderer.render();
+        redrawOverlay();
       } catch (err) {
         // Avoid an exception storm that would permanently prevent the UI from updating.
         console.error("hyper-scatter renderer.render() failed:", err);
@@ -229,12 +288,9 @@ export function useHyperScatter({
         clearOverlay(overlayCanvasRef.current);
         return;
       }
-
-      if (isLassoingRef.current) {
-        drawLassoOverlay(overlayCanvasRef.current, lassoPointsRef.current);
-      }
     });
-  }, []);
+  }, [redrawOverlay]);
+
 
   const getCanvasPos = useCallback((e: { clientX: number; clientY: number }) => {
     const canvas = canvasRef.current;
@@ -246,30 +302,19 @@ export function useHyperScatter({
     };
   }, []);
 
-  const redrawOverlay = useCallback(() => {
-    if (!overlayCanvasRef.current) return;
-    clearOverlay(overlayCanvasRef.current);
-    const persistent = persistentLassoRef.current;
-    if (persistent && persistent.length >= 6) {
-      drawLassoOverlay(overlayCanvasRef.current, persistent);
-    }
-  }, []);
-
   const clearPersistentLasso = useCallback(() => {
     persistentLassoRef.current = null;
-    clearOverlay(overlayCanvasRef.current);
+    rendererRef.current?.setLassoPolygon(null);
   }, []);
 
   const stopInteraction = useCallback(() => {
     isPanningRef.current = false;
     isLassoingRef.current = false;
     lassoPointsRef.current = [];
-    if (persistentLassoRef.current) {
-      redrawOverlay();
-      return;
+    if (!persistentLassoRef.current) {
+      rendererRef.current?.setLassoPolygon(null);
     }
-    clearOverlay(overlayCanvasRef.current);
-  }, [redrawOverlay]);
+  }, []);
 
   // Initialize renderer when embeddings change.
   useEffect(() => {
@@ -277,6 +322,7 @@ export function useHyperScatter({
     if (!canvasRef.current || !containerRef.current) return;
 
     let cancelled = false;
+    const overlayCanvas = overlayCanvasRef.current;
 
     const init = async () => {
       // Clear any previous renderer errors when we attempt to re-init.
@@ -290,7 +336,7 @@ export function useHyperScatter({
       }
 
       try {
-        const viz = (await import("hyper-scatter")) as HyperScatterModule;
+        const viz = (await import("hyper-scatter")) as unknown as HyperScatterModule;
         if (cancelled) return;
 
         const container = containerRef.current;
@@ -306,12 +352,12 @@ export function useHyperScatter({
         const rect = container.getBoundingClientRect();
         const width = Math.floor(rect.width);
         const height = Math.floor(rect.height);
+
         if (overlayCanvasRef.current) {
           overlayCanvasRef.current.width = Math.max(1, width);
           overlayCanvasRef.current.height = Math.max(1, height);
           overlayCanvasRef.current.style.width = `${width}px`;
           overlayCanvasRef.current.style.height = `${height}px`;
-          redrawOverlay();
         }
 
         // Use coords from embeddings response directly.
@@ -327,7 +373,7 @@ export function useHyperScatter({
           backgroundColor: "#161b22", // Match HyperView theme: --card is #161b22
         };
 
-        let renderer: AnyRenderer;
+        let renderer: EnhancedRenderer;
 
         if (resolvedLayoutDimension === 3) {
           const positions = new Float32Array(coords.length * 3);
@@ -344,17 +390,13 @@ export function useHyperScatter({
             embeddings.geometry === "spherical" ? "sphere" : "euclidean3d";
           const dataset: Dataset3D = viz.createDataset3D(geometry, positions, labelsInfo.categories);
 
-          renderer =
-            geometry === "sphere"
-              ? new viz.Spherical3DWebGLCandidate()
-              : new viz.Euclidean3DWebGLCandidate();
-
-          renderer.init(canvas, {
+          renderer = viz.createScatterPlot(canvas, {
+            geometry,
+            dataset,
             ...rendererOpts,
             sphereGuideColor: "#94a3b8",
             sphereGuideOpacity: 0.2,
           });
-          renderer.setDataset(dataset);
         } else {
           const positions = new Float32Array(coords.length * 2);
           for (let i = 0; i < coords.length; i++) {
@@ -370,11 +412,11 @@ export function useHyperScatter({
             embeddings.geometry === "poincare" ? "poincare" : "euclidean";
           const dataset: Dataset = viz.createDataset(geometry, positions, labelsInfo.categories);
 
-          renderer =
-            geometry === "euclidean" ? new viz.EuclideanWebGLCandidate() : new viz.HyperbolicWebGLCandidate();
-
-          renderer.init(canvas, rendererOpts);
-          renderer.setDataset(dataset);
+          renderer = viz.createScatterPlot(canvas, {
+            geometry,
+            dataset,
+            ...rendererOpts,
+          });
         }
 
         rendererRef.current = renderer;
@@ -383,12 +425,14 @@ export function useHyperScatter({
         // not rely on renderer recreation.
         renderer.setPalette(labelsInfo.palette);
         renderer.setCategoryVisibility(buildCategoryVisibilityMask(labelsInfo, null));
-        renderer.setCategoryAlpha(1);
-        renderer.setInteractionStyle({
-          selectionColor: SELECTION_HIGHLIGHT_COLOR,
-          hoverColor: "#ffffff",
-          hoverFillColor: null,
-        });
+        renderer.setInactiveOpacity(1);
+        renderer.setInteractionStyle(INTERACTION_STYLE as never);
+        if (persistentLassoRef.current && persistentLassoRef.current.length >= 6) {
+          renderer.setLassoPolygon(new Float32Array(persistentLassoRef.current), {
+            strokeColor: LASSO_STROKE_COLOR,
+            fillColor: LASSO_FILL_COLOR,
+          });
+        }
 
         // Force a first render to surface WebGL2 context creation failures early.
         try {
@@ -424,12 +468,13 @@ export function useHyperScatter({
     return () => {
       cancelled = true;
       stopInteraction();
+      clearOverlay(overlayCanvas);
       if (rendererRef.current) {
         rendererRef.current.destroy();
         rendererRef.current = null;
       }
     };
-  }, [embeddings, labelsInfo, redrawOverlay, requestRender, stopInteraction]);
+  }, [embeddings, labelsInfo, requestRender, stopInteraction]);
 
   // Runtime display-state sync (no renderer re-init).
   useEffect(() => {
@@ -438,12 +483,7 @@ export function useHyperScatter({
 
     renderer.setPalette(labelsInfo.palette);
     renderer.setCategoryVisibility(buildCategoryVisibilityMask(labelsInfo, labelFilter));
-    renderer.setCategoryAlpha(1);
-    renderer.setInteractionStyle({
-      selectionColor: SELECTION_HIGHLIGHT_COLOR,
-      hoverColor: "#ffffff",
-      hoverFillColor: null,
-    });
+    renderer.setInteractionStyle(INTERACTION_STYLE as never);
 
     requestRender();
   }, [labelFilter, labelsInfo, requestRender]);
@@ -453,20 +493,34 @@ export function useHyperScatter({
     const renderer = rendererRef.current;
     if (!renderer || !embeddings || !idToIndex) return;
 
-    const indices = new Set<number>();
+    const hasEmphasis = selectedIds.size > 0 || (highlightedIds?.size ?? 0) > 0;
+    renderer.setInactiveOpacity(hasEmphasis ? 0.7 : 1);
+
+    const selectedIndices = new Set<number>();
     for (const id of selectedIds) {
       const idx = idToIndex.get(id);
-      if (typeof idx === "number") indices.add(idx);
+      if (typeof idx === "number") selectedIndices.add(idx);
     }
 
-    renderer.setSelection(indices);
+    const highlightIndices = new Set<number>();
+    for (const id of highlightedIds ?? []) {
+      const idx = idToIndex.get(id);
+      if (typeof idx === "number") highlightIndices.add(idx);
+    }
+
+    renderer.setSelection(selectedIndices);
+    renderer.setHighlight(highlightIndices);
 
     const hoveredIdx = hoveredId ? (idToIndex.get(hoveredId) ?? -1) : -1;
     renderer.setHovered(hoveredIdx);
     hoveredIndexRef.current = hoveredIdx;
 
     requestRender();
-  }, [embeddings, hoveredId, idToIndex, requestRender, selectedIds]);
+  }, [embeddings, highlightedIds, hoveredId, idToIndex, requestRender, selectedIds]);
+
+  useEffect(() => {
+    requestRender();
+  }, [requestRender, semanticLabelDisplayMode, semanticLabelModel]);
 
   // Resize handling
   useEffect(() => {
@@ -484,7 +538,6 @@ export function useHyperScatter({
         overlayCanvasRef.current.height = Math.max(1, height);
         overlayCanvasRef.current.style.width = `${width}px`;
         overlayCanvasRef.current.style.height = `${height}px`;
-        redrawOverlay();
       }
 
       const renderer = rendererRef.current;
@@ -499,7 +552,7 @@ export function useHyperScatter({
     const ro = new ResizeObserver(resize);
     ro.observe(container);
     return () => ro.disconnect();
-  }, [redrawOverlay, requestRender]);
+  }, [requestRender]);
 
   // Wheel zoom (native listener so we can set passive:false)
   useEffect(() => {
@@ -545,7 +598,10 @@ export function useHyperScatter({
         isLassoingRef.current = true;
         isPanningRef.current = false;
         lassoPointsRef.current = [pos.x, pos.y];
-        drawLassoOverlay(overlayCanvasRef.current, lassoPointsRef.current);
+        renderer.setLassoPolygon(new Float32Array(lassoPointsRef.current), {
+          strokeColor: LASSO_STROKE_COLOR,
+          fillColor: LASSO_FILL_COLOR,
+        });
       } else {
         isPanningRef.current = true;
         isLassoingRef.current = false;
@@ -591,7 +647,10 @@ export function useHyperScatter({
         // Sample at ~2px spacing
         if (distSq >= 4) {
           pts.push(pos.x, pos.y);
-          drawLassoOverlay(overlayCanvasRef.current, pts);
+          renderer.setLassoPolygon(new Float32Array(pts), {
+            strokeColor: LASSO_STROKE_COLOR,
+            fillColor: LASSO_FILL_COLOR,
+          });
         }
         return;
       }
@@ -626,8 +685,14 @@ export function useHyperScatter({
       if (isLassoingRef.current) {
         const pts = lassoPointsRef.current.slice();
         persistentLassoRef.current = pts.length >= 6 ? pts : null;
+        renderer.setLassoPolygon(
+          persistentLassoRef.current ? new Float32Array(persistentLassoRef.current) : null,
+          {
+            strokeColor: LASSO_STROKE_COLOR,
+            fillColor: LASSO_FILL_COLOR,
+          }
+        );
         stopInteraction();
-        redrawOverlay();
 
         if (pts.length >= 6) {
           try {
@@ -639,9 +704,8 @@ export function useHyperScatter({
                 ? Math.max(1, Math.floor(rect.width))
                 : Math.max(
                     1,
-                    overlayCanvasRef.current?.clientWidth ??
+                    containerRef.current?.clientWidth ??
                       canvasRef.current?.clientWidth ??
-                      overlayCanvasRef.current?.width ??
                       canvasRef.current?.width ??
                       0
                   );
@@ -649,15 +713,15 @@ export function useHyperScatter({
                 ? Math.max(1, Math.floor(rect.height))
                 : Math.max(
                     1,
-                    overlayCanvasRef.current?.clientHeight ??
+                    containerRef.current?.clientHeight ??
                       canvasRef.current?.clientHeight ??
-                      overlayCanvasRef.current?.height ??
                       canvasRef.current?.height ??
                       0
                   );
 
               // Clear any existing manual selection highlights immediately.
               renderer.setSelection(new Set());
+              renderer.setHighlight(new Set());
 
               // Cap vertex count to keep request payload + backend runtime bounded.
               const polygon = capInterleavedXY(pts, MAX_LASSO_VERTS);
@@ -682,6 +746,7 @@ export function useHyperScatter({
 
               // Clear any existing manual selection highlights immediately.
               renderer.setSelection(new Set());
+              renderer.setHighlight(new Set());
 
               // Cap vertex count to keep request payload + backend runtime bounded.
               const polygon = capInterleavedXY(dataCoords, MAX_LASSO_VERTS);
@@ -726,8 +791,14 @@ export function useHyperScatter({
             else next.add(id);
             setSelectedIds(next, "scatter");
           } else {
-            setSelectedIds(new Set([id]), "scatter");
+            if (selectedIds.size === 1 && selectedIds.has(id)) {
+              setSelectedIds(new Set<string>(), "scatter");
+            } else {
+              setSelectedIds(new Set([id]), "scatter");
+            }
           }
+        } else if (selectedIds.size > 0) {
+          setSelectedIds(new Set<string>(), "scatter");
         }
       }
 
@@ -738,7 +809,6 @@ export function useHyperScatter({
       beginLassoSelection,
       embeddings,
       getCanvasPos,
-      redrawOverlay,
       requestRender,
       selectedIds,
       setSelectedIds,
@@ -770,6 +840,7 @@ export function useHyperScatter({
       stopInteraction();
 
       renderer.setSelection(new Set());
+      renderer.setHighlight(new Set());
       setSelectedIds(new Set<string>(), "scatter");
 
       requestRender();
