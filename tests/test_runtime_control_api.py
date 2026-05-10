@@ -367,6 +367,19 @@ def test_runtime_control_api_supports_checkpoint_jobs_panels_and_ui_state(
     assert {"label-histogram", "notes"}.issubset(remaining_panel_ids)
 
 
+def test_health_reports_package_version() -> None:
+    from hyperview import __version__
+
+    runtime = HyperViewRuntime()
+    runtime.attach_dataset_instance("default", _make_dataset())
+    client = TestClient(create_app(runtime=runtime))
+
+    response = client.get("/__hyperview__/health")
+
+    assert response.status_code == 200
+    assert response.json()["version"] == __version__
+
+
 def test_sample_responses_include_media_url_and_content_endpoint_serves_file(tmp_path: Path) -> None:
     image_path = tmp_path / "sample.png"
     Image.new("RGB", (12, 12), color=(32, 128, 224)).save(image_path)

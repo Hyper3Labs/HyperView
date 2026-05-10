@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1 - 2026-05-10
+
+### Fixes
+- Report the installed package version from the HyperView health endpoint instead of the stale hardcoded server version.
+
 ## 0.4.0 - 2026-05-10
 
 ### Features

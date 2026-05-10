@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from hyperview._version import __version__
 from hyperview.core.dataset import Dataset
 from hyperview.core.selection import (
     OrbitViewState3D,
@@ -255,7 +256,7 @@ def create_app(
     app = FastAPI(
         title="HyperView",
         description="Dataset visualization with hyperbolic embeddings",
-        version="0.1.0",
+        version=__version__,
     )
 
     def get_runtime() -> HyperViewRuntime:
