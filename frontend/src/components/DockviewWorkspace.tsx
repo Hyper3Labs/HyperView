@@ -11,24 +11,31 @@ import React, {
 import {
   DockviewReact,
   type DockviewApi,
+  type IDockviewHeaderActionsProps,
   type DockviewReadyEvent,
   type IDockviewPanelProps,
   type IWatermarkPanelProps,
   themeAbyss,
 } from "dockview";
+import { Columns2 } from "lucide-react";
 
+import { addRuntimePanel, removeRuntimePanel } from "@/lib/api";
 import type { SamplesViewModel } from "@/lib/sampleCollections";
 import { findLayoutByGeometry, getLayoutDimension } from "@/lib/layouts";
 import {
   addBuiltInCenterPanel,
   CENTER_PANEL_COMPONENTS,
   getBuiltInCenterPanelIdForLayout,
+  getScatterTabComponent,
   CENTER_PANEL_TAB_COMPONENTS,
   PANEL,
 } from "@/panels/registry";
 import { installHyperViewPanelSdkGlobal } from "@/panel-sdk";
 import { useStore } from "@/store/useStore";
+import type { Geometry, RuntimePanel } from "@/types";
+import { cn } from "@/lib/utils";
 
+import { Button } from "./ui/button";
 import { DockviewContext, useDockviewContext } from "./DockviewContext";
 import { ExplorerPanel } from "./ExplorerPanel";
 import { HyperViewLogo } from "./icons";
@@ -41,6 +48,7 @@ const DEFAULT_CONTAINER_HEIGHT = 800;
 const MIN_SIDE_PANEL_WIDTH = 120;
 const MIN_BOTTOM_PANEL_HEIGHT = 150;
 const RUNTIME_PANEL_PREFIX = "runtime-panel:";
+const OPEN_COPY_TITLE = "Open copy to the right";
 
 const NON_ANCHOR_PANEL_IDS = new Set<string>([
   PANEL.EXPLORER,
@@ -101,13 +109,113 @@ function getZonePosition(zone: "left" | "right" | "bottom") {
 
 function getRuntimePanelPosition(
   api: DockviewApi,
-  zone: "center" | "right" | "bottom"
+  zone: "center" | "right" | "bottom",
+  panel?: RuntimePanel
 ) {
+  if (panel?.reference_panel_id && panel.direction) {
+    const referencePanel = resolveRuntimeReferencePanel(api, panel.reference_panel_id);
+    if (referencePanel) {
+      return { referencePanel, direction: panel.direction };
+    }
+  }
+
   if (zone === "center") {
     return getCenterTabPosition(api) ?? undefined;
   }
 
   return getZonePosition(zone);
+}
+
+function resolveRuntimeReferencePanel(api: DockviewApi, panelId: string) {
+  return api.getPanel(panelId) ?? api.getPanel(`${RUNTIME_PANEL_PREFIX}${panelId}`) ?? null;
+}
+
+function makePanelInstanceId(baseId: string) {
+  const suffix =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID().slice(0, 8)
+      : Math.random().toString(36).slice(2, 10);
+  return `${baseId}:copy-${suffix}`;
+}
+
+function stripRuntimePanelPrefix(panelId: string) {
+  return panelId.startsWith(RUNTIME_PANEL_PREFIX)
+    ? panelId.slice(RUNTIME_PANEL_PREFIX.length)
+    : panelId;
+}
+
+function DockviewPanelActions(props: IDockviewHeaderActionsProps) {
+  const activeWorkspaceId = useStore((state) => state.activeWorkspaceId);
+  const customPanels = useStore((state) => state.customPanels);
+  const applyRuntimeSnapshot = useStore((state) => state.applyRuntimeSnapshot);
+  const activePanel = props.activePanel;
+
+  const handleOpenCopy = useCallback(async () => {
+    if (!activePanel) return;
+
+    if (activePanel.id.startsWith(RUNTIME_PANEL_PREFIX)) {
+      const runtimePanelId = stripRuntimePanelPrefix(activePanel.id);
+      const sourcePanel = customPanels.find((panel) => panel.id === runtimePanelId);
+      if (!sourcePanel || !activeWorkspaceId) return;
+
+      const nextPanelId = makePanelInstanceId(sourcePanel.id).replace(/:/g, "-");
+      const snapshot = await addRuntimePanel({
+        workspaceId: activeWorkspaceId,
+        panelId: nextPanelId,
+        title: sourcePanel.title,
+        kind: sourcePanel.kind,
+        moduleFile: sourcePanel.module_file,
+        layoutKey: sourcePanel.layout_key,
+        position: "center",
+        referencePanelId: sourcePanel.id,
+        direction: "right",
+      });
+      applyRuntimeSnapshot(snapshot);
+      return;
+    }
+
+    const state = activePanel.toJSON();
+    const nextPanel = props.containerApi.addPanel({
+      id: makePanelInstanceId(activePanel.id),
+      component: state.contentComponent ?? activePanel.api.component,
+      tabComponent: state.tabComponent,
+      title: activePanel.title,
+      params: state.params,
+      renderer: state.renderer,
+      position: { referencePanel: activePanel, direction: "right" },
+      minimumWidth: state.minimumWidth,
+      minimumHeight: state.minimumHeight,
+      maximumWidth: state.maximumWidth,
+      maximumHeight: state.maximumHeight,
+    });
+    nextPanel.api.setActive();
+  }, [activePanel, activeWorkspaceId, applyRuntimeSnapshot, customPanels, props.containerApi]);
+
+  if (!activePanel || NON_ANCHOR_PANEL_IDS.has(activePanel.id)) {
+    return null;
+  }
+
+  return (
+    <div className="flex h-full items-center pr-1">
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        title={OPEN_COPY_TITLE}
+        aria-label={OPEN_COPY_TITLE}
+        onClick={(event) => {
+          event.stopPropagation();
+          void handleOpenCopy();
+        }}
+        className={cn(
+          "h-6 w-6 rounded-[4px] text-muted-foreground",
+          "hover:bg-muted/50 hover:text-foreground active:scale-[0.98]"
+        )}
+      >
+        <Columns2 className="h-3.5 w-3.5" />
+      </Button>
+    </div>
+  );
 }
 
 function getCenterTabPosition(api: DockviewApi) {
@@ -355,8 +463,14 @@ export function DockviewWorkspace() {
   const ctx = useDockviewContext();
   const datasetInfo = useStore((state) => state.datasetInfo);
   const customPanels = useStore((state) => state.customPanels);
+  const activeWorkspaceId = useStore((state) => state.activeWorkspaceId);
   const requestedLayoutKey = useStore((state) => state.requestedLayoutKey);
-  const { setLeftPanelOpen, setRightPanelOpen, setBottomPanelOpen } = useStore();
+  const {
+    applyRuntimeSnapshot,
+    setLeftPanelOpen,
+    setRightPanelOpen,
+    setBottomPanelOpen,
+  } = useStore();
 
   const buildDefaultLayout = useCallback(
     (api: DockviewApi) => {
@@ -587,10 +701,29 @@ export function DockviewWorkspace() {
       if (event.id === PANEL.EXPLORER) setLeftPanelOpen(false);
       if (event.id === PANEL.RIGHT_PLACEHOLDER) setRightPanelOpen(false);
       if (event.id === PANEL.BOTTOM_PLACEHOLDER) setBottomPanelOpen(false);
+
+      if (!event.id.startsWith(RUNTIME_PANEL_PREFIX) || !activeWorkspaceId) return;
+
+      const panelId = stripRuntimePanelPrefix(event.id);
+      if (!customPanels.some((panel) => panel.id === panelId)) return;
+
+      void removeRuntimePanel({ workspaceId: activeWorkspaceId, panelId })
+        .then(applyRuntimeSnapshot)
+        .catch((error) => {
+          console.error("Failed to remove runtime panel:", error);
+        });
     });
 
     return () => disposable.dispose();
-  }, [ctx.api, setBottomPanelOpen, setLeftPanelOpen, setRightPanelOpen]);
+  }, [
+    activeWorkspaceId,
+    applyRuntimeSnapshot,
+    ctx.api,
+    customPanels,
+    setBottomPanelOpen,
+    setLeftPanelOpen,
+    setRightPanelOpen,
+  ]);
 
   useEffect(() => {
     const api = ctx.api;
@@ -685,12 +818,34 @@ export function DockviewWorkspace() {
       const runtimePanelId = `${RUNTIME_PANEL_PREFIX}${panel.id}`;
       if (api.getPanel(runtimePanelId)) continue;
 
+      if (panel.kind === "scatter") {
+        const layoutDimension = panel.layout_dimension === 3 ? 3 : 2;
+        api.addPanel({
+          id: runtimePanelId,
+          component: "scatter",
+          title: panel.title,
+          tabComponent: getScatterTabComponent({
+            geometry: panel.geometry,
+            layoutDimension,
+          }),
+          params: {
+            layoutKey: panel.layout_key ?? undefined,
+            geometry: (panel.geometry ?? undefined) as Geometry | undefined,
+            layoutDimension,
+            pinnedLayout: true,
+          },
+          position: getRuntimePanelPosition(api, panel.position, panel),
+          renderer: "always",
+        });
+        continue;
+      }
+
       api.addPanel({
         id: runtimePanelId,
         component: "runtimeModulePanel",
         title: panel.title,
         params: { panelId: panel.id },
-        position: getRuntimePanelPosition(api, panel.position),
+        position: getRuntimePanelPosition(api, panel.position, panel),
         initialWidth: panel.position === "right" ? getDefaultRightPanelWidth(getContainerWidth(api)) : undefined,
         initialHeight:
           panel.position === "bottom"
@@ -708,6 +863,7 @@ export function DockviewWorkspace() {
         tabComponents={TAB_COMPONENTS}
         onReady={onReady}
         theme={themeAbyss}
+        rightHeaderActionsComponent={DockviewPanelActions}
         defaultRenderer="always"
         scrollbars="native"
         watermarkComponent={Watermark}

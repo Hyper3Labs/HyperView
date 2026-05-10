@@ -30,6 +30,9 @@ type EnhancedRenderer = AnyRenderer & {
   setInactiveOpacity: (alpha: number) => void;
   setLassoPolygon: (polygon: Float32Array | null, style?: LassoOverlayStyle) => void;
 };
+type PanAnchoredRenderer = Renderer & {
+  startPan: (screenX: number, screenY: number) => void;
+};
 type HyperScatterModule = typeof import("hyper-scatter") & {
   createScatterPlot: (canvas: HTMLCanvasElement, options: Record<string, unknown>) => EnhancedRenderer;
 };
@@ -589,6 +592,10 @@ export function useHyperScatter({
       lastPointerXRef.current = pos.x;
       lastPointerYRef.current = pos.y;
 
+      if (layoutDimension === 2 && embeddings?.geometry === "poincare") {
+        (renderer as PanAnchoredRenderer).startPan(pos.x, pos.y);
+      }
+
       if (persistentLassoRef.current) {
         clearPersistentLasso();
       }
@@ -615,7 +622,7 @@ export function useHyperScatter({
 
       e.preventDefault();
     },
-    [clearPersistentLasso, getCanvasPos]
+    [clearPersistentLasso, embeddings?.geometry, getCanvasPos, layoutDimension]
   );
 
   const handlePointerMove = useCallback(

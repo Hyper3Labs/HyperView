@@ -74,6 +74,20 @@ Important distinction:
 - `usePanelClient()` or `createClient()` is the escape hatch for direct backend reads and control-plane calls.
 - `useTool(uri)` calls an installed backend tool registered by an extension and returns `{ loading, result, error, run, reset }`.
 
+### Hook return shapes
+
+Verified against the current `panel-sdk` surface:
+
+- `usePanelSelection()` → `{ selectedIds: string[], selectionSource: SelectionUpdateSource, setSelection(ids: string[], source?: SelectionUpdateSource): void, clearSelection(): void }`
+- `usePanelCommands()` → `{ setLabelFilter, setHoveredId, clearLassoSelection, clearSelection(): void, setSelection(ids: string[], source?: SelectionUpdateSource): void, focusPanel(panelId: string): boolean, closePanel(panelId: string): boolean }`
+- `usePanelRuntimeState()` → `{ activeWorkspaceId, runtimeDatasetName, activeLayoutKey, requestedLayoutKey, workspaces, customPanels }`
+- `usePanelUiState()` → `{ sampleGridSize, setSampleGridSize, scatterLabelOverlayMode, setScatterLabelOverlayMode }`
+- `usePanelDatasetInfo()` / `usePanelSamples()` / `usePanelSamplesView()` → host-managed dataset and view state
+- `useTool(uri)` → `{ loading: boolean, result: TResult | null, error: string | null, run(params?): Promise<TResult | null>, reset(): void }`
+- `usePanelClient()` → low-level client; pair with `createClient(workspaceId)` for direct API calls.
+
+To clear the current selection from a panel use `usePanelSelection().clearSelection()` or `usePanelCommands().setSelection([])`.
+
 ## Placement
 
 Native runtime panels can be added in:
@@ -98,6 +112,14 @@ hyperview ui panel add \
   --position right \
   --module-file agent-context/panels/native-label-histogram/index.js
 ```
+
+## Verification
+
+After `hyperview ui panel add ...`:
+
+- `curl 'http://127.0.0.1:6262/api/runtime?workspace_id=<ws>'` should list the panel under `workspace.ui.custom_panels[*]` with `data.module_src` set to a `/api/panels/content/<ws>/<panel-id>/<file>` URL.
+- Fetching `data.module_src` should return `application/javascript` with your module body.
+- The panel should appear in the live UI in the requested `position` slot.
 
 ## Good Practices
 

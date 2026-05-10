@@ -1,10 +1,12 @@
 # HyperView
 
-> **An embedding visualizer for agents, plugins, and model analysis**
+> **A scriptable embedding workbench for image dataset curation and model analysis**
 
-HyperView is an embedding visualizer for image and multimodal datasets. Use it to inspect clusters, labels, nearest neighbors, and model behavior across Euclidean, hyperbolic, and spherical spaces.
+HyperView turns an image dataset and a model into a live workspace: compute embeddings, project them into Euclidean, hyperbolic, or spherical layouts, inspect clusters and outliers, and keep samples, media, layouts, selections, and panels together across sessions.
 
-The CLI controls the app. Agents can create workspaces, compute embeddings and layouts, switch the visible UI, select samples, and install plugins with backend tools plus native frontend panels. That means a visualization can be shaped around the dataset, not locked into one fixed dashboard.
+It is built for ML/CV researchers, model builders, and coding agents who need a faster loop than notebooks plus screenshots and a more programmable surface than a fixed dashboard. The `hyperview` CLI controls the running UI, so a human or agent can create workspaces, run embedding/layout jobs, switch views, select samples, and install dataset-specific tools without editing the frontend.
+
+Install it when a scatterplot is no longer enough: you want a local, extensible place to understand what your model grouped together, what it missed, and which samples deserve the next training or evaluation pass.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Hyper3Labs/HyperView) [![Open in HF Spaces](https://huggingface.co/datasets/huggingface/badges/resolve/main/open-in-hf-spaces-sm.svg)](https://huggingface.co/spaces/hyper3labs/HyperView) [![Discord](https://img.shields.io/badge/Discord-hyper%C2%B3labs-5865F2?logo=discord&logoColor=white)](https://discord.gg/Za3rBkTPSf)
 
@@ -20,11 +22,13 @@ The CLI controls the app. Agents can create workspaces, compute embeddings and l
 
 ## Features
 
-- CLI-controlled UI. Use `hyperview` to create workspaces, compute layouts, change the visible panel, and select samples in the running app. Agents can drive the same app humans see.
-- Fast embeddings and nearest neighbors. Compute embeddings with built-in or custom providers, persist them per dataset, and query similarity from the runtime API.
-- One dataset per workspace. A workspace has one active dataset, its computed spaces, its selected layout, its current selection, and its panels.
-- Plugins with backend and frontend. Install a local extension folder with `extension.toml`, Python tools, and a native React panel. The panel can call its backend tools through the shared HyperView panel SDK.
-- Bespoke visualization workbenches. Add dataset-specific panels, providers, tools, and layouts without touching frontend source. Every serious dataset can get the view it needs.
+- **From image data to an embedding map.** Ingest images from Hugging Face or local folders, compute embeddings with built-in or custom providers, and persist samples, media, embedding spaces, and layouts for repeatable analysis.
+- **Geometry-aware exploration.** Inspect the same dataset through Euclidean, Poincare/hyperbolic, and spherical views so hierarchy, clusters, outliers, and boundary cases are easier to see.
+- **Curation primitives built into the workspace.** Browse linked thumbnails and labels, use click or lasso selection, query nearest neighbors, and keep the current working set visible while you reason about the data.
+- **A CLI control plane for the live app.** Use `hyperview` commands to create workspaces, run jobs, switch layouts, set selections, and add panels while the UI stays open.
+- **Agent-ready by default.** Install the HyperView skill and let coding agents operate the same workspace you are inspecting: select samples, call tools, change layouts, and report back with concrete IDs and artifacts.
+- **Bring your own model or provider.** Register custom embedding providers, point HyperView at checkpoints, and compare the resulting spaces without rebuilding the app.
+- **Dataset-specific tools and panels.** Add repo-local extensions with Python backend tools and native frontend panels, so a serious dataset can grow the exact analysis surface it needs.
 
 ## Updates
 
@@ -38,19 +42,19 @@ The CLI controls the app. Agents can create workspaces, compute embeddings and l
 
 ### Install CLI and Skill
 
-Install the HyperView CLI first:
+Install the HyperView CLI and refresh the agent skill in one copy-paste line:
 
 ```bash
-uv pip install hyperview
+uv tool install --upgrade hyperview && hyperview skill install
 ```
 
-Then make the HyperView agent skill available to your coding agent. In this repo it lives at:
+Re-running `hyperview skill install` replaces old HyperView skill copies, so the installed agent skill stays in sync with the upgraded CLI. By default this installs into detected agent locations plus the universal `~/.agents/skills/hyperview-cli` fallback. For a project-local Copilot install, run:
 
-```text
-.agents/skills/hyperview-cli/
+```bash
+hyperview skill install --scope project --agent github-copilot --yes
 ```
 
-Use that skill before driving workspaces, embeddings, layouts, runtime panels, or plugins from an agent.
+In this repo the source skill lives at `.agents/skills/hyperview-cli/`, so contributors get the project skill just by opening the checkout. Use that skill before driving workspaces, embeddings, layouts, runtime panels, or plugins from an agent.
 
 ### Run HyperView
 
@@ -80,54 +84,35 @@ hyperview ui panel add \
   --title "Labels" \
   --position right \
   --module-file agent-context/panels/labels/panel.jsx
+
+hyperview ui panel add \
+  --workspace imagenette-demo \
+  --panel-id model-a-poincare \
+  --title "Model A" \
+  --kind scatter \
+  --layout-key <model-a-poincare-layout-key> \
+  --position center
+
+hyperview ui panel add \
+  --workspace imagenette-demo \
+  --panel-id model-b-poincare \
+  --title "Model B" \
+  --kind scatter \
+  --layout-key <model-b-poincare-layout-key> \
+  --position center \
+  --reference-panel-id model-a-poincare \
+  --direction right
 ```
 
 Plugins use the same runtime path, but add Python tools too:
 
 ```bash
-hyperview extension add agent-context/extensions/selection-profile \
+hyperview extension add .hyperview/extensions/selection-profile \
   --workspace imagenette-demo
 
 hyperview tools run selection_profile.summarize \
   --workspace imagenette-demo \
   --param 'sample_ids=["sample-1","sample-8"]'
-```
-
-Legacy one-shot launch is still available for quick experiments:
-
-```bash
-hyperview \
-  --dataset cifar10_demo \
-  --hf-dataset uoft-cs/cifar10 \
-  --split train \
-  --image-key img \
-  --label-key label \
-  --samples 500 \
-  --model openai/clip-vit-base-patch32 \
-  --layout euclidean \
-  --layout poincare
-```
-
-This legacy flow will:
-1. Use dataset `cifar10_demo`
-2. Load up to 500 samples from CIFAR-10
-3. Compute CLIP embeddings
-4. Generate Euclidean and Poincare visualizations
-5. Start the server at **http://127.0.0.1:6262**
-
-You can also launch with explicit dataset/model/projection args:
-
-```bash
-hyperview \
-  --dataset imagenette_clip \
-  --hf-dataset fastai/imagenette \
-  --split train \
-  --image-key image \
-  --label-key label \
-  --samples 1000 \
-  --model openai/clip-vit-base-patch32 \
-  --method umap \
-  --layout euclidean
 ```
 
 ### Python API

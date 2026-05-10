@@ -4,7 +4,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -21,7 +21,6 @@ from hyperview.core.selection import (
 )
 from hyperview.runtime import CustomPanelSpec, HyperViewRuntime
 from hyperview.storage.schema import parse_layout_dimension
-
 
 # Extensions whose content is handed off to esbuild for JSX transformation.
 _JSX_SUFFIXES = {".jsx"}
@@ -88,8 +87,12 @@ class UiPanelRequest(BaseModel):
     workspace_id: str
     panel_id: str
     title: str
-    module_file: str
+    kind: Literal["module", "scatter"] = "module"
+    module_file: str | None = None
+    layout_key: str | None = None
     position: str = "right"
+    reference_panel_id: str | None = None
+    direction: str | None = None
 
 
 class UiPanelRemoveRequest(BaseModel):
@@ -501,15 +504,47 @@ def create_app(
         request: UiPanelRequest,
         runtime_dep: HyperViewRuntime = Depends(get_runtime),
     ):
-        module_file = Path(request.module_file).expanduser().resolve()
-        if not module_file.exists() or not module_file.is_file():
-            raise HTTPException(status_code=400, detail=f"Panel module file not found: {module_file}")
+        if request.position not in {"center", "right", "bottom"}:
+            raise HTTPException(status_code=400, detail="position must be one of center, right, bottom")
+        if request.direction is not None and request.direction not in {"right", "left", "above", "below", "within"}:
+            raise HTTPException(status_code=400, detail="direction must be one of right, left, above, below, within")
+
+        module_file: Path | None = None
+        layout_key: str | None = None
+        geometry: str | None = None
+        layout_dimension: int | None = None
+
+        if request.kind == "module":
+            if not request.module_file:
+                raise HTTPException(status_code=400, detail="module_file is required for module panels")
+            module_file = Path(request.module_file).expanduser().resolve()
+            if not module_file.exists() or not module_file.is_file():
+                raise HTTPException(status_code=400, detail=f"Panel module file not found: {module_file}")
+        else:
+            if not request.layout_key:
+                raise HTTPException(status_code=400, detail="layout_key is required for scatter panels")
+            dataset = runtime_dep.get_dataset(request.workspace_id)
+            layout_info = next(
+                (layout for layout in dataset.list_layouts() if layout.layout_key == request.layout_key),
+                None,
+            )
+            if layout_info is None:
+                raise HTTPException(status_code=404, detail=f"Layout not found: {request.layout_key}")
+            layout_key = layout_info.layout_key
+            geometry = layout_info.geometry
+            layout_dimension = parse_layout_dimension(layout_info.layout_key)
 
         panel = CustomPanelSpec(
             id=request.panel_id,
             title=request.title,
-            module_file=str(module_file),
-            position=request.position,
+            kind=request.kind,
+            module_file=str(module_file) if module_file is not None else None,
+            position=request.position,  # type: ignore[arg-type]
+            layout_key=layout_key,
+            geometry=geometry,
+            layout_dimension=layout_dimension,
+            reference_panel_id=request.reference_panel_id,
+            direction=request.direction,  # type: ignore[arg-type]
         )
         workspace = runtime_dep.add_custom_panel(request.workspace_id, panel)
         return {"workspace": workspace.to_dict()}
@@ -909,11 +944,6 @@ def create_app(
     static_dir = Path(__file__).parent / "static"
     if static_dir.exists():
         app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")
-    else:
-        # Fallback: serve a simple HTML page
-        @app.get("/")
-        async def root():
-            return {"message": "HyperView API", "docs": "/docs"}
 
     return app
 

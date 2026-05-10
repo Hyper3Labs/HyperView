@@ -71,12 +71,23 @@ export interface RuntimePanelData {
   module_src: string | null;
 }
 
+export type RuntimePanelKind = "module" | "scatter";
+
+export type RuntimePanelPosition = "center" | "right" | "bottom";
+
+export type RuntimePanelDirection = "right" | "left" | "above" | "below" | "within";
+
 export interface RuntimePanel {
   id: string;
-  kind: "module";
+  kind: RuntimePanelKind;
   title: string;
-  position: "center" | "right" | "bottom";
+  position: RuntimePanelPosition;
   module_file: string | null;
+  layout_key: string | null;
+  geometry: Geometry | string | null;
+  layout_dimension: number | null;
+  reference_panel_id: string | null;
+  direction: RuntimePanelDirection | null;
   data: RuntimePanelData;
 }
 

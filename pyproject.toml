@@ -82,14 +82,21 @@ packages = ["src/hyperview"]
 # artifacts is for untracked files that exist; force-include ensures they're packaged
 artifacts = ["src/hyperview/server/static/**"]
 
+[tool.hatch.build.targets.wheel.force-include]
+".agents/skills/hyperview-cli" = "hyperview/agent_assets/skills/hyperview-cli"
+
 [tool.hatch.build.targets.sdist]
 include = [
     "/src",
+    "/.agents/skills/hyperview-cli",
     "/README.md",
     "/LICENSE",
 ]
 # Include built frontend for reproducible source builds
 artifacts = ["src/hyperview/server/static/**"]
+
+[tool.hatch.build.targets.sdist.force-include]
+".agents/skills/hyperview-cli" = ".agents/skills/hyperview-cli"
 
 [tool.ruff]
 line-length = 100

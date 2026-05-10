@@ -75,6 +75,11 @@ AGENTS.md
 .github/hooks/
 .github/skills/
 .agents/
+!.agents/
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/hyperview-cli/
+!.agents/skills/hyperview-cli/**
 .specstory/
 
 # Deployment repo (managed as a separate nested git repository)

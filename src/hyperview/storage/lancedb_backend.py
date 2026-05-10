@@ -51,7 +51,6 @@ class LanceDBBackend(StorageBackend):
         self._spaces_table = self._get_or_create_spaces_table()
         if "layouts_registry" in self._table_names():
             self._ensure_layouts_registry_table()
-        self._prune_stale_layouts()
 
     def _table_names(self) -> set[str]:
         """Return the set of table names in this LanceDB database."""
@@ -303,74 +302,6 @@ class LanceDBBackend(StorageBackend):
     ) -> bool:
         return table.schema.equals(create_layouts_schema(layout_dimension=layout_dimension))
 
-    def _normalize_layout_registry_rows(self, rows: list[dict]) -> list[dict]:
-        return [
-            {
-                "layout_key": row["layout_key"],
-                "space_key": row["space_key"],
-                "method": row["method"],
-                "geometry": row["geometry"],
-                "count": row["count"],
-                "created_at": row["created_at"],
-                "params_json": row.get("params_json"),
-            }
-            for row in rows
-        ]
-
-    def _prune_stale_layouts(self) -> None:
-        """Remove legacy layout rows/tables that no longer match the current contract."""
-        table_names = self._table_names()
-        registry = self._get_layouts_registry_table()
-        registered_layout_keys: set[str] = set()
-        stale_layout_keys: set[str] = set()
-
-        if registry is not None:
-            for row in registry.to_arrow().to_pylist():
-                layout_key = row["layout_key"]
-                registered_layout_keys.add(layout_key)
-                table_name = self._layout_table_name(layout_key)
-
-                try:
-                    layout_dimension = parse_layout_dimension(layout_key)
-                except ValueError:
-                    stale_layout_keys.add(layout_key)
-                    continue
-
-                if table_name not in table_names:
-                    stale_layout_keys.add(layout_key)
-                    continue
-
-                table = self._db.open_table(table_name)
-                if not self._layout_table_has_expected_schema(
-                    table,
-                    layout_dimension=layout_dimension,
-                ):
-                    stale_layout_keys.add(layout_key)
-
-        for table_name in table_names:
-            if not table_name.startswith("layouts__"):
-                continue
-
-            layout_key = table_name.removeprefix("layouts__")
-            if layout_key in registered_layout_keys:
-                continue
-
-            try:
-                layout_dimension = parse_layout_dimension(layout_key)
-            except ValueError:
-                stale_layout_keys.add(layout_key)
-                continue
-
-            table = self._db.open_table(table_name)
-            if not self._layout_table_has_expected_schema(
-                table,
-                layout_dimension=layout_dimension,
-            ):
-                stale_layout_keys.add(layout_key)
-
-        for layout_key in stale_layout_keys:
-            self.delete_layout(layout_key)
-
     def _ensure_layouts_registry_table(self) -> lancedb.table.Table:
         schema = create_layouts_registry_schema()
         if "layouts_registry" not in self._table_names():
@@ -380,13 +311,10 @@ class LanceDBBackend(StorageBackend):
         table = self._db.open_table("layouts_registry")
         if table.schema.equals(schema):
             return table
-
-        rows = self._normalize_layout_registry_rows(table.to_arrow().to_pylist())
-        self._db.drop_table("layouts_registry")
-        rebuilt = self._db.create_table("layouts_registry", schema=schema)
-        if rows:
-            rebuilt.add(pa.Table.from_pylist(rows, schema=schema))
-        return rebuilt
+        raise ValueError(
+            "layouts_registry uses an unsupported persisted schema. "
+            "Delete the dataset storage and recompute layouts."
+        )
 
     def list_layouts(self) -> list[LayoutInfo]:
         table = self._get_layouts_registry_table()

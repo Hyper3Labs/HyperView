@@ -1,6 +1,9 @@
 import type {
   DatasetInfo,
   EmbeddingsData,
+  RuntimePanelDirection,
+  RuntimePanelKind,
+  RuntimePanelPosition,
   RuntimeSnapshot,
   Sample,
   SamplesResponse,
@@ -94,6 +97,60 @@ export async function setActiveWorkspace(workspaceId: string): Promise<RuntimeSn
   });
   if (!res.ok) {
     await throwApiError(res, "Failed to set active workspace");
+  }
+  return fetchRuntimeState();
+}
+
+export async function addRuntimePanel(args: {
+  workspaceId: string;
+  panelId: string;
+  title: string;
+  kind?: RuntimePanelKind;
+  moduleFile?: string | null;
+  layoutKey?: string | null;
+  position?: RuntimePanelPosition;
+  referencePanelId?: string | null;
+  direction?: RuntimePanelDirection | null;
+}): Promise<RuntimeSnapshot> {
+  const res = await fetch(`${API_BASE}/api/control/ui/panels`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      workspace_id: args.workspaceId,
+      panel_id: args.panelId,
+      title: args.title,
+      kind: args.kind ?? "module",
+      module_file: args.moduleFile ?? null,
+      layout_key: args.layoutKey ?? null,
+      position: args.position ?? "right",
+      reference_panel_id: args.referencePanelId ?? null,
+      direction: args.direction ?? null,
+    }),
+  });
+  if (!res.ok) {
+    await throwApiError(res, "Failed to add runtime panel");
+  }
+  return fetchRuntimeState();
+}
+
+export async function removeRuntimePanel(args: {
+  workspaceId: string;
+  panelId: string;
+}): Promise<RuntimeSnapshot> {
+  const res = await fetch(`${API_BASE}/api/control/ui/panels`, {
+    method: "DELETE",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      workspace_id: args.workspaceId,
+      panel_id: args.panelId,
+    }),
+  });
+  if (!res.ok) {
+    await throwApiError(res, "Failed to remove runtime panel");
   }
   return fetchRuntimeState();
 }

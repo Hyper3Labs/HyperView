@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.0 - 2026-05-10
+
+### Features
+- Add the packaged `hyperview skill install` workflow for refreshing the HyperView agent skill across supported coding agents.
+- Add runtime scatter panels that can be bound to explicit layout keys for side-by-side embedding comparisons.
+- Add project-local extension discovery from the nearest `.hyperview/extensions` directory.
+
+### Improvements
+- Update the frontend to use `hyper-scatter` 0.4.0 and explicit Poincare pan anchors.
+- Strengthen installer safeguards for custom skill destinations.
+- Keep streaming Hugging Face ingestion working for iterable datasets without private fingerprints.
+
+### Breaking Changes
+- Remove the legacy top-level one-shot CLI flow; use explicit control-plane commands such as `hyperview dataset create`, `hyperview workspace create`, and `hyperview serve`.
+- Reject unsupported persisted LanceDB layout registry schemas instead of silently rebuilding them.
+
 ## 0.3.1 - 2026-03-22
 
 ### Fixes

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 from hyperview.cli import main
@@ -10,6 +11,13 @@ from hyperview.cli import main
 
 class LocalProviderFixture:
     pass
+
+
+def test_cli_rejects_legacy_top_level_flags(capsys) -> None:
+    with pytest.raises(SystemExit):
+        main(["--dataset", "cifar10_demo"])
+
+    assert "invalid choice" in capsys.readouterr().err
 
 
 def test_cli_provider_and_workspace_commands_use_persistent_registries(
@@ -162,8 +170,65 @@ def test_cli_panel_add_posts_native_panel_module_file(
         "workspace_id": "default",
         "panel_id": "agent-panel",
         "title": "Agent Panel",
+        "kind": "module",
         "module_file": str(panel_file.resolve()),
+        "layout_key": None,
         "position": "right",
+        "reference_panel_id": None,
+        "direction": None,
+    }
+
+
+def test_cli_panel_add_posts_scatter_panel_layout_binding(monkeypatch, capsys) -> None:
+    recorded: dict[str, object] = {}
+
+    def fake_send(url: str, payload: dict[str, object], method: str = "POST") -> dict[str, object]:
+        recorded["url"] = url
+        recorded["payload"] = payload
+        recorded["method"] = method
+        return {"workspace": {"id": "default"}}
+
+    monkeypatch.setattr("hyperview.cli._http_send_json", fake_send)
+
+    main(
+        [
+            "ui",
+            "panel",
+            "add",
+            "--workspace",
+            "default",
+            "--panel-id",
+            "uncha-poincare",
+            "--title",
+            "UNCHA",
+            "--kind",
+            "scatter",
+            "--layout-key",
+            "uncha__poincare_umap__2d",
+            "--position",
+            "center",
+            "--reference-panel-id",
+            "hycoclip-poincare",
+            "--direction",
+            "right",
+            "--json",
+        ]
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["workspace"]["id"] == "default"
+    assert recorded["method"] == "POST"
+    assert recorded["url"] == "http://127.0.0.1:6262/api/control/ui/panels"
+    assert recorded["payload"] == {
+        "workspace_id": "default",
+        "panel_id": "uncha-poincare",
+        "title": "UNCHA",
+        "kind": "scatter",
+        "module_file": None,
+        "layout_key": "uncha__poincare_umap__2d",
+        "position": "center",
+        "reference_panel_id": "hycoclip-poincare",
+        "direction": "right",
     }
 
 
@@ -230,3 +295,214 @@ def test_cli_workspace_delete_removes_stale_workspace(
     assert payload["deleted_workspace_id"] == "stale-demo"
     assert payload["active_workspace_id"] == "research"
     assert [workspace["id"] for workspace in payload["workspaces"]] == ["default", "research"]
+
+
+def test_cli_skill_install_copies_hyperview_skill(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    destination = tmp_path / "hyperview-cli"
+
+    main(["skill", "install", "--destination", str(destination), "--json"])
+    payload = json.loads(capsys.readouterr().out)["skill_install"]
+
+    assert payload["skill"] == "hyperview-cli"
+    assert payload["action"] == "installed"
+    assert payload["installed"] is True
+    assert payload["destination"] == str(destination.resolve())
+    assert (destination / "SKILL.md").exists()
+    assert (destination / "references" / "commands.md").exists()
+    assert (destination / "references" / "native-panels.md").exists()
+    assert (destination / "references" / "plugins.md").exists()
+
+    (destination / "SKILL.md").write_text("stale", encoding="utf-8")
+    main(["skill", "install", "--destination", str(destination), "--json"])
+    refreshed_payload = json.loads(capsys.readouterr().out)["skill_install"]
+
+    assert refreshed_payload["action"] == "replaced"
+    assert refreshed_payload["installed"] is True
+    assert "name: hyperview-cli" in (destination / "SKILL.md").read_text(encoding="utf-8")
+
+
+def test_cli_skill_install_force_replaces_existing_destination(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    destination = tmp_path / "hyperview-cli"
+    destination.mkdir()
+    (destination / "SKILL.md").write_text("stale", encoding="utf-8")
+
+    main(["skill", "install", "--destination", str(destination), "--yes", "--json"])
+    payload = json.loads(capsys.readouterr().out)["skill_install"]
+
+    assert payload["action"] == "replaced"
+    assert payload["installed"] is True
+    assert "name: hyperview-cli" in (destination / "SKILL.md").read_text(encoding="utf-8")
+
+
+def test_cli_skill_install_custom_destination_refuses_ambiguous_replace(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    destination = tmp_path / "skills"
+    destination.mkdir()
+    (destination / "other-skill.txt").write_text("keep", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Refusing to replace"):
+        main(["skill", "install", "--destination", str(destination), "--json"])
+
+    assert (destination / "other-skill.txt").exists()
+    assert capsys.readouterr().out == ""
+
+
+def test_cli_skill_install_dry_run_does_not_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    destination = tmp_path / "hyperview-cli"
+
+    main(["skill", "install", "--destination", str(destination), "--dry-run", "--json"])
+    payload = json.loads(capsys.readouterr().out)["skill_install"]
+
+    assert payload["action"] == "would-install"
+    assert payload["installed"] is False
+    assert not destination.exists()
+
+    destination.mkdir()
+    main(["skill", "install", "--destination", str(destination), "--dry-run", "--json"])
+    replace_payload = json.loads(capsys.readouterr().out)["skill_install"]
+
+    assert replace_payload["action"] == "would-replace"
+    assert replace_payload["installed"] is False
+
+
+def test_cli_skill_install_all_known_returns_one_result_per_agent(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(fake_home / ".config"))
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+
+    from hyperview import skill_install as skill_install_module
+
+    monkeypatch.setattr(
+        skill_install_module,
+        "AGENT_PROFILES",
+        skill_install_module._build_agent_profiles(),
+    )
+
+    main(["skill", "install", "--all-known", "--dry-run", "--json"])
+    payload = json.loads(capsys.readouterr().out)["skill_install"]
+
+    assert isinstance(payload, list)
+    assert len(payload) == len(skill_install_module.AGENT_PROFILES)
+    agents_seen = {entry["agent"] for entry in payload}
+    assert "claude-code" in agents_seen
+    assert "universal" in agents_seen
+    assert all(entry["action"] == "would-install" for entry in payload)
+
+
+def test_cli_skill_install_auto_detect_only_picks_installed_agents(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    (fake_home / ".cursor").mkdir()  # simulate Cursor installed
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(fake_home / ".config"))
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+
+    from hyperview import skill_install as skill_install_module
+
+    monkeypatch.setattr(
+        skill_install_module,
+        "AGENT_PROFILES",
+        skill_install_module._build_agent_profiles(),
+    )
+
+    main(["skill", "install", "--dry-run", "--json"])
+    payload = json.loads(capsys.readouterr().out)["skill_install"]
+
+    agents_seen = {entry["agent"] for entry in payload}
+    assert agents_seen == {"cursor", "universal"}
+
+
+def test_cli_skill_install_specific_agents_writes_into_each(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(fake_home / ".config"))
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+
+    from hyperview import skill_install as skill_install_module
+
+    monkeypatch.setattr(
+        skill_install_module,
+        "AGENT_PROFILES",
+        skill_install_module._build_agent_profiles(),
+    )
+
+    main(
+        [
+            "skill",
+            "install",
+            "--agent",
+            "claude-code",
+            "--agent",
+            "cursor",
+            "--json",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)["skill_install"]
+
+    agents_seen = {entry["agent"] for entry in payload}
+    assert agents_seen == {"claude-code", "cursor"}
+    assert all(entry["action"] == "installed" for entry in payload)
+    assert (fake_home / ".claude" / "skills" / "hyperview-cli" / "SKILL.md").exists()
+    assert (fake_home / ".cursor" / "skills" / "hyperview-cli" / "SKILL.md").exists()
+
+
+def test_cli_skill_install_project_scope_uses_agent_specific_dirs(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    fake_project = tmp_path / "project"
+    fake_project.mkdir()
+    monkeypatch.chdir(fake_project)
+
+    main(
+        [
+            "skill",
+            "install",
+            "--scope",
+            "project",
+            "--agent",
+            "github-copilot",
+            "--agent",
+            "cursor",
+            "--agent",
+            "universal",
+            "--json",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)["skill_install"]
+
+    agents_seen = {entry["agent"] for entry in payload}
+    assert agents_seen == {"github-copilot", "cursor", "universal"}
+    assert (fake_project / ".github" / "skills" / "hyperview-cli" / "SKILL.md").exists()
+    assert (fake_project / ".cursor" / "skills" / "hyperview-cli" / "SKILL.md").exists()
+    assert (fake_project / ".agents" / "skills" / "hyperview-cli" / "SKILL.md").exists()

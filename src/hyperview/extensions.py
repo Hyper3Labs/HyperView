@@ -1,7 +1,8 @@
 """HyperView extensions: folders containing tools and panels.
 
-An extension is a folder in the user's repo (or under ``.hyperview/extensions``
-in the cwd) with a small ``extension.toml`` manifest.
+An extension is a folder in the user's repo, usually under
+``.hyperview/extensions`` in the project root, with a small ``extension.toml``
+manifest.
 
 Minimal shape::
 
@@ -29,7 +30,6 @@ import sys
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 try:  # Python 3.11+
     import tomllib
@@ -37,7 +37,6 @@ except ImportError:  # pragma: no cover - exercised on Python 3.10
     import tomli as tomllib  # type: ignore[no-redef]
 
 from hyperview.tools import ToolRecord, drain_pending_tools
-
 
 EXTENSION_MANIFEST_NAME = "extension.toml"
 DEFAULT_LOCAL_EXTENSIONS_DIR = ".hyperview/extensions"
@@ -66,7 +65,7 @@ class ExtensionManifest:
     panels: list[PanelSpecEntry] = field(default_factory=list)
 
     @classmethod
-    def load(cls, folder: Path) -> "ExtensionManifest":
+    def load(cls, folder: Path) -> ExtensionManifest:
         folder = folder.expanduser().resolve()
         manifest_path = folder / EXTENSION_MANIFEST_NAME
         if not manifest_path.exists():
@@ -181,21 +180,26 @@ def unload_extension_modules(loaded: LoadedExtension) -> None:
 
 
 def discover_local_extensions(root: Path | None = None) -> list[Path]:
-    """Return folders under ``<root>/.hyperview/extensions`` that look valid.
+    """Return folders under the nearest ``.hyperview/extensions`` that look valid.
 
-    ``root`` defaults to the process cwd. Returned paths are absolute.
+    ``root`` defaults to the process cwd. Discovery walks upward so launching
+    HyperView from a nested directory still attaches project-local extensions.
+    Returned paths are absolute.
     """
 
-    base = (root or Path.cwd()) / DEFAULT_LOCAL_EXTENSIONS_DIR
-    if not base.exists() or not base.is_dir():
-        return []
-    found: list[Path] = []
-    for entry in sorted(base.iterdir()):
-        if not entry.is_dir():
+    start = (root or Path.cwd()).resolve()
+    for project_root in [start, *start.parents]:
+        base = project_root / DEFAULT_LOCAL_EXTENSIONS_DIR
+        if not base.exists() or not base.is_dir():
             continue
-        if (entry / EXTENSION_MANIFEST_NAME).exists():
-            found.append(entry.resolve())
-    return found
+
+        found: list[Path] = []
+        for entry in sorted(base.iterdir()):
+            if entry.is_dir() and (entry / EXTENSION_MANIFEST_NAME).exists():
+                found.append(entry.resolve())
+        return found
+
+    return []
 
 
 def resolve_panel_source(

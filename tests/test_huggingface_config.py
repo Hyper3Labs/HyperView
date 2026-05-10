@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-from argparse import Namespace
+import json
 from collections.abc import Iterator
 from pathlib import Path
 from random import Random
 from types import SimpleNamespace
-from unittest.mock import ANY, Mock, patch
+from unittest.mock import ANY, patch
 
+from datasets import IterableDataset
 from PIL import Image
 
 from hyperview import Dataset
-from hyperview.cli import _ingest_huggingface
+from hyperview.cli import main
 
 
 class DummyHFDataset:
@@ -56,6 +57,7 @@ class DummyHFStreamingDataset:
         selected_columns: list[str] | None = None,
     ) -> None:
         self._rows = [dict(row) for row in rows]
+        self._fingerprint = "abcdef123456"
         self._history = history if history is not None else []
         self._selected_columns = selected_columns
         self.features = {
@@ -197,37 +199,75 @@ def test_add_from_huggingface_tracks_requested_ids_when_samples_already_exist(
     ]
 
 
-def test_cli_forwards_hf_subset_config() -> None:
-    dataset = Mock()
-    dataset.add_from_huggingface.return_value = (2, 1)
-    args = Namespace(
-        hf_config="default",
-        split="train",
-        image_key="image",
-        label_key="label",
-        label_names_key=None,
-        samples=100,
-        shuffle=True,
-        seed=42,
-        hf_streaming=True,
-        hf_shuffle_buffer_size=256,
+def test_cli_dataset_create_forwards_hf_subset_config(monkeypatch, capsys) -> None:
+    recorded: dict[str, object] = {}
+
+    class CliDatasetFixture:
+        name = "hf-subset"
+
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def __len__(self) -> int:
+            return 0
+
+        def list_spaces(self) -> list:
+            return []
+
+        def list_layouts(self) -> list:
+            return []
+
+        def add_from_huggingface(self, dataset_name: str, **kwargs) -> tuple[int, int]:
+            recorded["dataset_name"] = dataset_name
+            recorded["kwargs"] = kwargs
+            return 2, 1
+
+    monkeypatch.setattr("hyperview.cli.Dataset", CliDatasetFixture)
+
+    main(
+        [
+            "dataset",
+            "create",
+            "hf-subset",
+            "--hf-dataset",
+            "hyper3labs/jaguar-re-id",
+            "--hf-config",
+            "default",
+            "--split",
+            "train",
+            "--image-key",
+            "image",
+            "--label-key",
+            "label",
+            "--samples",
+            "100",
+            "--shuffle",
+            "--hf-streaming",
+            "--hf-shuffle-buffer-size",
+            "256",
+            "--json",
+        ]
     )
 
-    _ingest_huggingface(dataset, args, "hyper3labs/jaguar-re-id")
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["dataset"]["name"] == "hf-subset"
 
-    dataset.add_from_huggingface.assert_called_once_with(
-        "hyper3labs/jaguar-re-id",
-        config="default",
-        split="train",
-        image_key="image",
-        label_key="label",
-        label_names_key=None,
-        max_samples=100,
-        shuffle=True,
-        seed=42,
-        streaming=True,
-        shuffle_buffer_size=256,
-    )
+    assert recorded == {
+        "dataset_name": "hyper3labs/jaguar-re-id",
+        "kwargs": {
+            "config": "default",
+            "split": "train",
+            "image_key": "image",
+            "label_key": "label",
+            "label_names_key": None,
+            "max_samples": 100,
+            "shuffle": True,
+            "seed": 42,
+            "streaming": True,
+            "shuffle_buffer_size": 256,
+            "show_progress": False,
+        },
+    }
 
 
 def test_add_from_huggingface_streaming_preserves_source_indices(tmp_path: Path) -> None:
@@ -274,6 +314,38 @@ def test_add_from_huggingface_streaming_preserves_source_indices(tmp_path: Path)
     samples = list(dataset)
     assert [sample.metadata["index"] for sample in samples] == [0, 1]
     assert [sample.label for sample in samples] == ["jaguar_01", "jaguar_02"]
+
+
+def test_add_from_huggingface_streaming_accepts_iterable_without_fingerprint(
+    tmp_path: Path,
+) -> None:
+    dataset = Dataset("streaming_no_fingerprint", persist=False)
+
+    def generate_rows() -> Iterator[dict[str, object]]:
+        yield {"image": Image.new("RGB", (8, 8), color="red")}
+
+    hf_dataset = IterableDataset.from_generator(generate_rows)
+    assert not hasattr(hf_dataset, "_fingerprint")
+
+    with (
+        patch("hyperview.core.dataset.load_dataset", return_value=hf_dataset),
+        patch(
+            "hyperview.storage.StorageConfig.default",
+            return_value=DummyStorageConfig(tmp_path),
+        ),
+    ):
+        added, skipped = dataset.add_from_huggingface(
+            "hyper3labs/streaming-demo",
+            split="train",
+            image_key="image",
+            label_key=None,
+            streaming=True,
+            show_progress=False,
+        )
+
+    assert (added, skipped) == (1, 0)
+    sample = next(iter(dataset))
+    assert sample.metadata["fingerprint"]
 
 
 def test_add_from_huggingface_streaming_shuffle_uses_buffer_size(tmp_path: Path) -> None:

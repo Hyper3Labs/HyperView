@@ -35,6 +35,7 @@ interface ScatterPanelProps {
   layoutKey?: string;
   geometry?: Geometry;
   layoutDimension?: 2 | 3;
+  pinnedLayout?: boolean;
 }
 
 export function ScatterPanel({
@@ -42,6 +43,7 @@ export function ScatterPanel({
   layoutKey,
   geometry,
   layoutDimension = 2,
+  pinnedLayout = false,
 }: ScatterPanelProps) {
   const {
     datasetInfo,
@@ -94,6 +96,7 @@ export function ScatterPanel({
   const resolvedGeometry = geometry ?? localGeometry;
 
   useEffect(() => {
+    if (pinnedLayout) return;
     if (!requestedLayoutKey) return;
 
     const requestedLayout = renderableLayouts.find(
@@ -104,7 +107,7 @@ export function ScatterPanel({
     if (requestedLayout.geometry !== resolvedGeometry) return;
 
     setLocalLayoutKey(requestedLayout.layout_key);
-  }, [renderableLayouts, requestedLayoutKey, resolvedGeometry]);
+  }, [pinnedLayout, renderableLayouts, requestedLayoutKey, resolvedGeometry]);
 
   const resolvedLayoutKey = useMemo(() => {
     if (!datasetInfo) return localLayoutKey ?? layoutKey ?? null;

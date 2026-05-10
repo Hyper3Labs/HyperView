@@ -31,6 +31,7 @@ type ScatterPanelParams = {
   layoutKey?: string;
   geometry?: Geometry;
   layoutDimension?: 2 | 3;
+  pinnedLayout?: boolean;
 };
 
 const ScatterDockPanel = React.memo(function ScatterDockPanel(
@@ -44,6 +45,7 @@ const ScatterDockPanel = React.memo(function ScatterDockPanel(
       layoutKey={params.layoutKey}
       geometry={params.geometry}
       layoutDimension={params.layoutDimension}
+      pinnedLayout={params.pinnedLayout}
     />
   );
 });
@@ -266,6 +268,19 @@ export function getBuiltInCenterPanelIdForLayout(args: {
   }
 
   return PANEL.SCATTER_DEFAULT;
+}
+
+export function getScatterTabComponent(args: {
+  geometry?: Geometry | string | null;
+  layoutDimension?: 2 | 3 | number | null;
+}) {
+  const layoutDimension = args.layoutDimension === 3 ? 3 : 2;
+  if (args.geometry === "euclidean" && layoutDimension === 3) return "euclidean3dTab";
+  if (args.geometry === "spherical" && layoutDimension === 3) return "spherical3dTab";
+  if (args.geometry === "euclidean") return "euclideanTab";
+  if (args.geometry === "poincare") return "hyperbolicTab";
+  if (args.geometry === "spherical") return "sphericalTab";
+  return "embeddingsTab";
 }
 
 export function addBuiltInCenterPanel(args: {

@@ -61,7 +61,8 @@ For the best development experience, run the backend and frontend in separate te
 Runs the Python API server at `http://127.0.0.1:6262`.
 
 ```bash
-uv run hyperview --dataset cifar10_demo --hf-dataset uoft-cs/cifar10 --split train --image-key img --label-key label --samples 200 --model openai/clip-vit-base-patch32 --no-browser
+uv run hyperview dataset create cifar10_demo --hf-dataset uoft-cs/cifar10 --split train --image-key img --label-key label --samples 200
+uv run hyperview serve --workspace cifar10-demo --dataset cifar10_demo --no-browser
 ```
 
 _Tip: Use `HF_DATASETS_OFFLINE=1` if you have cached datasets and want to work offline._

@@ -5,12 +5,13 @@ import json
 import time
 from pathlib import Path
 
-from fastapi.testclient import TestClient
 import numpy as np
+from fastapi.testclient import TestClient
 from PIL import Image
 
 from hyperview import Dataset
 from hyperview.core.sample import Sample
+from hyperview.extensions import discover_local_extensions
 from hyperview.runtime import HyperViewRuntime, ProviderRegistry, WorkspaceRegistry
 from hyperview.server.app import create_app
 
@@ -130,8 +131,22 @@ def _write_extension_files(folder: Path, *, panel_exists: bool = True) -> None:
         (folder / "panel.js").write_text("export default function Panel() { return null; }\n")
 
 
+def test_discovers_project_local_extensions_from_nested_cwd(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    extension_folder = tmp_path / ".hyperview" / "extensions" / "demo-ext"
+    _write_extension_files(extension_folder)
+    nested_folder = tmp_path / "experiments" / "run-1"
+    nested_folder.mkdir(parents=True)
+
+    monkeypatch.chdir(nested_folder)
+
+    assert discover_local_extensions() == [extension_folder.resolve()]
+
+
 def _wait_for_job(client: TestClient, job_id: str) -> dict:
-    deadline = time.time() + 10.0
+    deadline = time.time() + 30.0
     while time.time() < deadline:
         response = client.get(f"/api/jobs/{job_id}")
         assert response.status_code == 200
@@ -253,6 +268,21 @@ def test_runtime_control_api_supports_checkpoint_jobs_panels_and_ui_state(
     assert text_panel_response.status_code == 200
 
     target_layout = job_b["result"]["layout_keys"][0]
+    scatter_panel_response = client.post(
+        "/api/control/ui/panels",
+        json={
+            "workspace_id": "default",
+            "panel_id": "experiment-b-scatter",
+            "title": "Experiment B",
+            "kind": "scatter",
+            "layout_key": target_layout,
+            "position": "center",
+            "reference_panel_id": "label-histogram",
+            "direction": "right",
+        },
+    )
+    assert scatter_panel_response.status_code == 200
+
     set_layout_response = client.post(
         "/api/control/ui/layout",
         json={
@@ -279,7 +309,7 @@ def test_runtime_control_api_supports_checkpoint_jobs_panels_and_ui_state(
     assert runtime_payload["workspace"]["dataset_name"] == "runtime_control"
     assert runtime_payload["workspace"]["ui"]["active_layout_key"] == target_layout
     assert runtime_payload["workspace"]["ui"]["selected_ids"] == ["sample-1", "sample-3"]
-    assert len(runtime_payload["workspace"]["ui"]["custom_panels"]) == 2
+    assert len(runtime_payload["workspace"]["ui"]["custom_panels"]) == 3
 
     histogram_panel = next(
         panel
@@ -291,7 +321,13 @@ def test_runtime_control_api_supports_checkpoint_jobs_panels_and_ui_state(
         for panel in runtime_payload["workspace"]["ui"]["custom_panels"]
         if panel["id"] == "notes"
     )
+    scatter_panel = next(
+        panel
+        for panel in runtime_payload["workspace"]["ui"]["custom_panels"]
+        if panel["id"] == "experiment-b-scatter"
+    )
 
+    assert histogram_panel["kind"] == "module"
     assert histogram_panel["data"]["module_src"].startswith(
         "/api/panels/content/default/label-histogram/label-histogram.js"
     )
@@ -299,10 +335,36 @@ def test_runtime_control_api_supports_checkpoint_jobs_panels_and_ui_state(
     assert text_panel["data"]["module_src"].startswith(
         "/api/panels/content/default/notes/notes.js"
     )
+    assert scatter_panel["kind"] == "scatter"
+    assert scatter_panel["layout_key"] == target_layout
+    assert scatter_panel["geometry"] == "euclidean"
+    assert scatter_panel["layout_dimension"] == 2
+    assert scatter_panel["reference_panel_id"] == "label-histogram"
+    assert scatter_panel["direction"] == "right"
+    assert scatter_panel["data"]["module_src"] is None
 
     panel_asset_response = client.get(histogram_panel["data"]["module_src"])
     assert panel_asset_response.status_code == 200
     assert "Label Histogram" in panel_asset_response.text
+
+    remove_scatter_response = client.request(
+        "DELETE",
+        "/api/control/ui/panels",
+        json={
+            "workspace_id": "default",
+            "panel_id": "experiment-b-scatter",
+        },
+    )
+    assert remove_scatter_response.status_code == 200
+
+    after_remove_response = client.get("/api/runtime")
+    assert after_remove_response.status_code == 200
+    remaining_panel_ids = {
+        panel["id"]
+        for panel in after_remove_response.json()["workspace"]["ui"]["custom_panels"]
+    }
+    assert "experiment-b-scatter" not in remaining_panel_ids
+    assert {"label-histogram", "notes"}.issubset(remaining_panel_ids)
 
 
 def test_sample_responses_include_media_url_and_content_endpoint_serves_file(tmp_path: Path) -> None:

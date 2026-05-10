@@ -1,11 +1,25 @@
 ---
 name: hyperview-cli
-description: Use HyperView's control-plane CLI when operating a running HyperView session or setting up a workspace for it. Trigger on tasks involving workspaces, one dataset per workspace, embeddings, layouts, custom providers, runtime jobs, UI layout switching, native module panels, or backend-plus-frontend plugins/extensions from local files.
+description: Use HyperView's control-plane CLI for hyperview serve, dataset create, workspace create, embeddings compute, layouts compute, runtime jobs, ui layout set, ui selection set, ui panel add, extension add, tools run, native module panels, backend tools, and local HyperView plugin workflows.
+license: MIT
+compatibility: Requires Python 3.10+ and the hyperview CLI (`uv tool install hyperview`). Runtime-control commands require a running HyperView server.
+metadata:
+  homepage: https://github.com/Hyper3Labs/HyperView
 ---
 
 # HyperView CLI
 
 Use the `hyperview` CLI as the primary agent interface to HyperView.
+
+## Install the Skill
+
+For users who installed HyperView from a package, install or refresh this agent skill with:
+
+```bash
+uv tool install --upgrade hyperview && hyperview skill install
+```
+
+Re-running `hyperview skill install` replaces old HyperView skill copies. By default this installs into detected agent locations plus the universal `~/.agents/skills/` fallback. Limit targets with repeated `--agent` flags such as `--agent claude-code`, `--agent github-copilot`, `--agent cursor`, or `--agent universal`; use `--all-known` when you explicitly want every known agent profile. Use `--scope project` to write project-local skills such as `.claude/skills/`, `.github/skills/`, `.cursor/skills/`, or `.agents/skills/` depending on the selected agent.
 
 ## When to use it
 
@@ -35,129 +49,24 @@ Use the `hyperview` CLI as the primary agent interface to HyperView.
 - Datasets are created separately from workspaces.
 - The workspace owns the dataset selection.
 - `ui layout set` changes the active layout and the frontend opens the matching built-in scatter panel.
-- Runtime-added panels are native module panels loaded into the host React tree.
+- Runtime-added panels can be typed scatter instances bound to explicit layout keys, or native module panels loaded into the host React tree.
 - Runtime-added panels use the stable `HyperViewPanelSDK` surface on `window`.
 - Plugins are repo-local extension folders with `extension.toml`, optional Python tools, and optional native panel modules.
 - Plugin panels call backend tools through `HyperViewPanelSDK.hooks.useTool()` or `hyperview tools run`.
 - In practice, create datasets and workspaces before starting the runtime for that workspace. The current runtime loads workspace registry state on startup.
 
+Read [references/commands.md](references/commands.md) for command recipes covering datasets, workspaces, providers, embeddings, layouts, runtime UI state, selections, and jobs.
 Read [references/native-panels.md](references/native-panels.md) when the task involves authoring or registering a custom panel.
 Read [references/plugins.md](references/plugins.md) when the task involves backend-plus-frontend plugins/extensions.
-
-## Commands
-
-Create a persisted dataset from Hugging Face:
-
-```bash
-hyperview dataset create cifar10_demo \
-  --hf-dataset uoft-cs/cifar10 \
-  --split train \
-  --image-key img \
-  --label-key label
-```
-
-Create a persisted dataset from a local image directory:
-
-```bash
-hyperview dataset create local_assets_demo \
-  --images-dir assets
-```
-
-Create a workspace with its dataset in one step:
-
-```bash
-hyperview workspace create research \
-  --dataset cifar10_demo \
-  --activate
-```
-
-Change the dataset attached to a workspace:
-
-```bash
-hyperview workspace set-dataset research imagenette_clip_20260411
-```
-
-Start the runtime:
-
-```bash
-hyperview serve --workspace research --dataset cifar10_demo --no-browser
-```
-
-Register a custom provider:
-
-```bash
-hyperview provider register my-provider \
-  --import-path my_pkg.provider:MyProvider
-```
-
-Compute checkpoint-backed embeddings and a layout:
-
-```bash
-hyperview embeddings compute \
-  --workspace research \
-  --dataset cifar10_demo \
-  --provider my-provider \
-  --model-id experiment-a \
-  --checkpoint /path/to/checkpoint.json \
-  --layout euclidean:2d
-```
-
-Add a new layout to an existing embedding space:
-
-```bash
-hyperview layouts compute \
-  --workspace research \
-  --dataset cifar10_demo \
-  --space-key <space-key> \
-  --layout euclidean:3d
-```
-
-Switch the live UI to a layout and selection:
-
-```bash
-hyperview ui layout set --workspace research --layout-key <layout-key>
-hyperview ui selection set --workspace research --ids sample-1,sample-8
-```
-
-When the chosen layout is Euclidean 3D, HyperView opens or focuses the Euclidean 3D scatter panel.
-
-Add a native panel from a local JavaScript module file:
-
-```bash
-hyperview ui panel add \
-  --workspace research \
-  --panel-id label-histogram \
-  --title "Label Histogram" \
-  --position right \
-  --module-file agent-context/panels/label-histogram/index.js
-```
-
-Install a backend-plus-frontend plugin from a local extension folder:
-
-```bash
-hyperview extension add agent-context/extensions/selection-profile \
-  --workspace research \
-  --json
-```
-
-Inspect and run installed plugin tools:
-
-```bash
-hyperview extension list --json
-hyperview tools list --json
-hyperview tools run selection_profile.summarize \
-  --workspace research \
-  --param 'sample_ids=["sample-1","sample-8"]' \
-  --json
-```
 
 ## Agent guidance
 
 - Prefer CLI commands over direct file edits when the goal is to operate a running HyperView session.
 - Treat dataset creation and workspace binding as separate steps when needed: `dataset create ...` creates persisted data, `workspace create --dataset ...` or `workspace set-dataset ...` binds it to a workspace.
 - Prefer `workspace create --dataset ...` over separate create and dataset-attach calls when setting up a new workspace.
-- For custom panels, have the agent write panel modules outside the app source tree, for example under `agent-context/`, and then add them through `hyperview ui panel add --module-file ...`.
-- For plugins, prefer `agent-context/extensions/<plugin-name>/` for explicit local installs or `.hyperview/extensions/<plugin-name>/` when you want `hyperview serve` auto-discovery.
+- For custom module panels, have the agent write panel modules outside the app source tree, for example under `agent-context/`, and then add them through `hyperview ui panel add --module-file ...`.
+- For side-by-side embedding comparisons, add typed scatter panels through `hyperview ui panel add --kind scatter --layout-key ... --reference-panel-id ... --direction right`.
+- For plugins, prefer `.hyperview/extensions/<plugin-name>/` in the project root. `hyperview serve` auto-discovers those folders and attaches them to the launched workspace, so they can live in version control with the dataset/project code.
 - Tools can write files under `ctx.extension_storage` and return `ctx.url_for(path)` for panel-renderable artifact URLs.
 - Keep plugins self-contained: `extension.toml`, `tools.py`, `panel.js` or `panel.jsx`, and any local assets in the same folder.
 - Prefer `--json` output when chaining commands or inspecting results programmatically.
@@ -166,3 +75,14 @@ hyperview tools run selection_profile.summarize \
 - For provider args, use repeated `--provider-arg key=value` flags.
 - Treat the workspace as the durable unit. Changing datasets means setting a new workspace dataset, not switching among many datasets inside one workspace.
 - Prefer native module panels over raw HTML. The panel system no longer relies on iframes.
+- The first `uv run hyperview ...` invocation in a session can take 30+ seconds (torch/datasets imports). Allow generous timeouts and avoid sending SIGINT.
+
+## Inspecting runtime state
+
+The runtime exposes JSON discovery endpoints alongside the CLI. Use them to obtain layout keys, sample IDs, and registered tools/panels for follow-up commands:
+
+- `GET /api/runtime?workspace_id=<ws>` &mdash; full snapshot. Read `workspace.ui.active_layout_key`, `workspace.ui.selected_ids`, `workspace.ui.custom_panels[*].data.module_src`, and registered `extensions`/`tools`.
+- `GET /api/embeddings?workspace_id=<ws>` &mdash; the active or default layout, including `layout_key`, `geometry`, and sample `ids`. Use the returned `layout_key` for `hyperview ui layout set --layout-key ...` and pick from `ids` for `hyperview ui selection set --ids ...`.
+- `GET /api/tools` &mdash; registered tool URIs (also returned by `hyperview tools list --json`).
+
+Layout keys encode geometry and dimension as a substring (e.g. `..._euclidean_umap__2d_...`, `..._hyperbolic_umap__3d_...`). Match on those substrings when filtering by geometry/dimension.

@@ -7,29 +7,13 @@ import json
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from hyperview import Dataset, launch
+from hyperview import Dataset
 from hyperview.api import Session
-from hyperview.core.dataset import parse_visualization_layout
 from hyperview.runtime import HyperViewRuntime, ProviderRegistry, WorkspaceRegistry
-
-
-CONTROL_COMMANDS = {
-    "serve",
-    "status",
-    "dataset",
-    "provider",
-    "workspace",
-    "embeddings",
-    "layouts",
-    "jobs",
-    "ui",
-    "extension",
-    "tools",
-}
 
 
 def _read_json_response(response: Any) -> Any:
@@ -105,177 +89,11 @@ def _print_output(payload: Any, *, as_json: bool) -> None:
     print(payload)
 
 
-def _build_legacy_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="hyperview",
-        description="HyperView - Dataset visualization with hyperbolic embeddings",
-    )
-
-    parser.add_argument("--dataset", type=str, default=None)
-    parser.add_argument("--dataset-json", type=str)
-    parser.add_argument("--hf-dataset", type=str)
-    parser.add_argument("--split", type=str, default=None)
-    parser.add_argument("--hf-config", type=str, default=None)
-    parser.add_argument("--image-key", type=str, default=None)
-    parser.add_argument("--label-key", type=str, default=None)
-    parser.add_argument("--label-names-key", type=str, default=None)
-    parser.add_argument("--images-dir", type=str)
-    parser.add_argument("--label-from-folder", action="store_true")
-    parser.add_argument("--samples", type=int, default=None)
-    parser.add_argument("--hf-streaming", action="store_true")
-    parser.add_argument("--shuffle", action="store_true")
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--hf-shuffle-buffer-size", type=int, default=1000)
-    parser.add_argument("--model", type=str, default=None)
-    parser.add_argument("--method", choices=["umap", "pca"], default="umap")
-    parser.add_argument("--layout", action="append", dest="layouts", metavar="GEOMETRY[:2d|3d]")
-    parser.add_argument("--n-neighbors", type=int, default=15)
-    parser.add_argument("--min-dist", type=float, default=0.1)
-    parser.add_argument("--metric", type=str, default="cosine")
-    parser.add_argument("--force-layout", action="store_true")
-    parser.add_argument("--port", type=int, default=6262)
-    parser.add_argument("--host", type=str, default="127.0.0.1")
-    parser.add_argument("--no-browser", action="store_true")
-    parser.add_argument("--reuse-server", action="store_true")
-    return parser
-
-
-def _validate_legacy_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
-    if args.layouts:
-        canonical_layouts: list[str] = []
-        seen_layouts: set[str] = set()
-        for layout_spec in args.layouts:
-            try:
-                geometry, layout_dimension = parse_visualization_layout(layout_spec)
-            except ValueError as exc:
-                parser.error(str(exc))
-            canonical_layout = f"{geometry}:{layout_dimension}d"
-            if canonical_layout in seen_layouts:
-                continue
-            seen_layouts.add(canonical_layout)
-            canonical_layouts.append(canonical_layout)
-        args.layouts = canonical_layouts
-
-    if args.hf_dataset and args.images_dir:
-        parser.error("Use either --hf-dataset or --images-dir, not both.")
-    if args.dataset_json and (args.hf_dataset or args.images_dir):
-        parser.error("--dataset-json cannot be combined with --hf-dataset or --images-dir.")
-    if args.dataset_json and args.dataset:
-        parser.error("Use either --dataset or --dataset-json, not both.")
-    if not args.dataset and not args.dataset_json:
-        parser.error("Provide --dataset or --dataset-json.")
-    if args.hf_dataset:
-        if not args.split:
-            parser.error("--split is required when using --hf-dataset.")
-        if not args.image_key:
-            parser.error("--image-key is required when using --hf-dataset.")
-        if args.hf_shuffle_buffer_size < 1:
-            parser.error("--hf-shuffle-buffer-size must be at least 1.")
-
-
 def _print_ingestion_result(added: int, skipped: int) -> None:
     if skipped > 0:
         print(f"Loaded {added} samples ({skipped} already present)")
     else:
         print(f"Loaded {added} samples")
-
-
-def _ingest_huggingface(dataset: Dataset, args: argparse.Namespace, dataset_name: str) -> None:
-    added, skipped = dataset.add_from_huggingface(
-        dataset_name,
-        config=args.hf_config,
-        split=args.split,
-        image_key=args.image_key,
-        label_key=args.label_key,
-        label_names_key=args.label_names_key,
-        max_samples=args.samples,
-        shuffle=args.shuffle,
-        seed=args.seed,
-        streaming=args.hf_streaming,
-        shuffle_buffer_size=args.hf_shuffle_buffer_size,
-    )
-    _print_ingestion_result(added, skipped)
-
-
-def _prepare_dataset(args: argparse.Namespace) -> Dataset:
-    if args.dataset_json:
-        dataset = Dataset.load(args.dataset_json)
-        print(f"Loaded {len(dataset)} samples")
-        return dataset
-
-    dataset = Dataset(args.dataset)
-    print(f"Using dataset '{dataset.name}' ({len(dataset)} samples)")
-
-    if args.hf_dataset:
-        _ingest_huggingface(dataset, args, args.hf_dataset)
-    elif args.images_dir:
-        added, skipped = dataset.add_images_dir(
-            args.images_dir,
-            label_from_folder=args.label_from_folder,
-        )
-        _print_ingestion_result(added, skipped)
-
-    return dataset
-
-
-def _resolve_default_layouts(dataset: Dataset, space_key: str | None) -> list[str]:
-    spaces = dataset.list_spaces()
-    selected = next((space for space in spaces if space.space_key == space_key), None)
-    if selected is not None:
-        if selected.geometry == "hyperboloid":
-            return ["poincare:2d"]
-        if selected.geometry == "hypersphere":
-            return ["spherical:3d"]
-        return ["euclidean:2d"]
-    if any(space.geometry not in ("hyperboloid", "hypersphere") for space in spaces):
-        return ["euclidean:2d"]
-    if any(space.geometry == "hypersphere" for space in spaces):
-        return ["spherical:3d"]
-    return ["poincare:2d"]
-
-
-def _compute_layouts(dataset: Dataset, args: argparse.Namespace, space_key: str | None) -> None:
-    target_layouts = args.layouts or _resolve_default_layouts(dataset, space_key)
-    for target_layout in target_layouts:
-        dataset.compute_visualization(
-            space_key=space_key,
-            method=args.method,
-            layout=target_layout,
-            n_neighbors=args.n_neighbors,
-            min_dist=args.min_dist,
-            metric=args.metric,
-            force=args.force_layout,
-        )
-
-
-def _prepare_embeddings_and_layouts(dataset: Dataset, args: argparse.Namespace) -> None:
-    has_spaces = len(dataset.list_spaces()) > 0
-    if args.model is not None:
-        space_key = dataset.compute_embeddings(model=args.model, show_progress=True)
-        _compute_layouts(dataset, args, space_key)
-        return
-    if args.force_layout:
-        if not has_spaces:
-            raise ValueError("No embedding spaces found. Provide --model first.")
-        _compute_layouts(dataset, args, space_key=None)
-        return
-    if not has_spaces:
-        raise ValueError("No embedding spaces found. Provide --model first.")
-
-
-def _run_legacy_cli(argv: list[str] | None = None) -> None:
-    parser = _build_legacy_parser()
-    args = parser.parse_args(argv)
-    _validate_legacy_args(parser, args)
-    dataset = _prepare_dataset(args)
-    _prepare_embeddings_and_layouts(dataset, args)
-    launch(
-        dataset,
-        port=args.port,
-        host=args.host,
-        open_browser=not args.no_browser,
-        reuse_server=args.reuse_server,
-    )
 
 
 def _add_server_flags(parser: argparse.ArgumentParser) -> None:
@@ -488,8 +306,12 @@ def _build_control_parser() -> argparse.ArgumentParser:
     ui_panel_add.add_argument("--workspace", required=True)
     ui_panel_add.add_argument("--panel-id", required=True)
     ui_panel_add.add_argument("--title", required=True)
-    ui_panel_add.add_argument("--module-file", required=True)
+    ui_panel_add.add_argument("--kind", choices=["auto", "module", "scatter"], default="auto")
+    ui_panel_add.add_argument("--module-file")
+    ui_panel_add.add_argument("--layout-key")
     ui_panel_add.add_argument("--position", choices=["center", "right", "bottom"], default="right")
+    ui_panel_add.add_argument("--reference-panel-id")
+    ui_panel_add.add_argument("--direction", choices=["right", "left", "above", "below", "within"])
     _add_json_flag(ui_panel_add)
 
     ui_panel_remove = ui_panel_subparsers.add_parser("remove")
@@ -520,6 +342,27 @@ def _build_control_parser() -> argparse.ArgumentParser:
     _add_server_flags(extension_reload)
     extension_reload.add_argument("name")
     _add_json_flag(extension_reload)
+
+    skill_parser = subparsers.add_parser("skill")
+    skill_subparsers = skill_parser.add_subparsers(dest="skill_command", required=True)
+    skill_install = skill_subparsers.add_parser("install")
+    skill_install.add_argument("--scope", choices=["user", "project"], default="user")
+    skill_install.add_argument(
+        "--agent",
+        action="append",
+        dest="agents",
+        default=None,
+        help="Install for a specific agent (repeatable). Defaults to auto-detected agents.",
+    )
+    skill_install.add_argument(
+        "--all-known",
+        action="store_true",
+        help="Install for every known agent regardless of detection.",
+    )
+    skill_install.add_argument("--destination")
+    skill_install.add_argument("--force", "--yes", action="store_true", dest="force")
+    skill_install.add_argument("--dry-run", action="store_true")
+    _add_json_flag(skill_install)
 
     tools_parser = subparsers.add_parser("tools")
     tools_subparsers = tools_parser.add_subparsers(dest="tools_command", required=True)
@@ -552,7 +395,7 @@ def _run_server_command(args: argparse.Namespace) -> None:
         if workspace.dataset_name:
             dataset_obj = runtime.get_dataset(workspace_id, workspace.dataset_name)
 
-    # Auto-discover extensions from .hyperview/extensions/ in the cwd.
+    # Auto-discover extensions from the nearest .hyperview/extensions/.
     from hyperview.extensions import discover_local_extensions
     for folder in discover_local_extensions():
         try:
@@ -787,15 +630,22 @@ def _run_ui_command(args: argparse.Namespace) -> None:
         _print_output(payload, as_json=args.json)
         return
     if args.ui_command == "panel" and args.ui_panel_command == "add":
-        module_file = str(Path(args.module_file).expanduser().resolve())
+        panel_kind = args.kind
+        if panel_kind == "auto":
+            panel_kind = "scatter" if args.layout_key else "module"
+        module_file = str(Path(args.module_file).expanduser().resolve()) if args.module_file else None
         payload = _http_send_json(
             f"{base_url}/api/control/ui/panels",
             {
                 "workspace_id": args.workspace,
                 "panel_id": args.panel_id,
                 "title": args.title,
+                "kind": panel_kind,
                 "module_file": module_file,
+                "layout_key": args.layout_key,
                 "position": args.position,
+                "reference_panel_id": args.reference_panel_id,
+                "direction": args.direction,
             },
         )
         _print_output(payload, as_json=args.json)
@@ -880,12 +730,30 @@ def _run_tools_command(args: argparse.Namespace) -> None:
     raise RuntimeError(f"Unsupported tools command: {args.tools_command}")
 
 
+def _run_skill_command(args: argparse.Namespace) -> None:
+    if args.skill_command == "install":
+        from hyperview.skill_install import SkillInstallResult, install_skill
+
+        result = install_skill(
+            scope=args.scope,
+            agents=args.agents,
+            all_known=args.all_known,
+            destination=args.destination,
+            force=args.force,
+            dry_run=args.dry_run,
+        )
+        if isinstance(result, list):
+            results = cast(list[SkillInstallResult], result)
+            payload = {"skill_install": [r.to_dict() for r in results]}
+        else:
+            payload = {"skill_install": result.to_dict()}
+        _print_output(payload, as_json=args.json)
+        return
+    raise RuntimeError(f"Unsupported skill command: {args.skill_command}")
+
+
 def main(argv: list[str] | None = None):
     args_list = list(argv if argv is not None else sys.argv[1:])
-    if not args_list or args_list[0] not in CONTROL_COMMANDS:
-        _run_legacy_cli(args_list or None)
-        return
-
     parser = _build_control_parser()
     args = parser.parse_args(args_list)
     if args.command == "serve":
@@ -917,6 +785,9 @@ def main(argv: list[str] | None = None):
         return
     if args.command == "extension":
         _run_extension_command(args)
+        return
+    if args.command == "skill":
+        _run_skill_command(args)
         return
     if args.command == "tools":
         _run_tools_command(args)

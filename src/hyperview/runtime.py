@@ -72,7 +72,7 @@ class ProviderRegistration:
     created_at: int = field(default_factory=_now_ts)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ProviderRegistration":
+    def from_dict(cls, data: dict[str, Any]) -> ProviderRegistration:
         return cls(
             alias=str(data["alias"]),
             kind="python",
@@ -194,17 +194,48 @@ class CustomPanelSpec:
     id: str
     title: str
     module_file: str | None = None
-    kind: Literal["module"] = "module"
+    kind: Literal["module", "scatter"] = "module"
     position: Literal["center", "right", "bottom"] = "right"
+    layout_key: str | None = None
+    geometry: str | None = None
+    layout_dimension: int | None = None
+    reference_panel_id: str | None = None
+    direction: Literal["right", "left", "above", "below", "within"] | None = None
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "CustomPanelSpec":
+    def from_dict(cls, data: dict[str, Any]) -> CustomPanelSpec:
+        kind = str(data.get("kind") or "module")
+        if kind not in {"module", "scatter"}:
+            kind = "module"
+
+        position = str(data.get("position") or "right")
+        if position not in {"center", "right", "bottom"}:
+            position = "right"
+
+        direction = data.get("direction")
+        if direction is not None:
+            direction = str(direction)
+            if direction not in {"right", "left", "above", "below", "within"}:
+                direction = None
+
+        layout_dimension = data.get("layout_dimension")
+        if layout_dimension is not None:
+            try:
+                layout_dimension = int(layout_dimension)
+            except (TypeError, ValueError):
+                layout_dimension = None
+
         return cls(
             id=str(data["id"]),
             title=str(data["title"]),
             module_file=data.get("module_file"),
-            kind="module",
-            position=str(data.get("position") or "right"),
+            kind=kind,  # type: ignore[arg-type]
+            position=position,  # type: ignore[arg-type]
+            layout_key=data.get("layout_key"),
+            geometry=data.get("geometry"),
+            layout_dimension=layout_dimension,
+            reference_panel_id=data.get("reference_panel_id"),
+            direction=direction,  # type: ignore[arg-type]
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -223,11 +254,11 @@ class WorkspaceUiState:
     custom_panels: list[CustomPanelSpec] = field(default_factory=list)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "WorkspaceUiState":
+    def from_dict(cls, data: dict[str, Any]) -> WorkspaceUiState:
         custom_panels: list[CustomPanelSpec] = []
         for entry in list(data.get("custom_panels") or []):
             panel = CustomPanelSpec.from_dict(entry)
-            if panel.module_file:
+            if panel.kind == "scatter" or panel.module_file:
                 custom_panels.append(panel)
 
         return cls(
@@ -252,7 +283,7 @@ class WorkspaceState:
     created_at: int = field(default_factory=_now_ts)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "WorkspaceState":
+    def from_dict(cls, data: dict[str, Any]) -> WorkspaceState:
         return cls(
             id=str(data["id"]),
             dataset_name=data.get("dataset_name"),
@@ -735,15 +766,15 @@ class HyperViewRuntime:
     # Extensions and tools
     # ------------------------------------------------------------------
 
-    def list_extensions(self) -> list["ExtensionInstallation"]:
+    def list_extensions(self) -> list[ExtensionInstallation]:
         with self._lock:
             return [self._extensions[key] for key in sorted(self._extensions)]
 
-    def get_extension(self, name: str) -> "ExtensionInstallation | None":
+    def get_extension(self, name: str) -> ExtensionInstallation | None:
         with self._lock:
             return self._extensions.get(name)
 
-    def install_extension(self, workspace_id: str, folder: Path) -> "ExtensionInstallation":
+    def install_extension(self, workspace_id: str, folder: Path) -> ExtensionInstallation:
         """Load an extension folder and register its tools + panels."""
 
         manifest = ExtensionManifest.load(folder)
@@ -819,11 +850,11 @@ class HyperViewRuntime:
 
                 raise
 
-    def uninstall_extension(self, name: str) -> "ExtensionInstallation | None":
+    def uninstall_extension(self, name: str) -> ExtensionInstallation | None:
         with self._lock:
             return self._uninstall_extension_locked(name)
 
-    def _uninstall_extension_locked(self, name: str) -> "ExtensionInstallation | None":
+    def _uninstall_extension_locked(self, name: str) -> ExtensionInstallation | None:
         installation = self._extensions.pop(name, None)
         if installation is None:
             return None
@@ -846,7 +877,7 @@ class HyperViewRuntime:
         self._bump_version()
         return installation
 
-    def reload_extension(self, name: str) -> "ExtensionInstallation | None":
+    def reload_extension(self, name: str) -> ExtensionInstallation | None:
         with self._lock:
             installation = self._extensions.get(name)
             if installation is None:

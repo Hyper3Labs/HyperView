@@ -14,6 +14,7 @@ from typing import Any, cast
 
 import numpy as np
 from datasets import DownloadConfig, load_dataset
+from datasets.fingerprint import Hasher
 from PIL import Image
 
 from hyperview.core.sample import Sample
@@ -43,16 +44,6 @@ def _format_eta(seconds: float) -> str:
     if not math.isfinite(seconds) or seconds < 0:
         return "unknown"
     return _format_elapsed(seconds)
-
-
-def _fallback_huggingface_fingerprint(
-    dataset_name: str,
-    config_name: str,
-    split: str,
-    version: str | None,
-) -> str:
-    identity = f"{dataset_name}:{config_name}:{split}:{version or 'unknown'}"
-    return hashlib.md5(identity.encode()).hexdigest()
 
 
 def parse_visualization_layout(layout: str) -> tuple[str, int]:
@@ -277,7 +268,10 @@ class Dataset:
             except Exception:
                 ds = cast(Any, load_dataset(dataset_name, name=config, split=split))
 
-        source_fingerprint = ds._fingerprint if hasattr(ds, "_fingerprint") else None
+        source_fingerprint = getattr(ds, "_fingerprint", None)
+        if source_fingerprint is None:
+            source_fingerprint = Hasher.hash(ds)
+        source_fingerprint = str(source_fingerprint)
 
         label_names = None
         if label_key and label_names_key:
@@ -289,13 +283,7 @@ class Dataset:
 
         config_name = getattr(ds.info, "config_name", None) or "default"
         version = str(ds.info.version) if ds.info.version else None
-        fingerprint_source = source_fingerprint or _fallback_huggingface_fingerprint(
-            dataset_name,
-            config_name,
-            split,
-            version,
-        )
-        fingerprint = fingerprint_source[:8]
+        fingerprint = source_fingerprint[:8]
 
         total: int | None
         selected_indices: list[int] | None = None
