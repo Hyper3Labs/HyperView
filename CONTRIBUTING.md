@@ -5,7 +5,7 @@ We welcome contributions! This guide will help you set up your development envir
 ## Development Setup
 
 ### Requirements
-- **Python 3.10+**
+- **Python 3.10-3.13**
 - **uv** (Package manager)
 - **Node.js** (For frontend development)
 

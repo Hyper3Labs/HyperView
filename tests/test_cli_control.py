@@ -506,3 +506,49 @@ def test_cli_skill_install_project_scope_uses_agent_specific_dirs(
     assert (fake_project / ".github" / "skills" / "hyperview-cli" / "SKILL.md").exists()
     assert (fake_project / ".cursor" / "skills" / "hyperview-cli" / "SKILL.md").exists()
     assert (fake_project / ".agents" / "skills" / "hyperview-cli" / "SKILL.md").exists()
+
+
+def test_cli_skill_install_project_scope_skips_when_source_is_destination(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    source = tmp_path / ".agents" / "skills" / "hyperview-cli"
+    references = source / "references"
+    references.mkdir(parents=True)
+    (source / "SKILL.md").write_text("source skill", encoding="utf-8")
+    (references / "commands.md").write_text("source commands", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    from hyperview import skill_install as skill_install_module
+
+    monkeypatch.setattr(skill_install_module, "_resolve_skill_source", lambda: source)
+
+    main(["skill", "install", "--scope", "project", "--agent", "universal", "--json"])
+    payload = json.loads(capsys.readouterr().out)["skill_install"]
+
+    assert payload[0]["action"] == "already-current"
+    assert payload[0]["installed"] is True
+    assert (source / "SKILL.md").read_text(encoding="utf-8") == "source skill"
+
+
+def test_cli_skill_install_refuses_overlapping_destination(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / "source" / "hyperview-cli"
+    (source / "references").mkdir(parents=True)
+    (source / "SKILL.md").write_text("source skill", encoding="utf-8")
+
+    from hyperview import skill_install as skill_install_module
+
+    monkeypatch.setattr(skill_install_module, "_resolve_skill_source", lambda: source)
+
+    with pytest.raises(ValueError, match="source and destination overlap"):
+        main([
+            "skill",
+            "install",
+            "--destination",
+            str(source / "nested"),
+            "--json",
+        ])

@@ -280,6 +280,16 @@ def _replace_destination(destination: Path) -> None:
         destination.unlink()
 
 
+def _source_path(source: Path | resources.abc.Traversable) -> Path | None:
+    if isinstance(source, Path):
+        return source.resolve()
+    return None
+
+
+def _paths_overlap(first: Path, second: Path) -> bool:
+    return first == second or first in second.parents or second in first.parents
+
+
 def _install_one(
     *,
     source: Path | resources.abc.Traversable,
@@ -295,6 +305,26 @@ def _install_one(
         destination=destination,
     )
     exists = resolved_destination.exists()
+    source_path = _source_path(source)
+    destination_path = resolved_destination.resolve(strict=False)
+    source_is_destination = source_path is not None and source_path == destination_path
+
+    if source_path is not None and _paths_overlap(source_path, destination_path):
+        if source_is_destination:
+            action = "would-skip" if dry_run else "already-current"
+            return SkillInstallResult(
+                skill=SKILL_NAME,
+                source=str(source),
+                destination=str(resolved_destination),
+                scope=scope,
+                agent=agent,
+                action=action,
+                installed=not dry_run,
+            )
+        raise ValueError(
+            "Refusing to install because source and destination overlap: "
+            f"{source_path} -> {destination_path}"
+        )
 
     if dry_run:
         action = "would-replace" if exists else "would-install"

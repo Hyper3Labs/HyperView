@@ -2,7 +2,7 @@
 name: hyperview-cli
 description: Use HyperView's control-plane CLI for hyperview serve, dataset create, workspace create, embeddings compute, layouts compute, runtime jobs, ui layout set, ui selection set, ui panel add, extension add, tools run, native module panels, backend tools, and local HyperView plugin workflows.
 license: MIT
-compatibility: Requires Python 3.10+ and the hyperview CLI (`uv tool install hyperview`). Runtime-control commands require a running HyperView server.
+compatibility: Requires Python 3.10-3.13 and the hyperview CLI (`uv tool install --python 3.12 hyperview`). Runtime-control commands require a running HyperView server.
 metadata:
   homepage: https://github.com/Hyper3Labs/HyperView
 ---
@@ -16,10 +16,10 @@ Use the `hyperview` CLI as the primary agent interface to HyperView.
 For users who installed HyperView from a package, install or refresh this agent skill with:
 
 ```bash
-uv tool install --upgrade hyperview && hyperview skill install
+uv tool install --python 3.12 --upgrade hyperview && hyperview skill install
 ```
 
-Re-running `hyperview skill install` replaces old HyperView skill copies. By default this installs into detected agent locations plus the universal `~/.agents/skills/` fallback. Limit targets with repeated `--agent` flags such as `--agent claude-code`, `--agent github-copilot`, `--agent cursor`, or `--agent universal`; use `--all-known` when you explicitly want every known agent profile. Use `--scope project` to write project-local skills such as `.claude/skills/`, `.github/skills/`, `.cursor/skills/`, or `.agents/skills/` depending on the selected agent.
+HyperView currently supports Python 3.10 through 3.13; `--python 3.12` keeps the persistent CLI on a broadly supported runtime. Re-running `hyperview skill install` replaces old HyperView skill copies. By default this installs into detected agent locations plus the universal `~/.agents/skills/` fallback. Limit targets with repeated `--agent` flags such as `--agent claude-code`, `--agent github-copilot`, `--agent cursor`, or `--agent universal`; use `--all-known` when you explicitly want every known agent profile. Use `--scope project` to write project-local skills such as `.claude/skills/`, `.github/skills/`, `.cursor/skills/`, or `.agents/skills/` depending on the selected agent.
 
 ## When to use it
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.2 - 2026-05-11
+
+### Fixes
+- Prevent project-scope skill installs from deleting the repo-local `.agents/skills/hyperview-cli` source directory when source and destination are the same path.
+- Cap supported Python metadata at `<3.14` and document `uv tool install --python 3.12` while upstream ML dependency wheels are unavailable for Python 3.14.
+
 ## 0.4.1 - 2026-05-10
 
 ### Fixes

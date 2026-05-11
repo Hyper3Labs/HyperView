@@ -13,7 +13,7 @@ hyperview skill install
 Refresh installed copies after upgrading HyperView by running install again:
 
 ```bash
-uv tool install --upgrade hyperview && hyperview skill install
+uv tool install --python 3.12 --upgrade hyperview && hyperview skill install
 ```
 
 Limit to specific agent targets:

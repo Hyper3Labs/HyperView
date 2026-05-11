@@ -45,10 +45,10 @@ Install it when a scatterplot is no longer enough: you want a local, extensible 
 Install the HyperView CLI and refresh the agent skill in one copy-paste line:
 
 ```bash
-uv tool install --upgrade hyperview && hyperview skill install
+uv tool install --python 3.12 --upgrade hyperview && hyperview skill install
 ```
 
-Re-running `hyperview skill install` replaces old HyperView skill copies, so the installed agent skill stays in sync with the upgraded CLI. By default this installs into detected agent locations plus the universal `~/.agents/skills/hyperview-cli` fallback. For a project-local Copilot install, run:
+HyperView currently supports Python 3.10 through 3.13; `--python 3.12` keeps the tool install on a widely supported runtime while upstream ML wheels catch up with newer Python releases. Re-running `hyperview skill install` replaces old HyperView skill copies, so the installed agent skill stays in sync with the upgraded CLI. By default this installs into detected agent locations plus the universal `~/.agents/skills/hyperview-cli` fallback. For a project-local Copilot install, run:
 
 ```bash
 hyperview skill install --scope project --agent github-copilot --yes
