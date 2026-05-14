@@ -53,7 +53,7 @@ import {
 const PANEL_CONFIG = CENTER_PANEL_DEFS;
 const VIEW_MENU_PANEL_IDS = PANEL_CONFIG.map((panel) => panel.id);
 const GITHUB_URL = "https://github.com/Hyper3Labs/HyperView";
-const DISCORD_URL = process.env.NEXT_PUBLIC_DISCORD_URL ?? "https://discord.gg/Qf2pXtY4Vf";
+const DISCORD_URL = process.env.NEXT_PUBLIC_DISCORD_URL ?? "https://discord.gg/Za3rBkTPSf";
 
 export function Header() {
   const {

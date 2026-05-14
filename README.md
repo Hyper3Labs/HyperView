@@ -155,7 +155,7 @@ Traditional Euclidean embeddings struggle with hierarchical data. In Euclidean s
 
 ## Community
 
-**Weekly Open Discussion** — Every Tuesday at 15:00 UTC on [Discord](https://discord.gg/Az7k4Ure?event=1469730571440885944)
+**Weekly Open Discussion** — Every Tuesday at 15:00 UTC on [Discord](https://discord.gg/Za3rBkTPSf)
 
 Join us to see the latest features demoed live, walk through new code, and get help with local setup. Whether you're a core maintainer or looking for your first contribution, everyone is welcome.
 
