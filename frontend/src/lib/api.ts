@@ -250,6 +250,27 @@ export interface OrbitView3DRequest {
   ortho_scale: number;
 }
 
+export async function setLayoutView(args: {
+  workspaceId: string;
+  layoutKey: string;
+  camera3d?: OrbitView3DRequest | null;
+}): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/control/ui/layout-view`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      workspace_id: args.workspaceId,
+      layout_key: args.layoutKey,
+      camera_3d: args.camera3d ?? null,
+    }),
+  });
+  if (!res.ok) {
+    await throwApiError(res, "Failed to persist layout view");
+  }
+}
+
 export async function fetchLassoSelection(args: {
   layoutKey: string;
   polygon: ArrayLike<number>;

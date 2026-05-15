@@ -236,6 +236,26 @@ def _project_points_3d_to_screen(
     return screen_x, screen_y, depth, pixel_index
 
 
+def build_mvp_for_orbit(
+    view: OrbitViewState3D,
+    coords: np.ndarray,
+    viewport_width: int,
+    viewport_height: int,
+) -> np.ndarray:
+    """Build an orbit-camera MVP matrix matching the 3D scatter renderer."""
+    return _build_mvp_for_orbit(view, coords, viewport_width, viewport_height)
+
+
+def project_points_3d_to_screen(
+    mvp: np.ndarray,
+    coords: np.ndarray,
+    width: int,
+    height: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Project 3D points to screen coordinates using scatter renderer math."""
+    return _project_points_3d_to_screen(mvp, coords, width, height)
+
+
 def select_ids_for_3d_lasso(
     *,
     ids: list[str],

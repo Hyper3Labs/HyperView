@@ -2,6 +2,7 @@
 
 import { AlertCircle, Loader2 } from "lucide-react";
 
+import { getDistanceMetricLabel } from "@/lib/similarity";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/store/useStore";
 import type { Sample } from "@/types";
@@ -12,6 +13,7 @@ import { SampleTile } from "./SampleTile";
 interface SampleDerivedSpaceProps {
   selectionSamples: Sample[];
   neighborSamples: Sample[];
+  neighborsMetric: string | null;
   neighborsLoading: boolean;
   hasMoreNeighbors: boolean;
   loadMoreNeighbors?: () => void;
@@ -35,6 +37,7 @@ function getAnchorTileWidth(sample: Sample): number {
 export function SampleDerivedSpace({
   selectionSamples,
   neighborSamples,
+  neighborsMetric,
   neighborsLoading,
   hasMoreNeighbors,
   loadMoreNeighbors,
@@ -45,6 +48,7 @@ export function SampleDerivedSpace({
 
   const showNeighbors =
     neighborSamples.length > 0 || neighborsLoading || neighborsError !== null;
+  const distanceMetricLabel = getDistanceMetricLabel(neighborsMetric);
 
   return (
     <div className="flex flex-1 min-h-0 flex-col">
@@ -75,7 +79,7 @@ export function SampleDerivedSpace({
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="h-6 min-h-[24px] border-y border-border bg-secondary/20 px-2 flex items-center">
             <span className="text-[11px] leading-4 text-muted-foreground">
-              Nearest neighbors
+              Nearest neighbors{distanceMetricLabel ? ` · ${distanceMetricLabel}` : ""}
             </span>
           </div>
           <div className="flex min-h-0 flex-1 w-full overflow-hidden">
@@ -87,6 +91,7 @@ export function SampleDerivedSpace({
                 scrollResetKey={neighborsScrollResetKey}
                 className="w-full"
                 showRankSimilarityBadge
+                distanceMetric={neighborsMetric}
               />
             ) : neighborsLoading ? (
               <div className="flex flex-1 items-center justify-center text-muted-foreground">

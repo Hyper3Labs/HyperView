@@ -23,6 +23,7 @@ function createClearedLassoState() {
 function createClearedNeighborsState() {
   return {
     neighborsResults: [] as SimilarSample[],
+    neighborsMetric: null as string | null,
     neighborsLoading: false,
     neighborsError: null,
   };
@@ -89,6 +90,8 @@ interface AppState {
   runtimeDatasetName: string | null;
   customPanels: RuntimePanel[];
   requestedLayoutKey: string | null;
+  layoutViews: Record<string, { camera_3d: OrbitView3DPayload | null }>;
+  setLayoutViewCamera: (layoutKey: string, camera3d: OrbitView3DPayload | null) => void;
   applyRuntimeSnapshot: (snapshot: RuntimeSnapshot) => void;
 
   // Samples
@@ -132,10 +135,11 @@ interface AppState {
 
   // Neighbors / KNN state
   neighborsResults: SimilarSample[];
+  neighborsMetric: string | null;
   neighborsLoading: boolean;
   neighborsError: string | null;
   beginNeighborsQuery: (resetResults?: boolean) => void;
-  setNeighborsResults: (samples: SimilarSample[]) => void;
+  setNeighborsResults: (samples: SimilarSample[], metric: string | null) => void;
   setNeighborsError: (error: string) => void;
   clearNeighbors: () => void;
 
@@ -177,6 +181,17 @@ export const useStore = create<AppState>((set) => ({
   runtimeDatasetName: null,
   customPanels: [],
   requestedLayoutKey: null,
+  layoutViews: {},
+  setLayoutViewCamera: (layoutKey, camera3d) =>
+    set((state) => ({
+      layoutViews: {
+        ...state.layoutViews,
+        [layoutKey]: {
+          ...(state.layoutViews[layoutKey] ?? {}),
+          camera_3d: camera3d,
+        },
+      },
+    })),
   applyRuntimeSnapshot: (snapshot) =>
     set((state) => {
       const nextWorkspaceId = snapshot.active_workspace_id;
@@ -191,6 +206,7 @@ export const useStore = create<AppState>((set) => ({
         runtimeDatasetName: nextDatasetName,
         customPanels: snapshot.workspace.ui.custom_panels,
         requestedLayoutKey: snapshot.workspace.ui.active_layout_key,
+        layoutViews: snapshot.workspace.ui.layout_views ?? {},
         selectedIds: new Set(snapshot.workspace.ui.selected_ids),
         selectionSource:
           snapshot.workspace.ui.selected_ids.length > 0 ? "scatter" : null,
@@ -342,12 +358,14 @@ export const useStore = create<AppState>((set) => ({
   beginNeighborsQuery: (resetResults = true) =>
     set((state) => ({
       neighborsResults: resetResults ? [] : state.neighborsResults,
+      neighborsMetric: resetResults ? null : state.neighborsMetric,
       neighborsLoading: true,
       neighborsError: null,
     })),
-  setNeighborsResults: (samples) =>
+  setNeighborsResults: (samples, metric) =>
     set({
       neighborsResults: samples,
+      neighborsMetric: metric,
       neighborsLoading: false,
       neighborsError: null,
     }),

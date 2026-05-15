@@ -93,6 +93,15 @@ interface UseHyperScatterArgs {
   labelsInfo: ScatterLabelsInfo | null;
   labelFilter: string | null;
   semanticLabelDisplayMode: "off" | SemanticLabelDisplayMode;
+  initialView3d?: {
+    yaw: number;
+    pitch: number;
+    distance: number;
+    target_x: number;
+    target_y: number;
+    target_z: number;
+    ortho_scale: number;
+  } | null;
   selectedIds: Set<string>;
   highlightedIds?: Set<string>;
   hoveredId: string | null;
@@ -114,6 +123,15 @@ interface UseHyperScatterArgs {
     viewportHeight: number | null;
   }) => void;
   setHoveredId: (id: string | null) => void;
+  onView3DChange?: (view: {
+    yaw: number;
+    pitch: number;
+    distance: number;
+    target_x: number;
+    target_y: number;
+    target_z: number;
+    ortho_scale: number;
+  }) => void;
 }
 
 function resolveLayoutDimension(embeddings: EmbeddingsData): 2 | 3 {
@@ -155,6 +173,19 @@ function toServerView3D(view: OrbitViewState3D): {
   };
 }
 
+function fromServerView3D(view: NonNullable<UseHyperScatterArgs["initialView3d"]>): OrbitViewState3D {
+  return {
+    type: "orbit3d",
+    yaw: view.yaw,
+    pitch: view.pitch,
+    distance: view.distance,
+    targetX: view.target_x,
+    targetY: view.target_y,
+    targetZ: view.target_z,
+    orthoScale: view.ortho_scale,
+  };
+}
+
 function clearOverlay(canvas: HTMLCanvasElement | null): void {
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
@@ -168,12 +199,14 @@ export function useHyperScatter({
   labelsInfo,
   labelFilter,
   semanticLabelDisplayMode,
+  initialView3d = null,
   selectedIds,
   highlightedIds,
   hoveredId,
   setSelectedIds,
   beginLassoSelection,
   setHoveredId,
+  onView3DChange,
 }: UseHyperScatterArgs) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -184,6 +217,9 @@ export function useHyperScatter({
   const [rendererError, setRendererError] = useState<string | null>(null);
 
   const rafPendingRef = useRef(false);
+  const viewChangeTimeoutRef = useRef<number | null>(null);
+  const initialView3dRef = useRef(initialView3d);
+  initialView3dRef.current = initialView3d;
 
   // Interaction state (refs to avoid rerender churn)
   const isPanningRef = useRef(false);
@@ -294,6 +330,33 @@ export function useHyperScatter({
     });
   }, [redrawOverlay]);
 
+  const emitView3DChange = useCallback(() => {
+    if (layoutDimension !== 3 || !onView3DChange) return;
+    const renderer = rendererRef.current;
+    if (!renderer) return;
+    onView3DChange(toServerView3D((renderer as Renderer3D).getView()));
+  }, [layoutDimension, onView3DChange]);
+
+  const queueView3DChange = useCallback(() => {
+    if (layoutDimension !== 3 || !onView3DChange) return;
+    if (viewChangeTimeoutRef.current !== null) {
+      window.clearTimeout(viewChangeTimeoutRef.current);
+    }
+    viewChangeTimeoutRef.current = window.setTimeout(() => {
+      viewChangeTimeoutRef.current = null;
+      emitView3DChange();
+    }, 180);
+  }, [emitView3DChange, layoutDimension, onView3DChange]);
+
+  useEffect(() => {
+    return () => {
+      if (viewChangeTimeoutRef.current !== null) {
+        window.clearTimeout(viewChangeTimeoutRef.current);
+        viewChangeTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
 
   const getCanvasPos = useCallback((e: { clientX: number; clientY: number }) => {
     const canvas = canvasRef.current;
@@ -400,6 +463,9 @@ export function useHyperScatter({
             sphereGuideColor: "#94a3b8",
             sphereGuideOpacity: 0.2,
           });
+          if (initialView3dRef.current) {
+            (renderer as Renderer3D).setView(fromServerView3D(initialView3dRef.current));
+          }
         } else {
           const positions = new Float32Array(coords.length * 2);
           for (let i = 0; i < coords.length; i++) {
@@ -571,11 +637,12 @@ export function useHyperScatter({
       const delta = -e.deltaY / 100;
       renderer.zoom(pos.x, pos.y, delta, toModifiers(e));
       requestRender();
+      queueView3DChange();
     };
 
     canvas.addEventListener("wheel", onWheel, { passive: false });
     return () => canvas.removeEventListener("wheel", onWheel);
-  }, [getCanvasPos, requestRender]);
+  }, [getCanvasPos, queueView3DChange, requestRender]);
 
   // Pointer interactions
   const handlePointerDown = useCallback(
@@ -684,6 +751,7 @@ export function useHyperScatter({
   const handlePointerUp = useCallback(
     async (e: React.PointerEvent<HTMLCanvasElement>) => {
       const renderer = rendererRef.current;
+      const wasPanning = isPanningRef.current;
       if (!renderer || !embeddings) {
         stopInteraction();
         return;
@@ -810,6 +878,9 @@ export function useHyperScatter({
       }
 
       stopInteraction();
+      if (wasPanning) {
+        emitView3DChange();
+      }
       requestRender();
     },
     [
@@ -822,6 +893,7 @@ export function useHyperScatter({
       stopInteraction,
       layoutDimension,
       labelFilter,
+      emitView3DChange,
     ]
   );
 

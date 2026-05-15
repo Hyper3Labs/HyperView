@@ -6,11 +6,40 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
+from hyperview import Dataset
 from hyperview.cli import main
+from hyperview.core.sample import Sample
+from hyperview.figures import FigureExportResult, FigureRenderOptions
+from hyperview.runtime import LayoutViewState, WorkspaceState
 
 
 class LocalProviderFixture:
     pass
+
+
+class FigureRuntimeFixture:
+    def __init__(self, dataset: Dataset):
+        self.dataset = dataset
+        self.workspace = WorkspaceState(id="default", dataset_name=dataset.name)
+        self.workspace.ui.active_layout_key = dataset.list_layouts()[0].layout_key
+        self.workspace.ui.selected_ids = ["sample-a"]
+        self.workspace.ui.layout_views[self.workspace.ui.active_layout_key] = LayoutViewState(
+            camera_3d={
+                "yaw": 0.9,
+                "pitch": 0.4,
+                "distance": 3.2,
+                "target_x": 0.0,
+                "target_y": 0.0,
+                "target_z": 0.0,
+                "ortho_scale": 1.45,
+            }
+        )
+
+    def get_workspace(self, workspace_id: str | None = None) -> WorkspaceState:
+        return self.workspace
+
+    def get_dataset(self, workspace_id: str | None = None, dataset_name: str | None = None) -> Dataset:
+        return self.dataset
 
 
 def test_cli_rejects_legacy_top_level_flags(capsys) -> None:
@@ -123,6 +152,71 @@ def test_cli_embeddings_compute_posts_runtime_job(monkeypatch, capsys) -> None:
         "min_dist": 0.1,
         "metric": "cosine",
     }
+
+
+def test_cli_figure_export_uses_active_workspace_layout(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    dataset = Dataset("figure_cli", persist=False)
+    dataset.add_sample(Sample(id="sample-a", filepath="/virtual/a.png", label="cat"))
+    layout_key = dataset.set_coords("spherical", ["sample-a"], [[1.0, 0.0, 0.0]])
+    output = tmp_path / "figure.png"
+    recorded: dict[str, object] = {}
+
+    def fake_runtime() -> FigureRuntimeFixture:
+        return FigureRuntimeFixture(dataset)
+
+    def fake_render_layout_figure(**kwargs: object) -> FigureExportResult:
+        recorded.update(kwargs)
+        return FigureExportResult(
+            output_path=output,
+            layout_key=str(kwargs["layout_key"]),
+            geometry="spherical",
+            width=2400,
+            height=1800,
+            num_points=1,
+        )
+
+    monkeypatch.setattr("hyperview.cli.HyperViewRuntime", fake_runtime)
+    monkeypatch.setattr("hyperview.cli.render_layout_figure", fake_render_layout_figure)
+
+    main(["figure", "export", str(output), "--json"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["figure"]["layout_key"] == layout_key
+    assert recorded["dataset"] is dataset
+    assert recorded["layout_key"] == layout_key
+    assert recorded["output_path"] == str(output)
+    assert recorded["view"] is not None
+    options = recorded["options"]
+    assert isinstance(options, FigureRenderOptions)
+    assert options.theme == "light"
+    assert options.point_radius == 4.0
+    assert options.guide_style == "paper"
+    assert options.legend == "auto"
+    assert options.selected_ids == set()
+
+
+def test_cli_figure_export_reports_validation_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    dataset = Dataset("figure_cli_error", persist=False)
+    dataset.add_sample(Sample(id="sample-a", filepath="/virtual/a.png", label="cat"))
+    dataset.set_coords("euclidean", ["sample-a"], [[0.0, 0.0]])
+    output = tmp_path / "figure.png"
+
+    def fake_runtime() -> FigureRuntimeFixture:
+        return FigureRuntimeFixture(dataset)
+
+    monkeypatch.setattr("hyperview.cli.HyperViewRuntime", fake_runtime)
+
+    with pytest.raises(SystemExit) as exc_info:
+        main(["figure", "export", str(output), "--layout", "precomputed_2d__euclidean_precomputed__2d"])
+
+    assert "3D layouts only" in str(exc_info.value)
 
 
 def test_cli_panel_add_posts_native_panel_module_file(

@@ -28,6 +28,7 @@ import {
   fetchDataset,
   fetchEmbeddings,
   isLayoutNotFoundError,
+  setLayoutView,
 } from "@/lib/api";
 
 interface ScatterPanelProps {
@@ -61,6 +62,9 @@ export function ScatterPanel({
     requestedLayoutKey,
     scatterLabelOverlayMode,
     setScatterLabelOverlayMode,
+    activeWorkspaceId,
+    layoutViews,
+    setLayoutViewCamera,
   } = useStore();
 
   const highlightedIds = useMemo(() => {
@@ -321,6 +325,24 @@ export function ScatterPanel({
   );
 
   const embeddings = resolvedLayoutKey ? embeddingsByLayoutKey[resolvedLayoutKey] ?? null : null;
+  const savedView3d = resolvedLayoutKey
+    ? (layoutViews[resolvedLayoutKey]?.camera_3d ?? null)
+    : null;
+
+  const handleView3DChange = useCallback(
+    (view: NonNullable<typeof savedView3d>) => {
+      if (!activeWorkspaceId || !resolvedLayoutKey) return;
+      setLayoutViewCamera(resolvedLayoutKey, view);
+      void setLayoutView({
+        workspaceId: activeWorkspaceId,
+        layoutKey: resolvedLayoutKey,
+        camera3d: view,
+      }).catch((err) => {
+        console.error("Failed to persist 3D scatter view:", err);
+      });
+    },
+    [activeWorkspaceId, resolvedLayoutKey, setLayoutViewCamera]
+  );
 
   useEffect(() => {
     if (!resolvedLayoutKey) return;
@@ -392,12 +414,14 @@ export function ScatterPanel({
     labelsInfo,
     labelFilter,
     semanticLabelDisplayMode: scatterLabelOverlayMode,
+    initialView3d: savedView3d,
     selectedIds,
     highlightedIds,
     hoveredId,
     setSelectedIds,
     beginLassoSelection,
     setHoveredId,
+    onView3DChange: handleView3DChange,
   });
 
   const focusLayout = useCallback(() => {

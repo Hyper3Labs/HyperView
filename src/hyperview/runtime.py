@@ -248,10 +248,48 @@ class CustomPanelSpec:
 
 
 @dataclass
+class LayoutViewState:
+    camera_3d: dict[str, float] | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> LayoutViewState:
+        camera_raw = data.get("camera_3d")
+        camera_3d: dict[str, float] | None = None
+        if isinstance(camera_raw, dict):
+            parsed: dict[str, float] = {}
+            required_keys = (
+                "yaw",
+                "pitch",
+                "distance",
+                "target_x",
+                "target_y",
+                "target_z",
+                "ortho_scale",
+            )
+            for key in required_keys:
+                value = camera_raw.get(key)
+                if value is None:
+                    parsed = {}
+                    break
+                try:
+                    parsed[key] = float(value)
+                except (TypeError, ValueError):
+                    parsed = {}
+                    break
+            if len(parsed) == len(required_keys):
+                camera_3d = parsed
+        return cls(camera_3d=camera_3d)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"camera_3d": dict(self.camera_3d) if self.camera_3d is not None else None}
+
+
+@dataclass
 class WorkspaceUiState:
     active_layout_key: str | None = None
     selected_ids: list[str] = field(default_factory=list)
     custom_panels: list[CustomPanelSpec] = field(default_factory=list)
+    layout_views: dict[str, LayoutViewState] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> WorkspaceUiState:
@@ -261,10 +299,18 @@ class WorkspaceUiState:
             if panel.kind == "scatter" or panel.module_file:
                 custom_panels.append(panel)
 
+        layout_views: dict[str, LayoutViewState] = {}
+        raw_layout_views = data.get("layout_views") or {}
+        if isinstance(raw_layout_views, dict):
+            for layout_key, view_data in raw_layout_views.items():
+                if isinstance(layout_key, str) and isinstance(view_data, dict):
+                    layout_views[layout_key] = LayoutViewState.from_dict(view_data)
+
         return cls(
             active_layout_key=data.get("active_layout_key"),
             selected_ids=list(data.get("selected_ids") or []),
             custom_panels=custom_panels,
+            layout_views=layout_views,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -272,6 +318,10 @@ class WorkspaceUiState:
             "active_layout_key": self.active_layout_key,
             "selected_ids": list(self.selected_ids),
             "custom_panels": [panel.to_dict() for panel in self.custom_panels],
+            "layout_views": {
+                layout_key: view.to_dict()
+                for layout_key, view in sorted(self.layout_views.items())
+            },
         }
 
 
@@ -511,6 +561,7 @@ class HyperViewRuntime:
             if previous_dataset_name != dataset_name:
                 workspace.ui.active_layout_key = None
                 workspace.ui.selected_ids = []
+                workspace.ui.layout_views = {}
                 self.workspace_registry.update_workspace(workspace)
             self._bump_version()
             return workspace
@@ -552,6 +603,23 @@ class HyperViewRuntime:
             workspace.ui.selected_ids = list(dict.fromkeys(sample_ids))
             self.workspace_registry.update_workspace(workspace)
             self._bump_version()
+            return workspace
+
+    def set_layout_view(
+        self,
+        workspace_id: str,
+        layout_key: str,
+        view: LayoutViewState,
+    ) -> WorkspaceState:
+        with self._lock:
+            workspace = self.get_workspace(workspace_id)
+            current = workspace.ui.layout_views.get(layout_key)
+            if current is not None and current.to_dict() == view.to_dict():
+                return workspace
+            workspace.ui.layout_views[layout_key] = view
+            self.workspace_registry.update_workspace(workspace)
+            # Camera saves are high-frequency local UI state; avoid forcing
+            # runtime snapshots that can overwrite in-progress selection state.
             return workspace
 
     def add_custom_panel(self, workspace_id: str, panel: CustomPanelSpec) -> WorkspaceState:
@@ -955,6 +1023,10 @@ class HyperViewRuntime:
                 "ui": {
                     "active_layout_key": workspace.ui.active_layout_key,
                     "selected_ids": list(workspace.ui.selected_ids),
+                    "layout_views": {
+                        layout_key: view.to_dict()
+                        for layout_key, view in sorted(workspace.ui.layout_views.items())
+                    },
                     "custom_panels": [
                         {
                             **panel.to_dict(),

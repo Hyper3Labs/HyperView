@@ -102,6 +102,20 @@ export interface RuntimeWorkspaceState {
   ui: {
     active_layout_key: string | null;
     selected_ids: string[];
+    layout_views: Record<
+      string,
+      {
+        camera_3d: {
+          yaw: number;
+          pitch: number;
+          distance: number;
+          target_x: number;
+          target_y: number;
+          target_z: number;
+          ortho_scale: number;
+        } | null;
+      }
+    >;
     custom_panels: RuntimePanel[];
   };
 }

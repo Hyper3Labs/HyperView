@@ -131,6 +131,63 @@ hyperview jobs list --json
 hyperview jobs inspect <job-id> --json
 ```
 
+## Paper Figures
+
+Export a browserless, paper-ready PNG from the active 3D layout:
+
+```bash
+hyperview figure export figures/embedding-sphere.png \
+  --workspace research \
+  --layout active \
+  --json
+```
+
+If `--layout` is omitted, HyperView uses the active 3D layout when one is set, otherwise the first available 3D layout. Use `--layout active` when you specifically want the live UI's active layout and want the command to fail if none is active.
+
+The export path is pure Python and does not require Playwright, browser bundling, Node, or a running frontend. It supports 3D layouts only; 2D layouts are rejected with a validation message.
+
+Paper defaults are tuned for academic figures:
+
+- `--width 900 --height 900 --scale 2`
+- `--theme light`
+- `--guide-style paper`
+- `--legend auto` (direct labels for small label sets)
+- opaque PNG output
+- selection rings hidden unless explicitly requested
+
+Use the 3D view selected in the UI by rotating the scatter panel first. HyperView persists the layout camera and `figure export` reuses it for that layout.
+
+Common variants:
+
+```bash
+# Cleanest sphere context: silhouette only.
+hyperview figure export figures/embedding-outline.png \
+  --workspace research \
+  --layout active \
+  --guide-style outline
+
+# No sphere guide, useful when the embedding separation is the whole message.
+hyperview figure export figures/embedding-clean.png \
+  --workspace research \
+  --layout active \
+  --guide-style none \
+  --legend direct
+
+# Browser-like guide rings and current selection markers.
+hyperview figure export figures/embedding-ui-like.png \
+  --workspace research \
+  --layout active \
+  --guide-style rings \
+  --legend on \
+  --show-selection
+
+# Add a short panel title when the figure will stand alone.
+hyperview figure export figures/embedding-panel-a.png \
+  --workspace research \
+  --layout active \
+  --title "ArcFace spherical embeddings"
+```
+
 ## Runtime UI
 
 Discover an existing layout key and sample IDs before mutating runtime state:

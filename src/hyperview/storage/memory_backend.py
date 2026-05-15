@@ -7,6 +7,11 @@ import numpy as np
 
 from hyperview.core.sample import Sample
 from hyperview.storage.backend import StorageBackend
+from hyperview.storage.metrics import (
+    curvature_for_space,
+    distance_metric_for_space,
+    pairwise_embedding_distances,
+)
 from hyperview.storage.schema import (
     LayoutInfo,
     SpaceInfo,
@@ -286,21 +291,31 @@ class MemoryBackend(StorageBackend):
             space_key = next(iter(self._spaces))
 
         emb_store = self._embeddings.get(space_key, {})
-        query = np.array(vector, dtype=np.float32)
-        norm_query = np.linalg.norm(query)
+        space = self.get_space(space_key)
+        if space is None:
+            raise ValueError(f"Space not found: {space_key}")
 
-        distances: list[tuple[Sample, float]] = []
+        entries: list[tuple[Sample, np.ndarray]] = []
         for id_, vec in emb_store.items():
             sample = self._samples.get(id_)
             if sample is None:
                 continue
-            norm_vec = np.linalg.norm(vec)
-            if norm_query == 0 or norm_vec == 0:
-                distance = 1.0
-            else:
-                distance = 1 - np.dot(query, vec) / (norm_query * norm_vec)
-            distances.append((sample, float(distance)))
+            entries.append((sample, vec))
 
+        if not entries:
+            return []
+
+        metric = distance_metric_for_space(space)
+        curvature = curvature_for_space(space) if metric == "hyperboloid" else 1.0
+        distances_array = pairwise_embedding_distances(
+            vector,
+            np.vstack([vec for _, vec in entries]),
+            metric=metric,
+            curvature=curvature,
+        )
+        distances = [
+            (sample, float(distance)) for (sample, _), distance in zip(entries, distances_array)
+        ]
         distances.sort(key=lambda x: x[1])
         return distances[:k]
 

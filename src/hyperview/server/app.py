@@ -20,7 +20,8 @@ from hyperview.core.selection import (
     points_in_polygon,
     select_ids_for_3d_lasso,
 )
-from hyperview.runtime import CustomPanelSpec, HyperViewRuntime
+from hyperview.runtime import CustomPanelSpec, HyperViewRuntime, LayoutViewState
+from hyperview.storage.metrics import distance_metric_for_space
 from hyperview.storage.schema import parse_layout_dimension
 
 # Extensions whose content is handed off to esbuild for JSX transformation.
@@ -82,6 +83,12 @@ class UiLayoutRequest(BaseModel):
 class UiSelectionRequest(BaseModel):
     workspace_id: str
     sample_ids: list[str]
+
+
+class UiLayoutViewRequest(BaseModel):
+    workspace_id: str
+    layout_key: str
+    camera_3d: OrbitViewState3D | None = None
 
 
 class UiPanelRequest(BaseModel):
@@ -500,6 +507,20 @@ def create_app(
         workspace = runtime_dep.set_selection(request.workspace_id, request.sample_ids)
         return {"workspace": workspace.to_dict()}
 
+    @app.post("/api/control/ui/layout-view")
+    async def set_ui_layout_view_endpoint(
+        request: UiLayoutViewRequest,
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+    ):
+        workspace = runtime_dep.set_layout_view(
+            request.workspace_id,
+            request.layout_key,
+            LayoutViewState(
+                camera_3d=request.camera_3d.model_dump() if request.camera_3d is not None else None
+            ),
+        )
+        return {"workspace": workspace.to_dict()}
+
     @app.post("/api/control/ui/panels")
     async def add_ui_panel_endpoint(
         request: UiPanelRequest,
@@ -907,11 +928,13 @@ def create_app(
     ):
         """Return k nearest neighbors for a given sample."""
         resolved_space_key = space_key
+        spaces = ds.list_spaces()
         if resolved_space_key is None:
-            spaces = ds.list_spaces()
             if not spaces:
                 raise HTTPException(status_code=400, detail="No embedding spaces available")
             resolved_space_key = spaces[0].space_key
+        space = next((s for s in spaces if s.space_key == resolved_space_key), None)
+        metric = distance_metric_for_space(space) if space is not None else "cosine"
 
         try:
             query_sample = ds[sample_id]
@@ -936,7 +959,7 @@ def create_app(
             query_id=sample_id,
             query_sample=SampleResponse(**serialize_sample_for_response(query_sample)),
             space_key=resolved_space_key,
-            metric="cosine",
+            metric=metric,
             k=k,
             results=results,
         )

@@ -10,6 +10,12 @@ import pyarrow as pa
 from hyperview.core.sample import Sample
 from hyperview.storage.backend import StorageBackend
 from hyperview.storage.config import StorageConfig
+from hyperview.storage.metrics import (
+    curvature_for_space,
+    distance_metric_for_space,
+    hyperboloid_dot_query,
+    pairwise_embedding_distances,
+)
 from hyperview.storage.schema import (
     LayoutInfo,
     SpaceInfo,
@@ -35,6 +41,30 @@ def _sql_float(value: float) -> str:
     if not np.isfinite(value):
         raise ValueError("Expected finite float for SQL predicate")
     return format(float(value), ".17g")
+
+
+def _replace_hyperboloid_distances(
+    rows: list[dict],
+    query: list[float] | np.ndarray,
+    curvature: float,
+) -> list[dict]:
+    if not rows:
+        return []
+
+    vectors = np.asarray([row["vector"] for row in rows], dtype=np.float32)
+    distances = pairwise_embedding_distances(
+        query,
+        vectors,
+        metric="hyperboloid",
+        curvature=curvature,
+    )
+    out: list[dict] = []
+    for row, distance in zip(rows, distances, strict=False):
+        updated = dict(row)
+        updated["_distance"] = float(distance)
+        out.append(updated)
+    out.sort(key=lambda row: row["_distance"])
+    return out
 
 
 class LanceDBBackend(StorageBackend):
@@ -547,17 +577,54 @@ class LanceDBBackend(StorageBackend):
                 raise ValueError("No embedding spaces available")
             space_key = spaces[0].space_key
 
+        space = self.get_space(space_key)
+        if space is None:
+            raise ValueError(f"Space not found: {space_key}")
+
         emb_table_name = f"embeddings__{space_key}"
         if emb_table_name not in self._table_names():
             return []
 
-        results = self._db.open_table(emb_table_name).search(vector, vector_column_name="vector").metric("cosine").limit(k).to_list()
+        emb_table = self._db.open_table(emb_table_name)
+        metric = distance_metric_for_space(space)
+        if metric == "hyperboloid":
+            results = self._native_hyperboloid_search(
+                emb_table,
+                vector,
+                k=k,
+                curvature=curvature_for_space(space),
+            )
+        else:
+            results = (
+                emb_table.search(vector, vector_column_name="vector")
+                .metric("cosine")
+                .limit(k)
+                .to_list()
+            )
         samples_by_id = {s.id: s for s in self.get_samples_by_ids([r["id"] for r in results])}
 
         return [
             (samples_by_id[r["id"]], 0.0 if math.isnan(d := r.get("_distance", 0.0)) else float(d))
-            for r in results if r["id"] in samples_by_id
+            for r in results
+            if r["id"] in samples_by_id
         ]
+
+    def _native_hyperboloid_search(
+        self,
+        emb_table: lancedb.table.Table,
+        vector: list[float] | np.ndarray,
+        *,
+        k: int,
+        curvature: float,
+    ) -> list[dict]:
+        rows = (
+            emb_table.search(hyperboloid_dot_query(vector), vector_column_name="vector")
+            .metric("dot")
+            .bypass_vector_index()
+            .limit(k)
+            .to_list()
+        )
+        return _replace_hyperboloid_distances(rows, vector, curvature)
 
     def close(self) -> None:
         return

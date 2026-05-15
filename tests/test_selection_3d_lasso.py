@@ -4,8 +4,8 @@ import numpy as np
 
 from hyperview.core.selection import (
     OrbitViewState3D,
-    _build_mvp_for_orbit,
-    _project_points_3d_to_screen,
+    build_mvp_for_orbit,
+    project_points_3d_to_screen,
     select_ids_for_3d_lasso,
 )
 
@@ -35,8 +35,8 @@ def test_spherical_3d_lasso_matches_renderer_normalization() -> None:
         ortho_scale=1.5,
     )
 
-    mvp = _build_mvp_for_orbit(view, normalized_coords, 200, 200)
-    screen_x, screen_y, _, _ = _project_points_3d_to_screen(mvp, normalized_coords, 200, 200)
+    mvp = build_mvp_for_orbit(view, normalized_coords, 200, 200)
+    screen_x, screen_y, _, _ = project_points_3d_to_screen(mvp, normalized_coords, 200, 200)
     polygon = _square_around(float(screen_x[0]), float(screen_y[0]))
 
     selected_ids = select_ids_for_3d_lasso(
@@ -72,8 +72,8 @@ def test_3d_lasso_label_filter_excludes_hidden_occluders() -> None:
         ortho_scale=1.5,
     )
 
-    mvp = _build_mvp_for_orbit(view, coords, 200, 200)
-    screen_x, screen_y, _, _ = _project_points_3d_to_screen(mvp, coords, 200, 200)
+    mvp = build_mvp_for_orbit(view, coords, 200, 200)
+    screen_x, screen_y, _, _ = project_points_3d_to_screen(mvp, coords, 200, 200)
     polygon = _square_around(float(screen_x[1]), float(screen_y[1]))
 
     selected_ids = select_ids_for_3d_lasso(

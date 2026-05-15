@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import justifiedLayout from "justified-layout";
 
+import { formatDistanceValue, getDistanceMetricLabel } from "@/lib/similarity";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/store/useStore";
 import type { Sample } from "@/types";
@@ -17,6 +18,7 @@ interface SampleGridViewProps {
   scrollResetKey?: string;
   className?: string;
   showRankSimilarityBadge?: boolean;
+  distanceMetric?: string | null;
 }
 
 const BOX_SPACING = 2;
@@ -112,6 +114,7 @@ export function SampleGridView({
   scrollResetKey,
   className,
   showRankSimilarityBadge = false,
+  distanceMetric = null,
 }: SampleGridViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(0);
@@ -266,19 +269,18 @@ export function SampleGridView({
                   const isHovered = hoveredId === sample.id;
                   const sampleIndex = row.startIndex + index;
                   const distance = (sample as { distance?: number }).distance;
-                  const similarity =
-                    typeof distance === "number"
-                      ? Math.max(0, Math.min(1, 1 - distance))
-                      : null;
-                  const similarityPercent =
-                    similarity !== null ? Math.round(similarity * 100) : null;
+                  const distanceLabel =
+                    typeof distance === "number" ? formatDistanceValue(distance) : null;
+                  const preciseDistanceLabel =
+                    typeof distance === "number" ? formatDistanceValue(distance, 6) : null;
+                  const distanceMetricLabel = getDistanceMetricLabel(distanceMetric) ?? "distance";
                   const metricBadge =
-                    showRankSimilarityBadge && similarityPercent !== null
-                      ? `#${sampleIndex + 1} · ${similarityPercent}%`
+                    showRankSimilarityBadge && distanceLabel !== null
+                      ? `#${sampleIndex + 1} · d ${distanceLabel}`
                       : null;
                   const metricBadgeTitle =
-                    showRankSimilarityBadge && similarity !== null
-                      ? `Rank ${sampleIndex + 1}, cosine similarity ${(similarity * 100).toFixed(1)}%`
+                    showRankSimilarityBadge && preciseDistanceLabel !== null
+                      ? `Rank ${sampleIndex + 1}, ${distanceMetricLabel} ${preciseDistanceLabel}. Lower is closer.`
                       : undefined;
 
                   return (

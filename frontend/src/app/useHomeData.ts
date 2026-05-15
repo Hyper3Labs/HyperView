@@ -306,6 +306,7 @@ function useNeighborsDataFlow(args: {
   } = args;
 
   const neighborsResults = useStore((state) => state.neighborsResults);
+  const neighborsMetric = useStore((state) => state.neighborsMetric);
   const neighborsLoading = useStore((state) => state.neighborsLoading);
   const neighborsError = useStore((state) => state.neighborsError);
   const beginNeighborsQuery = useStore((state) => state.beginNeighborsQuery);
@@ -359,7 +360,7 @@ function useNeighborsDataFlow(args: {
 
         if (abort.signal.aborted) return;
 
-        setNeighborsResults(response.results);
+        setNeighborsResults(response.results, response.metric);
       } catch (err) {
         if (isAbortError(err)) return;
         console.error("Failed to fetch neighbors:", err);
@@ -402,6 +403,7 @@ function useNeighborsDataFlow(args: {
   return {
     neighborsError,
     neighborsLoading,
+    neighborsMetric,
     neighborsResults,
     hasMoreNeighbors,
     loadMoreNeighbors,
@@ -513,6 +515,8 @@ export function useHomeData(): {
         selectionSamples: selectedSamples,
         neighborSamples:
           samplesFlow.selectedIdsList.length === 1 ? derivedNeighborSamples : [],
+        neighborsMetric:
+          samplesFlow.selectedIdsList.length === 1 ? neighborsFlow.neighborsMetric : null,
         neighborsLoading:
           samplesFlow.selectedIdsList.length === 1 ? neighborsFlow.neighborsLoading : false,
         hasMoreNeighbors:
@@ -532,6 +536,7 @@ export function useHomeData(): {
       neighborsFlow.loadMoreNeighbors,
       neighborsFlow.neighborsError,
       neighborsFlow.neighborsLoading,
+      neighborsFlow.neighborsMetric,
       samplesCollection,
       samplesFlow.isLassoSelection,
       samplesFlow.selectedAnchorId,

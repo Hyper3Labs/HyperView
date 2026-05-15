@@ -1,6 +1,6 @@
 ---
 name: hyperview-cli
-description: Use HyperView's control-plane CLI for hyperview serve, dataset create, workspace create, embeddings compute, layouts compute, runtime jobs, ui layout set, ui selection set, ui panel add, extension add, tools run, native module panels, backend tools, and local HyperView plugin workflows.
+description: Use HyperView's control-plane CLI for hyperview serve, dataset create, workspace create, embeddings compute, layouts compute, browserless paper figure export, runtime jobs, ui layout set, ui selection set, ui panel add, extension add, tools run, native module panels, backend tools, and local HyperView plugin workflows.
 license: MIT
 compatibility: Requires Python 3.10-3.13 and the hyperview CLI (`uv tool install --python 3.12 hyperview`). Runtime-control commands require a running HyperView server.
 metadata:
@@ -29,6 +29,7 @@ HyperView currently supports Python 3.10 through 3.13; `--python 3.12` keeps the
 - Start or control a running HyperView runtime.
 - Register a custom embedding provider.
 - Compute embeddings or layouts without restarting the UI.
+- Export paper-ready static 3D embedding figures without a browser or Node runtime.
 - Switch the active workspace, layout, or selection in a running session.
 - Add or remove agent-authored native module panels from local files.
 - Create, install, reload, or test a local plugin/extension with Python backend tools and a frontend panel.
@@ -41,7 +42,8 @@ HyperView currently supports Python 3.10 through 3.13; `--python 3.12` keeps the
 4. Register a provider if needed.
 5. Submit embedding or layout jobs through the runtime.
 6. Use `hyperview ui ...` commands to switch what the live UI shows.
-7. For plugins, create an extension folder and install it into the running workspace.
+7. Export paper figures with `hyperview figure export` when the user needs screenshots or publication diagrams.
+8. For plugins, create an extension folder and install it into the running workspace.
 
 ## Current model
 
@@ -54,8 +56,10 @@ HyperView currently supports Python 3.10 through 3.13; `--python 3.12` keeps the
 - Plugins are repo-local extension folders with `extension.toml`, optional Python tools, and optional native panel modules.
 - Plugin panels call backend tools through `HyperViewPanelSDK.hooks.useTool()` or `hyperview tools run`.
 - In practice, create datasets and workspaces before starting the runtime for that workspace. The current runtime loads workspace registry state on startup.
+- `figure export` is browserless and supports 3D layouts only. It reuses the persisted 3D camera for the layout when available, otherwise it chooses a paper-oriented default view.
+- Paper figure defaults are square, white-background, opaque PNGs with a faint sphere guide and direct labels for small label sets.
 
-Read [references/commands.md](references/commands.md) for command recipes covering datasets, workspaces, providers, embeddings, layouts, runtime UI state, selections, and jobs.
+Read [references/commands.md](references/commands.md) for command recipes covering datasets, workspaces, providers, embeddings, layouts, paper figures, runtime UI state, selections, and jobs.
 Read [references/native-panels.md](references/native-panels.md) when the task involves authoring or registering a custom panel.
 Read [references/plugins.md](references/plugins.md) when the task involves backend-plus-frontend plugins/extensions.
 
@@ -75,6 +79,8 @@ Read [references/plugins.md](references/plugins.md) when the task involves backe
 - For provider args, use repeated `--provider-arg key=value` flags.
 - Treat the workspace as the durable unit. Changing datasets means setting a new workspace dataset, not switching among many datasets inside one workspace.
 - Prefer native module panels over raw HTML. The panel system no longer relies on iframes.
+- For paper diagrams, prefer `hyperview figure export` over browser screenshots unless the user explicitly needs exact UI chrome. It does not require Playwright, browser bundling, or Node at runtime.
+- For publication figures, keep the defaults first: `--theme light`, `--guide-style paper`, and `--legend auto`. Use `--show-selection` only when selected samples are meaningful and will be explained in the caption.
 - The first `uv run hyperview ...` invocation in a session can take 30+ seconds (torch/datasets imports). Allow generous timeouts and avoid sending SIGINT.
 
 ## Inspecting runtime state

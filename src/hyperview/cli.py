@@ -13,7 +13,10 @@ from urllib.request import Request, urlopen
 
 from hyperview import Dataset
 from hyperview.api import Session
+from hyperview.core.selection import OrbitViewState3D
+from hyperview.figures import FigureRenderOptions, render_layout_figure
 from hyperview.runtime import HyperViewRuntime, ProviderRegistry, WorkspaceRegistry
+from hyperview.storage.schema import parse_layout_dimension
 
 
 def _read_json_response(response: Any) -> Any:
@@ -269,6 +272,28 @@ def _build_control_parser() -> argparse.ArgumentParser:
     _add_server_flags(jobs_inspect)
     jobs_inspect.add_argument("job_id")
     _add_json_flag(jobs_inspect)
+
+    figure_parser = subparsers.add_parser("figure")
+    figure_subparsers = figure_parser.add_subparsers(dest="figure_command", required=True)
+    figure_export = figure_subparsers.add_parser("export")
+    figure_export.add_argument("output")
+    figure_export.add_argument("--workspace")
+    figure_export.add_argument("--dataset")
+    figure_export.add_argument("--layout")
+    figure_export.add_argument("--width", type=int, default=900)
+    figure_export.add_argument("--height", type=int, default=900)
+    figure_export.add_argument("--scale", type=int, default=2)
+    figure_export.add_argument("--theme", choices=["dark", "light"], default="light")
+    figure_export.add_argument("--background")
+    figure_export.add_argument("--point-radius", type=float, default=4.0)
+    figure_export.add_argument("--guide-style", choices=["paper", "rings", "outline", "none"], default="paper")
+    figure_export.add_argument("--guide-alpha", type=int)
+    figure_export.add_argument("--legend", choices=["auto", "on", "off", "direct"], default="auto")
+    figure_export.add_argument("--title")
+    figure_export.add_argument("--show-selection", action="store_true")
+    figure_export.add_argument("--no-guide", action="store_true")
+    figure_export.add_argument("--ignore-selection", action="store_true")
+    _add_json_flag(figure_export)
 
     ui_parser = subparsers.add_parser("ui")
     ui_subparsers = ui_parser.add_subparsers(dest="ui_command", required=True)
@@ -598,6 +623,87 @@ def _run_jobs_command(args: argparse.Namespace) -> None:
     raise RuntimeError(f"Unsupported jobs command: {args.jobs_command}")
 
 
+def _resolve_figure_layout_key(
+    dataset: Dataset,
+    active_layout_key: str | None,
+    requested_layout_key: str | None,
+) -> str:
+    layouts = dataset.list_layouts()
+
+    if requested_layout_key and requested_layout_key != "active":
+        return requested_layout_key
+
+    if requested_layout_key == "active":
+        if not active_layout_key:
+            raise RuntimeError("No active layout is set for this workspace")
+        return active_layout_key
+
+    if active_layout_key:
+        try:
+            if parse_layout_dimension(active_layout_key) == 3:
+                return active_layout_key
+        except ValueError:
+            pass
+
+    for layout in layouts:
+        try:
+            if parse_layout_dimension(layout.layout_key) == 3:
+                return layout.layout_key
+        except ValueError:
+            continue
+
+    raise RuntimeError("No 3D layout is available for figure export")
+
+
+def _run_figure_command(args: argparse.Namespace) -> None:
+    if args.figure_command != "export":
+        raise RuntimeError(f"Unsupported figure command: {args.figure_command}")
+
+    runtime = HyperViewRuntime()
+    workspace = runtime.get_workspace(args.workspace)
+    dataset = runtime.get_dataset(workspace.id, args.dataset)
+    layout_key = _resolve_figure_layout_key(
+        dataset,
+        workspace.ui.active_layout_key,
+        args.layout,
+    )
+
+    layout_view = workspace.ui.layout_views.get(layout_key)
+    camera = layout_view.camera_3d if layout_view is not None else None
+    view = OrbitViewState3D(**camera) if camera is not None else None
+
+    options = FigureRenderOptions(
+        width=args.width,
+        height=args.height,
+        scale=args.scale,
+        theme=args.theme,
+        background=args.background,
+        point_radius=args.point_radius,
+        show_guide=not args.no_guide,
+        guide_style=args.guide_style,
+        guide_alpha=args.guide_alpha,
+        legend=args.legend,
+        title=args.title,
+        selected_ids=set(workspace.ui.selected_ids) if args.show_selection and not args.ignore_selection else set(),
+    )
+    try:
+        result = render_layout_figure(
+            dataset=dataset,
+            layout_key=layout_key,
+            output_path=args.output,
+            view=view,
+            options=options,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from None
+
+    payload = {"figure": result.to_dict()}
+    if args.json:
+        _print_output(payload, as_json=True)
+        return
+    print(f"Wrote {result.output_path} ({result.width}x{result.height}, {result.num_points} points)")
+
+
 def _run_ui_command(args: argparse.Namespace) -> None:
     base_url = _server_base_url(args.host, args.port)
     if args.ui_command == "workspace" and args.ui_workspace_command == "set":
@@ -779,6 +885,9 @@ def main(argv: list[str] | None = None):
         return
     if args.command == "jobs":
         _run_jobs_command(args)
+        return
+    if args.command == "figure":
+        _run_figure_command(args)
         return
     if args.command == "ui":
         _run_ui_command(args)
