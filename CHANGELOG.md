@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.0 - 2026-05-15
+
+### Features
+- Add browserless `hyperview figure export` for paper-ready 3D embedding figures.
+- Persist 3D scatter camera state so exported figures can reuse the UI view.
+- Report geometry-aware nearest-neighbor distances, including exact hyperboloid geodesic distances.
+
+### Documentation
+- Document the figure export workflow in the packaged HyperView agent skill.
+
 ## 0.4.2 - 2026-05-11
 
 ### Fixes
