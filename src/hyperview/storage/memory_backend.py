@@ -8,9 +8,9 @@ import numpy as np
 from hyperview.core.sample import Sample
 from hyperview.storage.backend import StorageBackend
 from hyperview.storage.metrics import (
-    curvature_for_space,
     distance_metric_for_space,
     pairwise_embedding_distances,
+    resolve_hyperboloid_curvature,
 )
 from hyperview.storage.schema import (
     LayoutInfo,
@@ -306,10 +306,15 @@ class MemoryBackend(StorageBackend):
             return []
 
         metric = distance_metric_for_space(space)
-        curvature = curvature_for_space(space) if metric == "hyperboloid" else 1.0
+        vector_array = np.vstack([vec for _, vec in entries])
+        curvature = (
+            resolve_hyperboloid_curvature(space, np.vstack([np.asarray(vector), vector_array]))
+            if metric == "hyperboloid"
+            else 1.0
+        )
         distances_array = pairwise_embedding_distances(
             vector,
-            np.vstack([vec for _, vec in entries]),
+            vector_array,
             metric=metric,
             curvature=curvature,
         )

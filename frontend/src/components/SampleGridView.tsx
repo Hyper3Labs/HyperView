@@ -23,6 +23,8 @@ interface SampleGridViewProps {
 
 const BOX_SPACING = 2;
 const DEFAULT_ASPECT_RATIO = 1;
+const MIN_LAYOUT_ASPECT_RATIO = 0.25;
+const MAX_LAYOUT_ASPECT_RATIO = 4;
 
 function getTargetRowHeight(size: "small" | "medium" | "large"): number {
   if (size === "small") return 100;
@@ -30,9 +32,10 @@ function getTargetRowHeight(size: "small" | "medium" | "large"): number {
   return 180;
 }
 
-function getAspectRatio(sample: Sample): number {
+function getLayoutAspectRatio(sample: Sample): number {
   if (sample.width && sample.height && sample.height > 0) {
-    return sample.width / sample.height;
+    const aspectRatio = sample.width / sample.height;
+    return Math.min(MAX_LAYOUT_ASPECT_RATIO, Math.max(MIN_LAYOUT_ASPECT_RATIO, aspectRatio));
   }
   return DEFAULT_ASPECT_RATIO;
 }
@@ -46,7 +49,7 @@ function computeLayout(
     return { boxes: [], containerHeight: 0 };
   }
 
-  const aspectRatios = samples.map(getAspectRatio);
+  const aspectRatios = samples.map(getLayoutAspectRatio);
 
   const geometry = justifiedLayout(aspectRatios, {
     containerWidth,

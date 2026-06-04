@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import inspect
 import json
@@ -195,12 +196,15 @@ class CustomPanelSpec:
     title: str
     module_file: str | None = None
     kind: Literal["module", "scatter"] = "module"
+    extension: str | None = None
+    extension_panel: str | None = None
     position: Literal["center", "right", "bottom"] = "right"
     layout_key: str | None = None
     geometry: str | None = None
     layout_dimension: int | None = None
     reference_panel_id: str | None = None
     direction: Literal["right", "left", "above", "below", "within"] | None = None
+    props: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CustomPanelSpec:
@@ -230,12 +234,15 @@ class CustomPanelSpec:
             title=str(data["title"]),
             module_file=data.get("module_file"),
             kind=kind,  # type: ignore[arg-type]
+            extension=data.get("extension"),
+            extension_panel=data.get("extension_panel"),
             position=position,  # type: ignore[arg-type]
             layout_key=data.get("layout_key"),
             geometry=data.get("geometry"),
             layout_dimension=layout_dimension,
             reference_panel_id=data.get("reference_panel_id"),
             direction=direction,  # type: ignore[arg-type]
+            props=dict(data.get("props") or {}),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -285,11 +292,48 @@ class LayoutViewState:
 
 
 @dataclass
+class SimilarityQueryState:
+    anchor_sample_id: str
+    layout_key: str | None = None
+    space_key: str | None = None
+    k: int = 18
+    source: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SimilarityQueryState | None:
+        anchor_sample_id = str(data.get("anchor_sample_id") or "").strip()
+        if not anchor_sample_id:
+            return None
+        try:
+            k = int(data.get("k") or 18)
+        except (TypeError, ValueError):
+            k = 18
+        return cls(
+            anchor_sample_id=anchor_sample_id,
+            layout_key=data.get("layout_key"),
+            space_key=data.get("space_key"),
+            k=max(1, min(k, 100)),
+            source=data.get("source"),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "anchor_sample_id": self.anchor_sample_id,
+            "layout_key": self.layout_key,
+            "space_key": self.space_key,
+            "k": self.k,
+            "source": self.source,
+        }
+
+
+@dataclass
 class WorkspaceUiState:
     active_layout_key: str | None = None
     selected_ids: list[str] = field(default_factory=list)
+    similarity_query: SimilarityQueryState | None = None
     custom_panels: list[CustomPanelSpec] = field(default_factory=list)
     layout_views: dict[str, LayoutViewState] = field(default_factory=dict)
+    view_revision: int = 0
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> WorkspaceUiState:
@@ -309,19 +353,27 @@ class WorkspaceUiState:
         return cls(
             active_layout_key=data.get("active_layout_key"),
             selected_ids=list(data.get("selected_ids") or []),
+            similarity_query=SimilarityQueryState.from_dict(data.get("similarity_query") or {}),
             custom_panels=custom_panels,
             layout_views=layout_views,
+            view_revision=int(data.get("view_revision") or 0),
         )
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "active_layout_key": self.active_layout_key,
             "selected_ids": list(self.selected_ids),
+            "similarity_query": (
+                self.similarity_query.to_dict()
+                if self.similarity_query is not None
+                else None
+            ),
             "custom_panels": [panel.to_dict() for panel in self.custom_panels],
             "layout_views": {
                 layout_key: view.to_dict()
                 for layout_key, view in sorted(self.layout_views.items())
             },
+            "view_revision": self.view_revision,
         }
 
 
@@ -477,6 +529,7 @@ class ExtensionInstallation:
     loaded: LoadedExtension
     workspace_id: str
     panel_ids: list[str] = field(default_factory=list)
+    add_panels: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -485,6 +538,15 @@ class ExtensionInstallation:
             "description": self.manifest.description,
             "workspace_id": self.workspace_id,
             "panels": list(self.panel_ids),
+            "panel_definitions": [
+                {
+                    "id": panel.id,
+                    "title": panel.title,
+                    "position": panel.position,
+                    "file": panel.file,
+                }
+                for panel in self.manifest.panels
+            ],
             "tools": [record.to_dict() for record in self.loaded.tools],
         }
 
@@ -505,6 +567,7 @@ class HyperViewRuntime:
         self._extensions: dict[str, ExtensionInstallation] = {}
         self._dataset_cache: dict[str, Dataset] = {}
         self._jobs: dict[str, JobState] = {}
+        self._panel_module_revisions: dict[tuple[str, str, str], str] = {}
         self._lock = threading.RLock()
         self._version = 1
 
@@ -514,6 +577,43 @@ class HyperViewRuntime:
 
     def _bump_version(self) -> None:
         with self._lock:
+            self._version += 1
+
+    def _panel_module_revision(self, panel: CustomPanelSpec) -> str | None:
+        module_file = panel.resolved_module_file()
+        if module_file is None:
+            return None
+        try:
+            return hashlib.sha256(module_file.read_bytes()).hexdigest()[:16]
+        except OSError:
+            return "missing"
+
+    def _sync_panel_module_revisions_locked(self) -> None:
+        changed = False
+        seen: set[tuple[str, str, str]] = set()
+
+        for workspace in self.workspace_registry.list():
+            for panel in workspace.ui.custom_panels:
+                module_file = panel.resolved_module_file()
+                if module_file is None:
+                    continue
+
+                key = (workspace.id, panel.id, str(module_file))
+                revision = self._panel_module_revision(panel)
+                if revision is None:
+                    continue
+
+                seen.add(key)
+                previous = self._panel_module_revisions.get(key)
+                self._panel_module_revisions[key] = revision
+                if previous is not None and previous != revision:
+                    changed = True
+
+        for key in list(self._panel_module_revisions):
+            if key not in seen:
+                del self._panel_module_revisions[key]
+
+        if changed:
             self._version += 1
 
     def list_available_datasets(self) -> list[str]:
@@ -529,8 +629,18 @@ class HyperViewRuntime:
         activate_workspace: bool = True,
     ) -> None:
         with self._lock:
+            previous_workspace = self.workspace_registry.get(workspace_id)
+            previous_dataset_name = (
+                previous_workspace.dataset_name if previous_workspace is not None else None
+            )
             self._dataset_cache[dataset.name] = dataset
-            self.workspace_registry.set_dataset(workspace_id, dataset.name)
+            workspace = self.workspace_registry.set_dataset(workspace_id, dataset.name)
+            if previous_dataset_name != dataset.name:
+                workspace.ui.active_layout_key = None
+                workspace.ui.selected_ids = []
+                workspace.ui.similarity_query = None
+                workspace.ui.layout_views = {}
+                self.workspace_registry.update_workspace(workspace)
             if activate_workspace:
                 self.workspace_registry.set_active_workspace(workspace_id)
             self._bump_version()
@@ -561,6 +671,7 @@ class HyperViewRuntime:
             if previous_dataset_name != dataset_name:
                 workspace.ui.active_layout_key = None
                 workspace.ui.selected_ids = []
+                workspace.ui.similarity_query = None
                 workspace.ui.layout_views = {}
                 self.workspace_registry.update_workspace(workspace)
             self._bump_version()
@@ -601,9 +712,75 @@ class HyperViewRuntime:
         with self._lock:
             workspace = self.get_workspace(workspace_id)
             workspace.ui.selected_ids = list(dict.fromkeys(sample_ids))
+            if (
+                workspace.ui.similarity_query is not None
+                and workspace.ui.similarity_query.anchor_sample_id not in workspace.ui.selected_ids
+            ):
+                workspace.ui.similarity_query = None
             self.workspace_registry.update_workspace(workspace)
             self._bump_version()
             return workspace
+
+    def set_similarity_query(
+        self,
+        workspace_id: str,
+        query: SimilarityQueryState | None,
+    ) -> WorkspaceState:
+        with self._lock:
+            workspace = self.get_workspace(workspace_id)
+            workspace.ui.similarity_query = query
+            self.workspace_registry.update_workspace(workspace)
+            self._bump_version()
+            return workspace
+
+    def resolve_similarity_query(
+        self,
+        workspace_id: str,
+        sample_id: str,
+        *,
+        layout_key: str | None = None,
+        space_key: str | None = None,
+        k: int = 18,
+        source: str | None = None,
+    ) -> SimilarityQueryState:
+        dataset = self.get_dataset(workspace_id=workspace_id)
+        try:
+            dataset[sample_id]
+        except KeyError as exc:
+            raise KeyError(f"Sample not found: {sample_id}") from exc
+
+        resolved_space_key = space_key
+        if layout_key is not None:
+            layout = next(
+                (item for item in dataset.list_layouts() if item.layout_key == layout_key),
+                None,
+            )
+            if layout is None:
+                raise LookupError(f"Layout not found: {layout_key}")
+            if resolved_space_key is not None and resolved_space_key != layout.space_key:
+                raise ValueError("space_key does not match the requested layout_key")
+            resolved_space_key = layout.space_key
+
+        if resolved_space_key is not None:
+            space = next(
+                (item for item in dataset.list_spaces() if item.space_key == resolved_space_key),
+                None,
+            )
+            if space is None:
+                raise LookupError(f"Space not found: {resolved_space_key}")
+
+        try:
+            limit = int(k)
+        except (TypeError, ValueError):
+            limit = 18
+
+        return SimilarityQueryState(
+            anchor_sample_id=sample_id,
+            layout_key=layout_key,
+            space_key=resolved_space_key,
+            k=max(1, min(limit, 100)),
+            source=source,
+        )
 
     def set_layout_view(
         self,
@@ -628,6 +805,23 @@ class HyperViewRuntime:
             panels = [existing for existing in workspace.ui.custom_panels if existing.id != panel.id]
             panels.append(panel)
             workspace.ui.custom_panels = panels
+            workspace.ui.view_revision += 1
+            self.workspace_registry.update_workspace(workspace)
+            self._bump_version()
+            return workspace
+
+    def replace_custom_panels(
+        self,
+        workspace_id: str,
+        panels: list[CustomPanelSpec],
+        *,
+        bump_view_revision: bool = True,
+    ) -> WorkspaceState:
+        with self._lock:
+            workspace = self.get_workspace(workspace_id)
+            workspace.ui.custom_panels = list(panels)
+            if bump_view_revision:
+                workspace.ui.view_revision += 1
             self.workspace_registry.update_workspace(workspace)
             self._bump_version()
             return workspace
@@ -638,6 +832,7 @@ class HyperViewRuntime:
             workspace.ui.custom_panels = [
                 panel for panel in workspace.ui.custom_panels if panel.id != panel_id
             ]
+            workspace.ui.view_revision += 1
             self.workspace_registry.update_workspace(workspace)
             self._bump_version()
             return workspace
@@ -822,12 +1017,13 @@ class HyperViewRuntime:
         if module_file is None:
             return {"module_src": None}
 
+        revision = self._panel_module_revision(panel) or str(self.version)
         return {
             "module_src": "/api/panels/content/"
             f"{quote(workspace_id, safe='')}/"
             f"{quote(panel.id, safe='')}/"
             f"{quote(module_file.name, safe='')}"
-            f"?v={self.version}",
+            f"?hv_rev={quote(revision, safe='')}",
         }
 
     # ------------------------------------------------------------------
@@ -842,7 +1038,13 @@ class HyperViewRuntime:
         with self._lock:
             return self._extensions.get(name)
 
-    def install_extension(self, workspace_id: str, folder: Path) -> ExtensionInstallation:
+    def install_extension(
+        self,
+        workspace_id: str,
+        folder: Path,
+        *,
+        add_panels: bool = False,
+    ) -> ExtensionInstallation:
         """Load an extension folder and register its tools + panels."""
 
         manifest = ExtensionManifest.load(folder)
@@ -854,6 +1056,8 @@ class HyperViewRuntime:
                 CustomPanelSpec(
                     id=panel_entry.id,
                     title=panel_entry.title,
+                    extension=manifest.name,
+                    extension_panel=panel_entry.id,
                     module_file=str(panel_file),
                     position=panel_entry.position,  # type: ignore[arg-type]
                 )
@@ -880,15 +1084,17 @@ class HyperViewRuntime:
                 for record in loaded.tools:
                     self.tools.register(record)
 
-                for panel in prepared_panels:
-                    self._add_custom_panel_locked(workspace_id, panel)
-                    installed_panel_ids.append(panel.id)
+                if add_panels:
+                    for panel in prepared_panels:
+                        self._add_custom_panel_locked(workspace_id, panel)
+                        installed_panel_ids.append(panel.id)
 
                 installation = ExtensionInstallation(
                     manifest=manifest,
                     loaded=loaded,
                     workspace_id=workspace_id,
                     panel_ids=list(installed_panel_ids),
+                    add_panels=add_panels,
                 )
                 self._extensions[manifest.name] = installation
                 self._bump_version()
@@ -901,6 +1107,7 @@ class HyperViewRuntime:
                         for panel in workspace.ui.custom_panels
                         if panel.id not in installed_panel_ids
                     ]
+                    workspace.ui.view_revision += 1
                     self.workspace_registry.update_workspace(workspace)
 
                 self.tools.unregister_by_extension(manifest.name)
@@ -914,6 +1121,7 @@ class HyperViewRuntime:
                     if previous_workspace_panels is not None:
                         workspace = self.get_workspace(previous_installation.workspace_id)
                         workspace.ui.custom_panels = previous_workspace_panels
+                        workspace.ui.view_revision += 1
                         self.workspace_registry.update_workspace(workspace)
 
                 raise
@@ -938,6 +1146,7 @@ class HyperViewRuntime:
                 for panel in workspace.ui.custom_panels
                 if panel.id not in installation.panel_ids
             ]
+            workspace.ui.view_revision += 1
             self.workspace_registry.update_workspace(workspace)
 
         self.tools.unregister_by_extension(name)
@@ -952,13 +1161,15 @@ class HyperViewRuntime:
                 return None
             folder = installation.manifest.folder
             workspace_id = installation.workspace_id
-        return self.install_extension(workspace_id, folder)
+            add_panels = installation.add_panels
+        return self.install_extension(workspace_id, folder, add_panels=add_panels)
 
     def _add_custom_panel_locked(self, workspace_id: str, panel: CustomPanelSpec) -> None:
         workspace = self.get_workspace(workspace_id)
         panels = [existing for existing in workspace.ui.custom_panels if existing.id != panel.id]
         panels.append(panel)
         workspace.ui.custom_panels = panels
+        workspace.ui.view_revision += 1
         self.workspace_registry.update_workspace(workspace)
 
     def extension_storage_dir(self, extension_name: str) -> Path:
@@ -1003,37 +1214,45 @@ class HyperViewRuntime:
         return record.func(ctx, **call_params)
 
     def snapshot(self, workspace_id: str | None = None) -> dict[str, Any]:
-        workspace = self.get_workspace(workspace_id)
-        return {
-            "runtime_id": self.runtime_id,
-            "version": self.version,
-            "active_workspace_id": self.workspace_registry.active_workspace_id,
-            "extensions": [installation.to_dict() for installation in self.list_extensions()],
-            "tools": [record.to_dict() for record in self.tools.list()],
-            "workspaces": [
-                {
-                    "id": item.id,
-                    "dataset_name": item.dataset_name,
-                }
-                for item in self.workspace_registry.list()
-            ],
-            "workspace": {
-                "id": workspace.id,
-                "dataset_name": workspace.dataset_name,
-                "ui": {
-                    "active_layout_key": workspace.ui.active_layout_key,
-                    "selected_ids": list(workspace.ui.selected_ids),
-                    "layout_views": {
-                        layout_key: view.to_dict()
-                        for layout_key, view in sorted(workspace.ui.layout_views.items())
+        with self._lock:
+            self._sync_panel_module_revisions_locked()
+            workspace = self.get_workspace(workspace_id)
+            return {
+                "runtime_id": self.runtime_id,
+                "version": self.version,
+                "active_workspace_id": self.workspace_registry.active_workspace_id,
+                "extensions": [installation.to_dict() for installation in self.list_extensions()],
+                "tools": [record.to_dict() for record in self.tools.list()],
+                "workspaces": [
+                    {
+                        "id": item.id,
+                        "dataset_name": item.dataset_name,
+                    }
+                    for item in self.workspace_registry.list()
+                ],
+                "workspace": {
+                    "id": workspace.id,
+                    "dataset_name": workspace.dataset_name,
+                    "ui": {
+                        "active_layout_key": workspace.ui.active_layout_key,
+                        "selected_ids": list(workspace.ui.selected_ids),
+                        "similarity_query": (
+                            workspace.ui.similarity_query.to_dict()
+                            if workspace.ui.similarity_query is not None
+                            else None
+                        ),
+                        "layout_views": {
+                            layout_key: view.to_dict()
+                            for layout_key, view in sorted(workspace.ui.layout_views.items())
+                        },
+                        "custom_panels": [
+                            {
+                                **panel.to_dict(),
+                                "data": self.get_panel_payload(workspace.id, panel),
+                            }
+                            for panel in workspace.ui.custom_panels
+                        ],
+                        "view_revision": workspace.ui.view_revision,
                     },
-                    "custom_panels": [
-                        {
-                            **panel.to_dict(),
-                            "data": self.get_panel_payload(workspace.id, panel),
-                        }
-                        for panel in workspace.ui.custom_panels
-                    ],
                 },
-            },
-        }
+            }

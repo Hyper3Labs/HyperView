@@ -68,7 +68,7 @@ uv run hyperview serve --workspace cifar10-demo --dataset cifar10_demo --no-brow
 _Tip: Use `HF_DATASETS_OFFLINE=1` if you have cached datasets and want to work offline._
 
 ### 2. Start the Frontend
-Runs the Next.js dev server at `http://127.0.0.1:3000` with hot reloading.
+Runs the Next.js dev server at `http://127.0.0.1:6363` with hot reloading.
 
 ```bash
 cd frontend

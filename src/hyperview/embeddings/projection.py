@@ -6,6 +6,8 @@ import warnings
 import numpy as np
 import umap
 
+from hyperview.storage.geometry import infer_hyperboloid_curvature
+
 logger = logging.getLogger(__name__)
 
 _MIN_PCA_SAMPLES = 2
@@ -99,7 +101,11 @@ class ProjectionEngine:
                 "hyperboloid_embeddings must have shape (N, D+1) with D>=1"
             )
 
-        c = float(curvature) if curvature is not None else 1.0
+        c = (
+            float(curvature)
+            if curvature is not None
+            else infer_hyperboloid_curvature(hyperboloid_embeddings)
+        )
         if c <= 0:
             raise ValueError(f"curvature must be > 0, got {c}")
 
@@ -169,6 +175,12 @@ class ProjectionEngine:
         if n_components < 2:
             raise ValueError(f"n_components must be >= 2, got {n_components}")
 
+        resolved_curvature = (
+            infer_hyperboloid_curvature(embeddings)
+            if input_geometry == "hyperboloid" and curvature is None
+            else curvature
+        )
+
         if method == "pca":
             return self._project_pca(
                 embeddings,
@@ -176,7 +188,7 @@ class ProjectionEngine:
                 output_geometry=output_geometry,
                 n_components=n_components,
                 normalize_input=normalize_input,
-                curvature=curvature or 1.0,
+                curvature=resolved_curvature or 1.0,
                 verbose=verbose,
             )
 
@@ -188,7 +200,7 @@ class ProjectionEngine:
 
         if input_geometry == "hyperboloid":
             # Convert to unit Poincaré ball and use UMAP's built-in hyperbolic distance.
-            prepared = self.to_poincare_ball(embeddings, curvature=curvature)
+            prepared = self.to_poincare_ball(embeddings, curvature=resolved_curvature)
             prepared_metric = "poincare"
 
         if output_geometry == "poincare":

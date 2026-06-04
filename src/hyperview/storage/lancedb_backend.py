@@ -11,10 +11,10 @@ from hyperview.core.sample import Sample
 from hyperview.storage.backend import StorageBackend
 from hyperview.storage.config import StorageConfig
 from hyperview.storage.metrics import (
-    curvature_for_space,
     distance_metric_for_space,
     hyperboloid_dot_query,
     pairwise_embedding_distances,
+    resolve_hyperboloid_curvature,
 )
 from hyperview.storage.schema import (
     LayoutInfo,
@@ -592,7 +592,7 @@ class LanceDBBackend(StorageBackend):
                 emb_table,
                 vector,
                 k=k,
-                curvature=curvature_for_space(space),
+                space=space,
             )
         else:
             results = (
@@ -615,7 +615,7 @@ class LanceDBBackend(StorageBackend):
         vector: list[float] | np.ndarray,
         *,
         k: int,
-        curvature: float,
+        space: SpaceInfo,
     ) -> list[dict]:
         rows = (
             emb_table.search(hyperboloid_dot_query(vector), vector_column_name="vector")
@@ -624,6 +624,11 @@ class LanceDBBackend(StorageBackend):
             .limit(k)
             .to_list()
         )
+        if rows:
+            vectors = np.asarray([row["vector"] for row in rows], dtype=np.float32)
+            curvature = resolve_hyperboloid_curvature(space, np.vstack([np.asarray(vector), vectors]))
+        else:
+            curvature = resolve_hyperboloid_curvature(space, vector)
         return _replace_hyperboloid_distances(rows, vector, curvature)
 
     def close(self) -> None:

@@ -19,13 +19,13 @@ from __future__ import annotations
 
 import inspect
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import quote
 
-
-_PENDING_TOOLS: list["ToolRecord"] = []
+_PENDING_TOOLS: list[ToolRecord] = []
 _PENDING_LOCK = threading.Lock()
 
 

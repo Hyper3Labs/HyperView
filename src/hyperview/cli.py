@@ -324,15 +324,31 @@ def _build_control_parser() -> argparse.ArgumentParser:
     ui_selection_clear.add_argument("--workspace", required=True)
     _add_json_flag(ui_selection_clear)
 
+    ui_similarity = ui_subparsers.add_parser("similarity")
+    ui_similarity_subparsers = ui_similarity.add_subparsers(dest="ui_similarity_command", required=True)
+    ui_similarity_set = ui_similarity_subparsers.add_parser("set")
+    _add_server_flags(ui_similarity_set)
+    ui_similarity_set.add_argument("--workspace", required=True)
+    ui_similarity_set.add_argument("--sample-id", required=True)
+    ui_similarity_set.add_argument("--layout-key")
+    ui_similarity_set.add_argument("--space-key")
+    ui_similarity_set.add_argument("--k", type=int, default=18)
+    _add_json_flag(ui_similarity_set)
+    ui_similarity_clear = ui_similarity_subparsers.add_parser("clear")
+    _add_server_flags(ui_similarity_clear)
+    ui_similarity_clear.add_argument("--workspace", required=True)
+    _add_json_flag(ui_similarity_clear)
+
     ui_panel = ui_subparsers.add_parser("panel")
     ui_panel_subparsers = ui_panel.add_subparsers(dest="ui_panel_command", required=True)
     ui_panel_add = ui_panel_subparsers.add_parser("add")
     _add_server_flags(ui_panel_add)
     ui_panel_add.add_argument("--workspace", required=True)
     ui_panel_add.add_argument("--panel-id", required=True)
-    ui_panel_add.add_argument("--title", required=True)
-    ui_panel_add.add_argument("--kind", choices=["auto", "module", "scatter"], default="auto")
-    ui_panel_add.add_argument("--module-file")
+    ui_panel_add.add_argument("--title")
+    ui_panel_add.add_argument("--kind", choices=["auto", "extension", "scatter"], default="auto")
+    ui_panel_add.add_argument("--extension")
+    ui_panel_add.add_argument("--extension-panel")
     ui_panel_add.add_argument("--layout-key")
     ui_panel_add.add_argument("--position", choices=["center", "right", "bottom"], default="right")
     ui_panel_add.add_argument("--reference-panel-id")
@@ -352,6 +368,11 @@ def _build_control_parser() -> argparse.ArgumentParser:
     _add_server_flags(extension_add)
     extension_add.add_argument("folder")
     extension_add.add_argument("--workspace", default=None)
+    extension_add.add_argument(
+        "--add-panels",
+        action="store_true",
+        help="Instantiate manifest panels immediately using their default positions.",
+    )
     _add_json_flag(extension_add)
 
     extension_list = extension_subparsers.add_parser("list")
@@ -434,17 +455,7 @@ def _run_server_command(args: argparse.Namespace) -> None:
     print(f"HyperView runtime is running at {session.url}")
     if not args.no_browser:
         session.open_browser()
-    try:
-        while True:
-            time.sleep(0.25)
-            if session._server_thread is not None and not session._server_thread.is_alive():
-                raise RuntimeError("HyperView server stopped unexpectedly.")
-    except KeyboardInterrupt:
-        pass
-    finally:
-        session.stop()
-        if session._server_thread is not None:
-            session._server_thread.join(timeout=2.0)
+    session.wait()
 
 
 def _run_status_command(args: argparse.Namespace) -> None:
@@ -735,11 +746,39 @@ def _run_ui_command(args: argparse.Namespace) -> None:
         )
         _print_output(payload, as_json=args.json)
         return
+    if args.ui_command == "similarity" and args.ui_similarity_command == "set":
+        payload = _http_send_json(
+            f"{base_url}/api/control/ui/similarity",
+            {
+                "workspace_id": args.workspace,
+                "sample_id": args.sample_id,
+                "layout_key": args.layout_key,
+                "space_key": args.space_key,
+                "k": args.k,
+                "source": "cli",
+            },
+        )
+        _print_output(payload, as_json=args.json)
+        return
+    if args.ui_command == "similarity" and args.ui_similarity_command == "clear":
+        payload = _http_send_json(
+            f"{base_url}/api/control/ui/similarity",
+            {"workspace_id": args.workspace},
+            method="DELETE",
+        )
+        _print_output(payload, as_json=args.json)
+        return
     if args.ui_command == "panel" and args.ui_panel_command == "add":
         panel_kind = args.kind
         if panel_kind == "auto":
-            panel_kind = "scatter" if args.layout_key else "module"
-        module_file = str(Path(args.module_file).expanduser().resolve()) if args.module_file else None
+            panel_kind = "scatter" if args.layout_key else "extension"
+        if panel_kind == "extension" and (not args.extension or not args.extension_panel):
+            raise RuntimeError(
+                "Extension panels require --extension and --extension-panel. "
+                "Custom panel code must be packaged under .hyperview/extensions/<name>/."
+            )
+        if panel_kind == "scatter" and not args.title:
+            raise RuntimeError("Scatter panels require --title")
         payload = _http_send_json(
             f"{base_url}/api/control/ui/panels",
             {
@@ -747,7 +786,8 @@ def _run_ui_command(args: argparse.Namespace) -> None:
                 "panel_id": args.panel_id,
                 "title": args.title,
                 "kind": panel_kind,
-                "module_file": module_file,
+                "extension": args.extension,
+                "extension_panel": args.extension_panel,
                 "layout_key": args.layout_key,
                 "position": args.position,
                 "reference_panel_id": args.reference_panel_id,
@@ -784,7 +824,7 @@ def _run_extension_command(args: argparse.Namespace) -> None:
         workspace_id = _active_workspace_id(base_url, args.workspace)
         payload = _http_send_json(
             f"{base_url}/api/control/extensions/install",
-            {"workspace_id": workspace_id, "folder": folder},
+            {"workspace_id": workspace_id, "folder": folder, "add_panels": args.add_panels},
         )
         _print_output(payload, as_json=args.json)
         return
@@ -808,7 +848,11 @@ def _run_extension_command(args: argparse.Namespace) -> None:
             raise RuntimeError(f"Unknown extension: {args.name}")
         payload = _http_send_json(
             f"{base_url}/api/control/extensions/install",
-            {"workspace_id": match.get("workspace_id") or workspace_id, "folder": match["folder"]},
+            {
+                "workspace_id": match.get("workspace_id") or workspace_id,
+                "folder": match["folder"],
+                "add_panels": bool(match.get("panels")),
+            },
         )
         _print_output(payload, as_json=args.json)
         return

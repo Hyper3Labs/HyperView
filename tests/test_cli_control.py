@@ -219,14 +219,10 @@ def test_cli_figure_export_reports_validation_error(
     assert "3D layouts only" in str(exc_info.value)
 
 
-def test_cli_panel_add_posts_native_panel_module_file(
-    tmp_path: Path,
+def test_cli_panel_add_posts_extension_panel_instance(
     monkeypatch,
     capsys,
 ) -> None:
-    panel_file = tmp_path / "panel.js"
-    panel_file.write_text("export default function Panel() { return null; }")
-
     recorded: dict[str, object] = {}
 
     def fake_send(url: str, payload: dict[str, object], method: str = "POST") -> dict[str, object]:
@@ -246,10 +242,10 @@ def test_cli_panel_add_posts_native_panel_module_file(
             "default",
             "--panel-id",
             "agent-panel",
-            "--title",
-            "Agent Panel",
-            "--module-file",
-            str(panel_file),
+            "--extension",
+            "agent-tools",
+            "--extension-panel",
+            "agent-panel",
             "--position",
             "right",
             "--json",
@@ -263,9 +259,10 @@ def test_cli_panel_add_posts_native_panel_module_file(
     assert recorded["payload"] == {
         "workspace_id": "default",
         "panel_id": "agent-panel",
-        "title": "Agent Panel",
-        "kind": "module",
-        "module_file": str(panel_file.resolve()),
+        "title": None,
+        "kind": "extension",
+        "extension": "agent-tools",
+        "extension_panel": "agent-panel",
         "layout_key": None,
         "position": "right",
         "reference_panel_id": None,
@@ -318,12 +315,75 @@ def test_cli_panel_add_posts_scatter_panel_layout_binding(monkeypatch, capsys) -
         "panel_id": "uncha-poincare",
         "title": "UNCHA",
         "kind": "scatter",
-        "module_file": None,
+        "extension": None,
+        "extension_panel": None,
         "layout_key": "uncha__poincare_umap__2d",
         "position": "center",
         "reference_panel_id": "hycoclip-poincare",
         "direction": "right",
     }
+
+
+def test_cli_similarity_commands_post_explicit_neighbor_context(monkeypatch, capsys) -> None:
+    recorded: list[dict[str, object]] = []
+
+    def fake_send(url: str, payload: dict[str, object], method: str = "POST") -> dict[str, object]:
+        recorded.append({"url": url, "payload": payload, "method": method})
+        return {"workspace": {"id": "default"}}
+
+    monkeypatch.setattr("hyperview.cli._http_send_json", fake_send)
+
+    main(
+        [
+            "ui",
+            "similarity",
+            "set",
+            "--workspace",
+            "default",
+            "--sample-id",
+            "sample-2",
+            "--layout-key",
+            "clip__pca__2d",
+            "--k",
+            "12",
+            "--json",
+        ]
+    )
+    set_output = json.loads(capsys.readouterr().out)
+    assert set_output["workspace"]["id"] == "default"
+
+    main(
+        [
+            "ui",
+            "similarity",
+            "clear",
+            "--workspace",
+            "default",
+            "--json",
+        ]
+    )
+    clear_output = json.loads(capsys.readouterr().out)
+    assert clear_output["workspace"]["id"] == "default"
+
+    assert recorded == [
+        {
+            "url": "http://127.0.0.1:6262/api/control/ui/similarity",
+            "payload": {
+                "workspace_id": "default",
+                "sample_id": "sample-2",
+                "layout_key": "clip__pca__2d",
+                "space_key": None,
+                "k": 12,
+                "source": "cli",
+            },
+            "method": "POST",
+        },
+        {
+            "url": "http://127.0.0.1:6262/api/control/ui/similarity",
+            "payload": {"workspace_id": "default"},
+            "method": "DELETE",
+        },
+    ]
 
 
 def test_cli_dataset_create_list_and_inspect_use_persistent_storage(
@@ -406,8 +466,8 @@ def test_cli_skill_install_copies_hyperview_skill(
     assert payload["destination"] == str(destination.resolve())
     assert (destination / "SKILL.md").exists()
     assert (destination / "references" / "commands.md").exists()
-    assert (destination / "references" / "native-panels.md").exists()
-    assert (destination / "references" / "plugins.md").exists()
+    assert (destination / "references" / "panel-modules.md").exists()
+    assert (destination / "references" / "extensions.md").exists()
 
     (destination / "SKILL.md").write_text("stale", encoding="utf-8")
     main(["skill", "install", "--destination", str(destination), "--json"])

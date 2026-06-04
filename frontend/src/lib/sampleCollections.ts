@@ -26,6 +26,7 @@ export interface DerivedSamplesSpace {
   selectionSamples: Sample[];
   neighborSamples: Sample[];
   neighborsMetric: string | null;
+  neighborsSourceLabel: string | null;
   neighborsLoading: boolean;
   hasMoreNeighbors: boolean;
   loadMoreNeighbors?: () => void;

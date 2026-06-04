@@ -345,9 +345,10 @@ export function ScatterPanel({
   );
 
   useEffect(() => {
+    if (pinnedLayout) return;
     if (!resolvedLayoutKey) return;
     setActiveLayoutKey(resolvedLayoutKey);
-  }, [resolvedLayoutKey, setActiveLayoutKey]);
+  }, [pinnedLayout, resolvedLayoutKey, setActiveLayoutKey]);
 
   useEffect(() => {
     if (!resolvedLayoutKey) return;
@@ -425,9 +426,10 @@ export function ScatterPanel({
   });
 
   const focusLayout = useCallback(() => {
+    if (pinnedLayout) return;
     if (!resolvedLayoutKey) return;
     setActiveLayoutKey(resolvedLayoutKey);
-  }, [resolvedLayoutKey, setActiveLayoutKey]);
+  }, [pinnedLayout, resolvedLayoutKey, setActiveLayoutKey]);
 
   const loadingLabel = resolvedLayoutKey
     ? "Loading embeddings..."

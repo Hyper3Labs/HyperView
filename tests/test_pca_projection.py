@@ -150,6 +150,18 @@ def test_logmap_and_expmap_round_trip_for_non_unit_curvature() -> None:
     np.testing.assert_allclose(recovered, tangent_vectors, atol=1e-4)
 
 
+def test_poincare_conversion_infers_non_unit_curvature() -> None:
+    engine = ProjectionEngine()
+    rng = np.random.default_rng(789)
+    tangent_vectors = rng.standard_normal((15, 5)).astype(np.float32) * 0.3
+    hyperboloid_points = engine.expmap_0_hyperboloid(tangent_vectors, curvature=0.1)
+
+    inferred = engine.to_poincare_ball(hyperboloid_points)
+    explicit = engine.to_poincare_ball(hyperboloid_points, curvature=0.1)
+
+    np.testing.assert_allclose(inferred, explicit, atol=1e-6)
+
+
 def test_pca_rejects_non_finite_inputs() -> None:
     engine = ProjectionEngine()
     data = _random_euclidean(10, 16)

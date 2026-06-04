@@ -4,7 +4,8 @@ import React, { useEffect, useState, type ComponentType } from "react";
 import type { IDockviewPanelProps } from "dockview";
 import { AlertTriangle, Puzzle } from "lucide-react";
 
-import { installHyperViewPanelSdkGlobal } from "@/panel-sdk";
+import { backendUrl } from "@/lib/api";
+import { PanelInstanceProvider, installHyperViewPanelSdkGlobal } from "@/panel-sdk";
 import type { RuntimePanel } from "@/types";
 import { useStore } from "@/store/useStore";
 
@@ -18,6 +19,7 @@ interface RuntimeModulePanelParams {
 interface RuntimePanelComponentProps {
   panel: RuntimePanel;
   panelId: string;
+  props?: Record<string, unknown>;
 }
 
 type RuntimePanelModuleExport =
@@ -82,7 +84,7 @@ export function RuntimeModulePanel(
       }
     }
 
-    const moduleSrc = panel?.data.module_src;
+    const moduleSrc = backendUrl(panel?.data.module_src);
     if (moduleSrc) {
       void loadPanelModule(moduleSrc);
     } else {
@@ -128,5 +130,10 @@ export function RuntimeModulePanel(
     );
   }
 
-  return <LoadedPanel panel={panel} panelId={panel.id} />;
+  const panelProps = panel.props ?? {};
+  return (
+    <PanelInstanceProvider value={{ panel, panelId: panel.id, props: panelProps }}>
+      <LoadedPanel panel={panel} panelId={panel.id} props={panelProps} />
+    </PanelInstanceProvider>
+  );
 }

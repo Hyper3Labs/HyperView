@@ -10,6 +10,7 @@ import time
 from typing import Any
 
 from hyperview.storage.backend import StorageBackend
+from hyperview.storage.geometry import apply_inferred_geometry_params
 from hyperview.storage.schema import make_layout_key, normalize_layout_dimension
 
 
@@ -106,7 +107,7 @@ def compute_embeddings(
     )
 
     dim = embeddings.shape[1]
-    config = engine.get_space_config(spec, dim)
+    config = apply_inferred_geometry_params(engine.get_space_config(spec, dim), embeddings)
     storage.ensure_space(
         model_id=spec.model_id or spec.provider,
         dim=dim,

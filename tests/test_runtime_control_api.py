@@ -12,7 +12,7 @@ from PIL import Image
 from hyperview import Dataset
 from hyperview.core.sample import Sample
 from hyperview.extensions import discover_local_extensions
-from hyperview.runtime import HyperViewRuntime, ProviderRegistry, WorkspaceRegistry
+from hyperview.runtime import CustomPanelSpec, HyperViewRuntime, ProviderRegistry, WorkspaceRegistry
 from hyperview.server.app import create_app
 
 
@@ -131,6 +131,26 @@ def _write_extension_files(folder: Path, *, panel_exists: bool = True) -> None:
         (folder / "panel.js").write_text("export default function Panel() { return null; }\n")
 
 
+def _write_panel_extension(folder: Path, *, name: str, panel_id: str, title: str) -> Path:
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "extension.toml").write_text(
+        "\n".join(
+            [
+                f'name = "{name}"',
+                "",
+                "[[panels]]",
+                f'id = "{panel_id}"',
+                f'title = "{title}"',
+                'position = "right"',
+                'file = "panel.js"',
+            ]
+        )
+    )
+    panel_file = folder / "panel.js"
+    _write_panel_module(panel_file, title)
+    return panel_file
+
+
 def test_discovers_project_local_extensions_from_nested_cwd(
     tmp_path: Path,
     monkeypatch,
@@ -238,18 +258,29 @@ def test_runtime_control_api_supports_checkpoint_jobs_panels_and_ui_state(
     assert len(dataset_payload["layouts"]) == 2
     assert dataset_payload["spaces"][0]["space_key"] != dataset_payload["spaces"][1]["space_key"]
 
-    right_panel_file = tmp_path / "label-histogram.js"
-    bottom_panel_file = tmp_path / "notes.js"
-    _write_panel_module(right_panel_file, "Label Histogram")
-    _write_panel_module(bottom_panel_file, "Checkpoint Notes")
+    right_panel_file = _write_panel_extension(
+        tmp_path / "label-histogram-ext",
+        name="label-histogram-ext",
+        panel_id="label-histogram",
+        title="Label Histogram",
+    )
+    _write_panel_extension(
+        tmp_path / "notes-ext",
+        name="notes-ext",
+        panel_id="notes",
+        title="Notes",
+    )
+    runtime.install_extension("default", tmp_path / "label-histogram-ext")
+    runtime.install_extension("default", tmp_path / "notes-ext")
 
     histogram_panel_response = client.post(
         "/api/control/ui/panels",
         json={
             "workspace_id": "default",
             "panel_id": "label-histogram",
-            "title": "Label Histogram",
-            "module_file": str(right_panel_file),
+            "kind": "extension",
+            "extension": "label-histogram-ext",
+            "extension_panel": "label-histogram",
             "position": "right",
         },
     )
@@ -260,8 +291,9 @@ def test_runtime_control_api_supports_checkpoint_jobs_panels_and_ui_state(
         json={
             "workspace_id": "default",
             "panel_id": "notes",
-            "title": "Notes",
-            "module_file": str(bottom_panel_file),
+            "kind": "extension",
+            "extension": "notes-ext",
+            "extension_panel": "notes",
             "position": "bottom",
         },
     )
@@ -309,6 +341,7 @@ def test_runtime_control_api_supports_checkpoint_jobs_panels_and_ui_state(
     assert runtime_payload["workspace"]["dataset_name"] == "runtime_control"
     assert runtime_payload["workspace"]["ui"]["active_layout_key"] == target_layout
     assert runtime_payload["workspace"]["ui"]["selected_ids"] == ["sample-1", "sample-3"]
+    assert runtime_payload["workspace"]["ui"]["view_revision"] > 0
     assert len(runtime_payload["workspace"]["ui"]["custom_panels"]) == 3
 
     histogram_panel = next(
@@ -329,11 +362,11 @@ def test_runtime_control_api_supports_checkpoint_jobs_panels_and_ui_state(
 
     assert histogram_panel["kind"] == "module"
     assert histogram_panel["data"]["module_src"].startswith(
-        "/api/panels/content/default/label-histogram/label-histogram.js"
+        "/api/panels/content/default/label-histogram/panel.js"
     )
     assert histogram_panel["module_file"] == str(right_panel_file.resolve())
     assert text_panel["data"]["module_src"].startswith(
-        "/api/panels/content/default/notes/notes.js"
+        "/api/panels/content/default/notes/panel.js"
     )
     assert scatter_panel["kind"] == "scatter"
     assert scatter_panel["layout_key"] == target_layout
@@ -380,6 +413,58 @@ def test_health_reports_package_version() -> None:
     assert response.json()["version"] == __version__
 
 
+def test_ui_similarity_query_is_explicit_and_cleared_with_selection() -> None:
+    dataset = _make_dataset()
+    ids = [sample.id for sample in dataset]
+    layout_key = dataset.set_coords(
+        "euclidean",
+        ids,
+        [[float(index), float(index % 2)] for index, _ in enumerate(ids)],
+    )
+    space_key = dataset.list_layouts()[0].space_key
+
+    runtime = HyperViewRuntime()
+    runtime.attach_dataset_instance("default", dataset)
+    client = TestClient(create_app(runtime=runtime))
+
+    response = client.post(
+        "/api/control/ui/similarity",
+        json={
+            "workspace_id": "default",
+            "sample_id": "sample-2",
+            "layout_key": layout_key,
+            "k": 12,
+            "source": "test",
+        },
+    )
+
+    assert response.status_code == 200
+    ui = response.json()["workspace"]["ui"]
+    assert ui["selected_ids"] == ["sample-2"]
+    assert ui["similarity_query"] == {
+        "anchor_sample_id": "sample-2",
+        "layout_key": layout_key,
+        "space_key": space_key,
+        "k": 12,
+        "source": "test",
+    }
+
+    selection_response = client.post(
+        "/api/control/ui/selection",
+        json={"workspace_id": "default", "sample_ids": ["sample-3"]},
+    )
+    assert selection_response.status_code == 200
+    assert selection_response.json()["workspace"]["ui"]["similarity_query"] is None
+
+    clear_response = client.request(
+        "DELETE",
+        "/api/control/ui/similarity",
+        json={"workspace_id": "default"},
+    )
+    assert clear_response.status_code == 200
+    assert clear_response.json()["workspace"]["ui"]["similarity_query"] is None
+
+
 def test_sample_responses_include_media_url_and_content_endpoint_serves_file(tmp_path: Path) -> None:
     image_path = tmp_path / "sample.png"
     Image.new("RGB", (12, 12), color=(32, 128, 224)).save(image_path)
@@ -408,6 +493,30 @@ def test_sample_responses_include_media_url_and_content_endpoint_serves_file(tmp
     assert content_response.headers["content-type"].startswith("image/png")
 
 
+def test_relative_sample_media_paths_are_normalized_at_ingestion(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    image_path = tmp_path / "relative.png"
+    Image.new("RGB", (12, 12), color=(224, 128, 32)).save(image_path)
+    monkeypatch.chdir(tmp_path)
+
+    dataset = Dataset("runtime_relative_media", persist=False)
+    sample = dataset.add_image("relative.png", label="orange", sample_id="sample-1")
+
+    assert Path(sample.filepath).is_absolute()
+    assert sample.filepath == str(image_path.resolve())
+
+    runtime = HyperViewRuntime()
+    runtime.attach_dataset_instance("default", dataset)
+    client = TestClient(create_app(runtime=runtime))
+
+    content_response = client.get("/api/samples/sample-1/content")
+
+    assert content_response.status_code == 200
+    assert content_response.headers["content-type"].startswith("image/png")
+
+
 def test_set_workspace_dataset_clears_dataset_scoped_ui_state(tmp_path: Path, monkeypatch) -> None:
     provider_registry_path = tmp_path / "providers.json"
     workspace_registry_path = tmp_path / "workspaces.json"
@@ -428,17 +537,71 @@ def test_set_workspace_dataset_clears_dataset_scoped_ui_state(tmp_path: Path, mo
     runtime.attach_dataset_instance("default", _make_dataset())
     runtime.set_active_layout("default", "layout-a")
     runtime.set_selection("default", ["sample-1", "sample-3"])
+    runtime.set_similarity_query(
+        "default",
+        runtime.resolve_similarity_query("default", "sample-1", source="test"),
+    )
 
     workspace = runtime.set_workspace_dataset("default", "second-dataset")
 
     assert workspace.dataset_name == "second-dataset"
     assert workspace.ui.active_layout_key is None
     assert workspace.ui.selected_ids == []
+    assert workspace.ui.similarity_query is None
 
     snapshot = runtime.snapshot()
     assert snapshot["workspace"]["dataset_name"] == "second-dataset"
     assert snapshot["workspace"]["ui"]["active_layout_key"] is None
     assert snapshot["workspace"]["ui"]["selected_ids"] == []
+    assert snapshot["workspace"]["ui"]["similarity_query"] is None
+
+
+def test_runtime_panel_module_src_changes_when_module_file_changes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    provider_registry_path = tmp_path / "providers.json"
+    workspace_registry_path = tmp_path / "workspaces.json"
+    panel_file = tmp_path / "catalog-panel.js"
+
+    monkeypatch.setattr(
+        "hyperview.runtime.get_provider_registry_path",
+        lambda: provider_registry_path,
+    )
+    monkeypatch.setattr(
+        "hyperview.runtime.get_workspace_registry_path",
+        lambda: workspace_registry_path,
+    )
+
+    runtime = HyperViewRuntime(
+        provider_registry=ProviderRegistry(provider_registry_path),
+        workspace_registry=WorkspaceRegistry(workspace_registry_path),
+    )
+    _write_panel_module(panel_file, "Initial Catalog Panel")
+    runtime.add_custom_panel(
+        "default",
+        CustomPanelSpec(
+            id="catalog-hierarchy-readout",
+            title="Catalog Hierarchy Readout",
+            module_file=str(panel_file),
+        ),
+    )
+
+    first_snapshot = runtime.snapshot()
+    first_panel = first_snapshot["workspace"]["ui"]["custom_panels"][0]
+    first_module_src = first_panel["data"]["module_src"]
+
+    assert first_panel["id"] == "catalog-hierarchy-readout"
+    assert "?hv_rev=" in first_module_src
+
+    _write_panel_module(panel_file, "Updated Catalog Panel")
+
+    second_snapshot = runtime.snapshot()
+    second_panel = second_snapshot["workspace"]["ui"]["custom_panels"][0]
+
+    assert second_panel["id"] == "catalog-hierarchy-readout"
+    assert second_panel["data"]["module_src"] != first_module_src
+    assert second_snapshot["version"] > first_snapshot["version"]
 
 
 def test_failed_extension_reinstall_preserves_previous_installation(
@@ -464,7 +627,7 @@ def test_failed_extension_reinstall_preserves_previous_installation(
 
     extension_dir = tmp_path / "demo-ext"
     _write_extension_files(extension_dir, panel_exists=True)
-    runtime.install_extension("default", extension_dir)
+    runtime.install_extension("default", extension_dir, add_panels=True)
 
     installed = runtime.get_extension("demo-ext")
     assert installed is not None
@@ -474,7 +637,7 @@ def test_failed_extension_reinstall_preserves_previous_installation(
     (extension_dir / "panel.js").unlink()
 
     try:
-        runtime.install_extension("default", extension_dir)
+        runtime.install_extension("default", extension_dir, add_panels=True)
     except FileNotFoundError:
         pass
     else:

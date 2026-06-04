@@ -114,6 +114,7 @@ export const SamplesImageGridPanel = React.memo(function SamplesImageGridPanel(
           selectionSamples={derivedSpace.selectionSamples}
           neighborSamples={derivedSpace.neighborSamples}
           neighborsMetric={derivedSpace.neighborsMetric}
+          neighborsSourceLabel={derivedSpace.neighborsSourceLabel}
           neighborsLoading={derivedSpace.neighborsLoading}
           hasMoreNeighbors={derivedSpace.hasMoreNeighbors}
           loadMoreNeighbors={derivedSpace.loadMoreNeighbors}

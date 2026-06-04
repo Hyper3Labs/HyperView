@@ -20,7 +20,12 @@ from hyperview.core.selection import (
     points_in_polygon,
     select_ids_for_3d_lasso,
 )
-from hyperview.runtime import CustomPanelSpec, HyperViewRuntime, LayoutViewState
+from hyperview.extensions import resolve_panel_source
+from hyperview.runtime import (
+    CustomPanelSpec,
+    HyperViewRuntime,
+    LayoutViewState,
+)
 from hyperview.storage.metrics import distance_metric_for_space
 from hyperview.storage.schema import parse_layout_dimension
 
@@ -85,6 +90,19 @@ class UiSelectionRequest(BaseModel):
     sample_ids: list[str]
 
 
+class UiSimilarityQueryRequest(BaseModel):
+    workspace_id: str
+    sample_id: str
+    layout_key: str | None = None
+    space_key: str | None = None
+    k: int = 18
+    source: str | None = None
+
+
+class UiSimilarityClearRequest(BaseModel):
+    workspace_id: str
+
+
 class UiLayoutViewRequest(BaseModel):
     workspace_id: str
     layout_key: str
@@ -94,18 +112,47 @@ class UiLayoutViewRequest(BaseModel):
 class UiPanelRequest(BaseModel):
     workspace_id: str
     panel_id: str
-    title: str
-    kind: Literal["module", "scatter"] = "module"
+    title: str | None = None
+    kind: Literal["extension", "scatter", "module"] = "extension"
+    extension: str | None = None
+    extension_panel: str | None = None
     module_file: str | None = None
     layout_key: str | None = None
     position: str = "right"
     reference_panel_id: str | None = None
     direction: str | None = None
+    props: dict[str, Any] | None = None
 
 
 class UiPanelRemoveRequest(BaseModel):
     workspace_id: str
     panel_id: str
+
+
+class SamplesQueryRequest(BaseModel):
+    workspace_id: str | None = None
+    ids: list[str] | None = None
+    labels: list[str | None] | None = None
+    metadata: dict[str, Any] | None = None
+    offset: int = 0
+    limit: int = 100
+    include_thumbnails: bool = True
+
+
+class SamplesSelectionQueryRequest(BaseModel):
+    workspace_id: str
+    ids: list[str] | None = None
+    labels: list[str | None] | None = None
+    metadata: dict[str, Any] | None = None
+    limit: int | None = None
+
+
+class SamplesAggregateRequest(BaseModel):
+    workspace_id: str | None = None
+    group_by: str = "label"
+    ids: list[str] | None = None
+    labels: list[str | None] | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class EmbeddingsComputeRequest(BaseModel):
@@ -144,6 +191,7 @@ class ToolRunRequest(BaseModel):
 class ExtensionInstallRequest(BaseModel):
     workspace_id: str
     folder: str
+    add_panels: bool = False
 
 
 class ExtensionRemoveRequest(BaseModel):
@@ -234,6 +282,29 @@ def serialize_sample_for_response(sample: Any, include_thumbnail: bool = True) -
         except Exception:
             payload["thumbnail"] = None
     return payload
+
+
+def _metadata_value(metadata: dict[str, Any], path: str) -> Any:
+    value: Any = metadata
+    for part in path.split("."):
+        if not isinstance(value, dict) or part not in value:
+            return None
+        value = value[part]
+    return value
+
+
+def _query_samples(ds: Dataset, request: SamplesQueryRequest | SamplesAggregateRequest) -> list[Any]:
+    samples = ds.get_samples_by_ids(request.ids) if request.ids is not None else ds.samples
+    if request.labels is not None:
+        wanted_labels = set(request.labels)
+        samples = [sample for sample in samples if sample.label in wanted_labels]
+    for key, expected in (request.metadata or {}).items():
+        samples = [
+            sample
+            for sample in samples
+            if _metadata_value(sample.metadata, key) == expected
+        ]
+    return samples
 
 
 def create_app(
@@ -507,6 +578,61 @@ def create_app(
         workspace = runtime_dep.set_selection(request.workspace_id, request.sample_ids)
         return {"workspace": workspace.to_dict()}
 
+    @app.post("/api/control/ui/selection/query")
+    async def set_ui_selection_query_endpoint(
+        request: SamplesSelectionQueryRequest,
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+    ):
+        try:
+            dataset = runtime_dep.get_dataset(workspace_id=request.workspace_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        query = SamplesQueryRequest(
+            workspace_id=request.workspace_id,
+            ids=request.ids,
+            labels=request.labels,
+            metadata=request.metadata,
+            offset=0,
+            limit=request.limit or 1,
+            include_thumbnails=False,
+        )
+        samples = _query_samples(dataset, query)
+        if request.limit is not None:
+            samples = samples[: max(0, request.limit)]
+        workspace = runtime_dep.set_selection(request.workspace_id, [sample.id for sample in samples])
+        return {"workspace": workspace.to_dict()}
+
+    @app.post("/api/control/ui/similarity")
+    async def set_ui_similarity_query_endpoint(
+        request: UiSimilarityQueryRequest,
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+    ):
+        try:
+            query = runtime_dep.resolve_similarity_query(
+                request.workspace_id,
+                request.sample_id,
+                layout_key=request.layout_key,
+                space_key=request.space_key,
+                k=request.k,
+                source=request.source,
+            )
+        except (KeyError, LookupError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        runtime_dep.set_selection(request.workspace_id, [request.sample_id])
+        workspace = runtime_dep.set_similarity_query(request.workspace_id, query)
+        return {"workspace": workspace.to_dict()}
+
+    @app.delete("/api/control/ui/similarity")
+    async def clear_ui_similarity_query_endpoint(
+        request: UiSimilarityClearRequest,
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+    ):
+        workspace = runtime_dep.set_similarity_query(request.workspace_id, None)
+        return {"workspace": workspace.to_dict()}
+
     @app.post("/api/control/ui/layout-view")
     async def set_ui_layout_view_endpoint(
         request: UiLayoutViewRequest,
@@ -536,12 +662,46 @@ def create_app(
         geometry: str | None = None
         layout_dimension: int | None = None
 
+        title = request.title
+
         if request.kind == "module":
-            if not request.module_file:
-                raise HTTPException(status_code=400, detail="module_file is required for module panels")
-            module_file = Path(request.module_file).expanduser().resolve()
-            if not module_file.exists() or not module_file.is_file():
-                raise HTTPException(status_code=400, detail=f"Panel module file not found: {module_file}")
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Direct module panels are no longer a public API. "
+                    "Package custom panel modules as extensions and add them with kind='extension'."
+                ),
+            )
+
+        if request.kind == "extension":
+            if not request.extension:
+                raise HTTPException(status_code=400, detail="extension is required for extension panels")
+            if not request.extension_panel:
+                raise HTTPException(status_code=400, detail="extension_panel is required for extension panels")
+            installation = runtime_dep.get_extension(request.extension)
+            if installation is None:
+                raise HTTPException(status_code=404, detail=f"Extension not found: {request.extension}")
+            manifest_panel = next(
+                (
+                    panel
+                    for panel in installation.manifest.panels
+                    if panel.id == request.extension_panel
+                ),
+                None,
+            )
+            if manifest_panel is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f"Extension panel not found: "
+                        f"{request.extension}/{request.extension_panel}"
+                    ),
+                )
+            module_file = resolve_panel_source(
+                installation.manifest.folder,
+                manifest_panel.file,
+            )
+            title = title or manifest_panel.title
         else:
             if not request.layout_key:
                 raise HTTPException(status_code=400, detail="layout_key is required for scatter panels")
@@ -555,11 +715,15 @@ def create_app(
             layout_key = layout_info.layout_key
             geometry = layout_info.geometry
             layout_dimension = parse_layout_dimension(layout_info.layout_key)
+            if not title:
+                raise HTTPException(status_code=400, detail="title is required for scatter panels")
 
         panel = CustomPanelSpec(
             id=request.panel_id,
-            title=request.title,
-            kind=request.kind,
+            title=title or request.panel_id,
+            kind="module" if request.kind == "extension" else "scatter",
+            extension=request.extension if request.kind == "extension" else None,
+            extension_panel=request.extension_panel if request.kind == "extension" else None,
             module_file=str(module_file) if module_file is not None else None,
             position=request.position,  # type: ignore[arg-type]
             layout_key=layout_key,
@@ -567,6 +731,7 @@ def create_app(
             layout_dimension=layout_dimension,
             reference_panel_id=request.reference_panel_id,
             direction=request.direction,  # type: ignore[arg-type]
+            props=dict(request.props or {}),
         )
         workspace = runtime_dep.add_custom_panel(request.workspace_id, panel)
         return {"workspace": workspace.to_dict()}
@@ -622,7 +787,11 @@ def create_app(
         if not folder.exists() or not folder.is_dir():
             raise HTTPException(status_code=400, detail=f"Extension folder not found: {folder}")
         try:
-            installation = runtime_dep.install_extension(request.workspace_id, folder)
+            installation = runtime_dep.install_extension(
+                request.workspace_id,
+                folder,
+                add_panels=request.add_panels,
+            )
         except (FileNotFoundError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"extension": installation.to_dict()}
@@ -703,6 +872,58 @@ def create_app(
         return {
             "samples": [serialize_sample_for_response(s, include_thumbnail=True) for s in samples]
         }
+
+    @app.post("/api/samples/query")
+    async def query_samples(
+        request: SamplesQueryRequest,
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+    ):
+        """Query samples with simple label, id, and metadata predicates."""
+        try:
+            ds = runtime_dep.get_dataset(workspace_id=request.workspace_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        offset = max(0, request.offset)
+        limit = max(1, request.limit)
+        matches = _query_samples(ds, request)
+        page = matches[offset : offset + limit]
+        return {
+            "total": len(matches),
+            "offset": offset,
+            "limit": limit,
+            "samples": [
+                serialize_sample_for_response(s, include_thumbnail=request.include_thumbnails)
+                for s in page
+            ],
+        }
+
+    @app.post("/api/samples/aggregate")
+    async def aggregate_samples(
+        request: SamplesAggregateRequest,
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+    ):
+        """Aggregate sample counts by label or metadata.<key>."""
+        try:
+            ds = runtime_dep.get_dataset(workspace_id=request.workspace_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        samples = _query_samples(ds, request)
+        counts: dict[str, int] = {}
+        for sample in samples:
+            if request.group_by == "label":
+                raw_value = sample.label
+            elif request.group_by.startswith("metadata."):
+                raw_value = _metadata_value(sample.metadata, request.group_by.removeprefix("metadata."))
+            else:
+                raise HTTPException(status_code=400, detail="group_by must be 'label' or 'metadata.<key>'")
+            key = "unlabeled" if raw_value is None else str(raw_value)
+            counts[key] = counts.get(key, 0) + 1
+
+        groups = [
+            {"key": key, "count": count}
+            for key, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        ]
+        return {"total": len(samples), "group_by": request.group_by, "groups": groups}
 
     @app.get("/api/embeddings", response_model=EmbeddingsResponse)
     async def get_embeddings(ds: Dataset = Depends(get_dataset), layout_key: str | None = None):
@@ -925,9 +1146,21 @@ def create_app(
         ds: Dataset = Depends(get_dataset),
         k: int = Query(10, ge=1, le=100),
         space_key: str | None = None,
+        layout_key: str | None = None,
     ):
         """Return k nearest neighbors for a given sample."""
         resolved_space_key = space_key
+        if layout_key is not None:
+            layout = next((item for item in ds.list_layouts() if item.layout_key == layout_key), None)
+            if layout is None:
+                raise HTTPException(status_code=404, detail=f"Layout not found: {layout_key}")
+            if resolved_space_key is not None and resolved_space_key != layout.space_key:
+                raise HTTPException(
+                    status_code=400,
+                    detail="space_key does not match the requested layout_key",
+                )
+            resolved_space_key = layout.space_key
+
         spaces = ds.list_spaces()
         if resolved_space_key is None:
             if not spaces:

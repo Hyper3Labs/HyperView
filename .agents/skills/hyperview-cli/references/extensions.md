@@ -1,12 +1,17 @@
-# Plugins
+# Extensions
 
-Use this guide when creating a HyperView plugin that includes backend Python tools and a frontend panel.
+Use this guide when creating a HyperView extension that includes backend Python tools and a frontend panel.
 
 ## Model
 
-A plugin is a local extension folder with an `extension.toml` manifest. One folder can register Python tools, native panel modules, or both.
+An extension is a local folder with an `extension.toml` manifest. One folder can register Python tools, panel modules, or both.
 
-Preferred shape for agent-authored, project-versioned plugins:
+Extensions define reusable capabilities. They should not encode a whole workspace
+layout or know about sibling panels. Compose concrete demo/workspace layouts
+from Python with `hv.ui.View(...)` and `session.ui.apply_view(...)`, or from
+the CLI with `hyperview ui panel add --extension ...`.
+
+Preferred shape for agent-authored, project-versioned extensions:
 
 ```text
 .hyperview/extensions/selection-profile/
@@ -36,6 +41,10 @@ file = "panel.jsx"
 ```
 
 Valid panel positions are `right`, `bottom`, and `center`.
+
+Treat `position` as a weak default for where the panel usually belongs. Cross-panel
+relationships such as "this scatter is right of that scatter" belong to the
+workspace view/composition layer, not the extension manifest.
 
 ## Backend Tools
 
@@ -69,13 +78,13 @@ def summarize_selection(ctx: RunContext, *, sample_ids: list[str] | None = None)
     }
 ```
 
-Use `ctx.dataset` for active dataset reads, `ctx.workspace` for workspace UI state, `ctx.extension_storage` for per-plugin writable files, `ctx.url_for(path)` for renderable artifact URLs, and `ctx.submit_job(...)` for long-running work.
+Use `ctx.dataset` for active dataset reads, `ctx.workspace` for workspace UI state, `ctx.extension_storage` for per-extension writable files, `ctx.url_for(path)` for renderable artifact URLs, and `ctx.submit_job(...)` for long-running work.
 
 ### RunContext and Sample shapes
 
 - `ctx.dataset` &mdash; the active `Dataset`. Iterate samples with `for s in ctx.dataset.samples:` (returns `list[Sample]`). Look up by id with `ctx.dataset.get_samples_by_ids(ids)`.
 - `ctx.workspace.ui.selected_ids` &mdash; current selection (`list[str]`).
-- `ctx.extension_storage` &mdash; `pathlib.Path` to a writable per-plugin folder.
+- `ctx.extension_storage` &mdash; `pathlib.Path` to a writable per-extension folder.
 - `ctx.url_for(path)` &mdash; returns a fetchable URL for a file under `extension_storage`.
 - `ctx.submit_job(...)` &mdash; schedule long-running work; returns a job handle.
 
@@ -123,9 +132,22 @@ export default function SelectionProfilePanel() {
 }
 ```
 
-Available SDK hooks include `usePanelRuntimeState`, `usePanelDatasetInfo`, `usePanelSamplesView`, `usePanelSelection`, `usePanelCommands`, `usePanelUiState`, `usePanelClient`, and `useTool`.
+Available SDK hooks include `usePanelRuntimeState`, `usePanelHostState`, `usePanelDatasetInfo`, `usePanelSamplesView`, `usePanelSelectedSamples`, `usePanelSelection`, `usePanelHover`, `usePanelLayouts`, `usePanelLayoutView`, `usePanelCommands`, `usePanelUiState`, `usePanelClient`, and `useTool`.
 
-`useTool(uri)` returns `{ run, result, loading, error, reset }`. Call `run(params)` to invoke the tool; `result` holds the last successful return value, `loading` is true while a call is in flight, and `error` is the last failure message (or `null`). See [native-panels.md](native-panels.md#hook-return-shapes) for the full hook return shape table.
+For dataset-wide panel behavior, prefer `usePanelClient().querySamples(...)`,
+`aggregateSamples(...)`, `selectSamples(...)`, `getSamplesByIds(...)`,
+`searchSimilar(...)`, or a backend tool over scanning a fixed
+`listSamples({ limit: ... })` page or hand-building API URLs in the browser.
+
+Use `usePanelHostState()` for low-level synchronized host state instead of
+importing frontend internals. Use narrower hooks such as `usePanelSelection()`,
+`usePanelSelectedSamples()`, `usePanelHover()`, `usePanelLayouts()`, and
+`usePanelLayoutView()` when the panel only needs one part of that state. Use
+`usePanelCommands()` for host writes. Selection and active-layout changes
+persist to runtime UI state by default; pass `{ persist: false }` only for
+local transient UI changes.
+
+`useTool(uri)` returns `{ run, result, loading, error, reset }`. Call `run(params)` to invoke the tool; `result` holds the last successful return value, `loading` is true while a call is in flight, and `error` is the last failure message (or `null`). See [panel-modules.md](panel-modules.md#hook-return-shapes) for the full hook return shape table.
 
 ## CLI Workflow
 
@@ -135,11 +157,24 @@ Start a runtime for an existing workspace and dataset:
 hyperview serve --workspace research --dataset cifar10_demo --no-browser
 ```
 
-If the plugin already exists under `.hyperview/extensions/`, starting `hyperview serve` attaches it automatically. For a server that is already running, install or reload the plugin explicitly:
+If the extension already exists under `.hyperview/extensions/`, starting `hyperview serve` registers it automatically. For a server that is already running, install or reload the extension explicitly:
 
 ```bash
 hyperview extension add .hyperview/extensions/selection-profile \
   --workspace research \
+  --json
+```
+
+Installing an extension registers its tools and panel definitions. To instantiate
+a panel from the CLI, add an extension-backed panel instance:
+
+```bash
+hyperview ui panel add \
+  --workspace research \
+  --panel-id selection-profile \
+  --extension selection-profile \
+  --extension-panel selection-profile \
+  --position right \
   --json
 ```
 
@@ -166,11 +201,34 @@ Reload after editing files:
 hyperview extension reload selection-profile --json
 ```
 
+Compose a demo view from Python instead of importing runtime internals:
+
+```python
+import hyperview as hv
+
+view = hv.ui.View(
+    hv.ui.Horizontal(
+        hv.ui.Scatter("clip-map", title="CLIP", layout_key=clip_layout),
+        hv.ui.Scatter("hycoclip-map", title="HyCoCLIP", layout_key=hycoclip_layout),
+    ),
+    hv.ui.ExtensionPanel(
+        "readout",
+        extension="catalog-readout",
+        panel="readout",
+        position="right",
+    ),
+)
+
+session = hv.launch(dataset, block=False)
+session.ui.add_extension(".hyperview/extensions/catalog-readout")
+session.ui.apply_view(view)
+```
+
 ## Verification
 
-A good plugin smoke test proves all of these paths:
+A good extension smoke test proves all of these paths:
 
-- `extension add` returns the plugin with expected tools and panels.
+- `extension add` returns the extension with expected tools and panel definitions.
 - `GET /api/tools` (or `hyperview tools list --json`) includes the tool URI.
 - `hyperview tools run ...` returns data from the active dataset.
 - Tool-generated files under `ctx.extension_storage` are fetchable from URLs returned by `ctx.url_for(...)`.
@@ -180,7 +238,7 @@ A good plugin smoke test proves all of these paths:
 
 ## Constraints
 
-- Treat plugins as trusted local code. Python tools are imported and executed in the HyperView runtime process.
+- Treat extensions as trusted local code. Python tools are imported and executed in the HyperView runtime process.
 - Do not use bare npm imports in panel modules unless you bundle first.
-- Keep plugin source outside `frontend/src`; the runtime loads it from local files.
-- Keep plugin examples small and high-level. Avoid private HyperView APIs in user-facing examples.
+- Keep extension source outside `frontend/src`; the runtime loads panel modules from local extension files.
+- Keep extension examples small and high-level. Avoid private HyperView APIs in user-facing examples.

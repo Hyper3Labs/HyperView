@@ -1,7 +1,8 @@
 "use client";
 
-import type { HTMLAttributes } from "react";
+import { useEffect, useMemo, useState, type HTMLAttributes } from "react";
 
+import { backendUrl } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { Sample } from "@/types";
 
@@ -30,25 +31,36 @@ export function SampleTile({
   className,
   ...props
 }: SampleTileProps) {
+  const mediaSrc = useMemo(() => {
+    if (sample.thumbnail) return `data:image/jpeg;base64,${sample.thumbnail}`;
+    return backendUrl(sample.media_url);
+  }, [sample.media_url, sample.thumbnail]);
+  const [imageFailed, setImageFailed] = useState(false);
+  const showImage = Boolean(mediaSrc) && !imageFailed;
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [mediaSrc]);
+
   return (
     <div
       data-sample-id={sample.id}
       className={cn(
         "group relative overflow-hidden bg-muted/30",
-        selected && "ring-2 ring-inset ring-primary",
         hovered && !selected && "ring-2 ring-inset ring-primary/60",
         related && !selected && !hovered && "ring-1 ring-inset ring-primary/35",
         className
       )}
       {...props}
     >
-      {sample.thumbnail ? (
+      {showImage ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
-          src={`data:image/jpeg;base64,${sample.thumbnail}`}
+          src={mediaSrc ?? undefined}
           alt={sample.filename}
-          className="h-full w-full object-cover"
+          className="block h-full w-full object-contain"
           loading="lazy"
+          onError={() => setImageFailed(true)}
         />
       ) : (
         <div className="flex h-full w-full items-center justify-center bg-muted">
@@ -58,7 +70,10 @@ export function SampleTile({
 
       {metricBadge && (
         <div
-          className="absolute right-1 top-1 z-[1] rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm"
+          className={cn(
+            "absolute right-1 z-[1] rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm",
+            selected && showSelectionBadge ? "top-7" : "top-1"
+          )}
           title={metricBadgeTitle ?? metricBadge}
         >
           {metricBadge}
@@ -77,7 +92,7 @@ export function SampleTile({
       )}
 
       {showSelectionBadge && selected && (
-        <div className="absolute right-1 top-1 z-[1] flex h-4 w-4 items-center justify-center rounded-full bg-primary text-primary-foreground">
+        <div className="absolute right-1 top-1 z-[2] flex h-5 w-5 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm ring-1 ring-background/70">
           <CheckIcon />
         </div>
       )}

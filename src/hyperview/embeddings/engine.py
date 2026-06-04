@@ -319,8 +319,17 @@ class EmbeddingEngine:
 
         if hasattr(func, "geometry"):
             config["geometry"] = func.geometry
+        geometry_params = dict(
+            getattr(func, "params", None)
+            or getattr(func, "geometry_params", None)
+            or getattr(func, "space_params", None)
+            or {}
+        )
         if hasattr(func, "curvature") and func.curvature is not None:
-            config["curvature"] = func.curvature
+            geometry_params.setdefault("curvature", func.curvature)
+        if geometry_params:
+            config["params"] = geometry_params
+            config["params_source"] = {name: "provider" for name in geometry_params}
 
         if config.get("geometry") == "hyperboloid":
             config["spatial_dim"] = dim - 1

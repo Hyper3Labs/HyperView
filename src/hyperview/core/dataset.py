@@ -46,6 +46,24 @@ def _format_eta(seconds: float) -> str:
     return _format_elapsed(seconds)
 
 
+def _normalize_local_filepath(filepath: str) -> str:
+    """Resolve local relative paths at ingestion time."""
+    if "://" in filepath:
+        return filepath
+
+    path = Path(filepath).expanduser()
+    if path.is_absolute():
+        return str(path)
+    return str(path.resolve())
+
+
+def _normalize_sample_filepath(sample: Sample) -> Sample:
+    normalized = _normalize_local_filepath(sample.filepath)
+    if normalized == sample.filepath:
+        return sample
+    return sample.model_copy(update={"filepath": normalized})
+
+
 def parse_visualization_layout(layout: str) -> tuple[str, int]:
     """Parse a public visualization layout spec like ``euclidean:3d``.
 
@@ -132,7 +150,7 @@ class Dataset:
 
     def add_sample(self, sample: Sample) -> None:
         """Add a sample to the dataset (idempotent)."""
-        self._storage.add_sample(sample)
+        self._storage.add_sample(_normalize_sample_filepath(sample))
 
     def _ingest_samples(
         self,
@@ -142,6 +160,7 @@ class Dataset:
     ) -> tuple[int, int]:
         """Shared ingestion helper for batch sample insertion."""
         self.last_requested_sample_ids = [sample.id for sample in samples]
+        samples = [_normalize_sample_filepath(sample) for sample in samples]
 
         if not samples:
             return 0, 0
@@ -169,6 +188,7 @@ class Dataset:
         sample_id: str | None = None,
     ) -> Sample:
         """Add a single image to the dataset."""
+        filepath = _normalize_local_filepath(filepath)
         if sample_id is None:
             sample_id = hashlib.md5(filepath.encode()).hexdigest()[:12]
 

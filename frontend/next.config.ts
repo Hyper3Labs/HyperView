@@ -1,23 +1,16 @@
 import type { NextConfig } from "next";
 import path from "path";
 
+const isDev = process.env.NODE_ENV === "development";
+
 const nextConfig: NextConfig = {
-  output: "export",
-  trailingSlash: true,
+  ...(!isDev ? { output: "export" as const, trailingSlash: true } : {}),
+  ...(isDev ? { skipTrailingSlashRedirect: true } : {}),
   // Needed for Turbopack to resolve local linked/file dependencies in a monorepo.
   outputFileTracingRoot: path.join(__dirname, ".."),
   transpilePackages: ["hyper-scatter"],
   images: {
     unoptimized: true,
-  },
-  // Proxy API calls to backend during development
-  async rewrites() {
-    return [
-      {
-        source: "/api/:path*",
-        destination: "http://127.0.0.1:6262/api/:path*",
-      },
-    ];
   },
 };
 

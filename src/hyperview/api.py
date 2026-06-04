@@ -6,14 +6,17 @@ import socket
 import threading
 import time
 import webbrowser
+from collections.abc import Iterable
 from dataclasses import dataclass
 from importlib.util import find_spec
+from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
 import uvicorn
 
+import hyperview.ui as ui_module
 from hyperview.core.dataset import Dataset
 from hyperview.runtime import HyperViewRuntime
 from hyperview.server.app import create_app, set_runtime
@@ -78,11 +81,13 @@ class Session:
         host: str,
         port: int,
         dataset: Dataset | None = None,
+        controls_runtime: bool = True,
     ):
         self.runtime = runtime
         self.dataset = dataset
         self.host = host
         self.port = port
+        self._controls_runtime = controls_runtime
         # Prefer a browser-connectable host for user-facing URLs.
         # When binding to 0.0.0.0, users should connect via 127.0.0.1 locally.
         self.url = f"http://{self._connect_host}:{port}"
@@ -90,6 +95,7 @@ class Session:
         self._server: uvicorn.Server | None = None
         self._startup_error: BaseException | None = None
         self.session_id = uuid4().hex
+        self.ui = SessionUiController(self)
 
     @property
     def _connect_host(self) -> str:
@@ -183,6 +189,26 @@ class Session:
         if self._server:
             self._server.should_exit = True
 
+    def join(self, timeout: float | None = None) -> None:
+        """Wait for the background server thread to exit."""
+
+        if self._server_thread is not None:
+            self._server_thread.join(timeout=timeout)
+
+    def wait(self, poll_interval: float = 0.25) -> None:
+        """Keep the session alive until interrupted or the server exits."""
+
+        try:
+            while True:
+                time.sleep(poll_interval)
+                if self._server_thread is not None and not self._server_thread.is_alive():
+                    raise RuntimeError("HyperView server stopped unexpectedly.")
+        except KeyboardInterrupt:
+            pass
+        finally:
+            self.stop()
+            self.join(timeout=2.0)
+
     def show(self, height: int = 800):
         """Display the visualizer in a notebook.
 
@@ -237,6 +263,132 @@ class Session:
         webbrowser.open(self.url)
 
 
+class SessionUiController:
+    """Public UI control surface for a HyperView session."""
+
+    def __init__(self, session: Session):
+        self._session = session
+
+    def _runtime(self) -> HyperViewRuntime:
+        if not self._session._controls_runtime:
+            raise RuntimeError(
+                "This session is attached to an existing HyperView server. "
+                "session.ui can only mutate sessions started by this process; "
+                "use the control-plane CLI/API or launch with reuse_server=False."
+            )
+        return self._session.runtime
+
+    def apply_view(self, view: ui_module.View, *, workspace_id: str = "default") -> None:
+        """Apply a Rerun-style view composition to a workspace."""
+
+        view.apply(self._runtime(), workspace_id)
+
+    def add_scatter(
+        self,
+        *,
+        panel_id: str,
+        title: str,
+        layout_key: str,
+        workspace_id: str = "default",
+        position: ui_module.PanelPosition = "center",
+        reference_panel_id: str | None = None,
+        direction: ui_module.PanelDirection | None = None,
+        geometry: str | None = None,
+        layout_dimension: int | None = None,
+        props: dict[str, object] | None = None,
+    ) -> None:
+        """Add a scatter panel pinned to an explicit layout."""
+
+        panel = ui_module.Scatter(
+            id=panel_id,
+            title=title,
+            layout_key=layout_key,
+            position=position,
+            reference_panel_id=reference_panel_id,
+            direction=direction,
+            geometry=geometry,
+            layout_dimension=layout_dimension,
+            props=dict(props or {}),
+        )
+        runtime = self._runtime()
+        runtime.add_custom_panel(
+            workspace_id,
+            ui_module.compile_view(ui_module.View(panel, clear_existing=False), runtime=runtime)[0],
+        )
+
+    def remove_panel(self, panel_id: str, *, workspace_id: str = "default") -> None:
+        self._runtime().remove_custom_panel(workspace_id, panel_id)
+
+    def set_active_layout(
+        self,
+        layout_key: str | None,
+        *,
+        workspace_id: str = "default",
+    ) -> None:
+        """Set the workspace's active layout."""
+
+        self._runtime().set_active_layout(workspace_id, layout_key)
+
+    def set_selection(
+        self,
+        sample_ids: Iterable[str],
+        *,
+        workspace_id: str = "default",
+    ) -> None:
+        """Set the workspace's selected sample ids."""
+
+        self._runtime().set_selection(workspace_id, list(sample_ids))
+
+    def show_similar(
+        self,
+        sample_id: str,
+        *,
+        workspace_id: str = "default",
+        layout_key: str | None = None,
+        space_key: str | None = None,
+        k: int = 18,
+        source: str = "python",
+    ) -> None:
+        """Set the workspace's active similarity query and select its anchor."""
+
+        runtime = self._runtime()
+        query = runtime.resolve_similarity_query(
+            workspace_id,
+            sample_id,
+            layout_key=layout_key,
+            space_key=space_key,
+            k=k,
+            source=source,
+        )
+        runtime.set_selection(workspace_id, [sample_id])
+        runtime.set_similarity_query(workspace_id, query)
+
+    def clear_similarity(self, *, workspace_id: str = "default") -> None:
+        """Clear the workspace's active similarity query."""
+
+        self._runtime().set_similarity_query(workspace_id, None)
+
+    def add_extension(
+        self,
+        folder: str | os.PathLike[str],
+        *,
+        workspace_id: str = "default",
+        add_panels: bool = False,
+    ):
+        """Register an extension folder with the current runtime.
+
+        By default this registers extension tools and panel definitions without
+        instantiating manifest panels. Concrete panel placement belongs in a
+        workspace view, usually with ``hv.ui.ExtensionPanel(...)``.
+        """
+
+        return self._runtime().install_extension(
+            workspace_id,
+            Path(folder),
+            add_panels=add_panels,
+        )
+
+
 def launch(
     dataset: Dataset,
     port: int = 6262,
@@ -245,6 +397,9 @@ def launch(
     notebook: bool | None = None,
     height: int = 800,
     reuse_server: bool = False,
+    view: ui_module.View | None = None,
+    block: bool = True,
+    workspace_id: str = "default",
 ) -> Session:
     """Launch the HyperView visualization server.
 
@@ -264,6 +419,10 @@ def launch(
             attach to the existing server instead of starting a new one. For safety,
             this will only attach when the existing server reports the same dataset
             name (via `/__hyperview__/health`).
+        view: Optional UI view composition to apply before opening the app.
+        block: If True in script mode, keep the server alive until interrupted.
+            Set to False when the caller wants to manage the returned session.
+        workspace_id: Workspace id to attach the dataset to.
 
     Returns:
         A Session object.
@@ -310,9 +469,15 @@ def launch(
                     "choose a different port."
                 )
 
+            if view is not None:
+                raise RuntimeError(
+                    "Cannot apply a launch view while reuse_server=True because the "
+                    "existing server owns the runtime state. Use reuse_server=False "
+                    "or apply the view through the control-plane API."
+                )
             runtime = HyperViewRuntime()
-            runtime.attach_dataset_instance("default", dataset, activate_workspace=True)
-            session = Session(runtime, host, port, dataset)
+            runtime.attach_dataset_instance(workspace_id, dataset, activate_workspace=True)
+            session = Session(runtime, host, port, dataset, controls_runtime=False)
             if health.session_id is not None:
                 session.session_id = health.session_id
 
@@ -363,8 +528,10 @@ def launch(
         )
 
     runtime = HyperViewRuntime()
-    runtime.attach_dataset_instance("default", dataset, activate_workspace=True)
+    runtime.attach_dataset_instance(workspace_id, dataset, activate_workspace=True)
     session = Session(runtime, host, port, dataset)
+    if view is not None:
+        session.ui.apply_view(view, workspace_id=workspace_id)
 
     if notebook:
         session.start(background=True)
@@ -384,18 +551,8 @@ def launch(
         if open_browser:
             session.open_browser()
 
-        try:
-            while True:
-                # Keep the main thread alive so the daemon server thread can run.
-                time.sleep(0.25)
-                if session._server_thread is not None and not session._server_thread.is_alive():
-                    raise RuntimeError("HyperView server stopped unexpectedly.")
-        except KeyboardInterrupt:
-            pass
-        finally:
-            session.stop()
-            if session._server_thread is not None:
-                session._server_thread.join(timeout=2.0)
+        if block:
+            session.wait()
 
     return session
 

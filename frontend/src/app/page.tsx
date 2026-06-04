@@ -2,10 +2,11 @@
 
 import { Header } from "@/components/Header";
 import { DockviewProvider, DockviewWorkspace } from "@/components/DockviewWorkspace";
+import { Button } from "@/components/ui/button";
 import { useHomeData } from "./useHomeData";
 
 export default function Home() {
-  const { samplesView, error, isLoading } = useHomeData();
+  const { samplesView, error, isLoading, retry } = useHomeData();
 
   if (error) {
     return (
@@ -18,6 +19,9 @@ export default function Home() {
             <p className="text-muted-foreground mt-4 text-sm">
               Make sure the HyperView backend is running on port 6262.
             </p>
+            <Button className="mt-4" onClick={retry}>
+              Retry
+            </Button>
           </div>
         </div>
       </div>

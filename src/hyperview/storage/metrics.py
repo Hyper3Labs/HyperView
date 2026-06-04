@@ -6,9 +6,27 @@ from typing import Any, Literal
 
 import numpy as np
 
+from hyperview.storage.geometry import (
+    explicit_geometry_params,
+    infer_hyperboloid_curvature,
+    resolve_geometry,
+)
+
 EmbeddingDistanceMetric = Literal["cosine", "hyperboloid"]
 
+__all__ = [
+    "EmbeddingDistanceMetric",
+    "configured_curvature_for_space",
+    "curvature_for_space",
+    "distance_metric_for_space",
+    "hyperboloid_dot_query",
+    "infer_hyperboloid_curvature",
+    "pairwise_embedding_distances",
+    "resolve_hyperboloid_curvature",
+]
+
 _EPS = 1e-12
+_DEFAULT_CURVATURE = 1.0
 
 
 def distance_metric_for_space(space: Any) -> EmbeddingDistanceMetric:
@@ -23,8 +41,18 @@ def distance_metric_for_space(space: Any) -> EmbeddingDistanceMetric:
 def curvature_for_space(space: Any) -> float:
     """Return the positive curvature parameter c for sectional curvature -c."""
 
-    config = getattr(space, "config", None) or {}
-    raw_curvature = config.get("curvature", 1.0)
+    configured = configured_curvature_for_space(space)
+    return _DEFAULT_CURVATURE if configured is None else configured
+
+
+def configured_curvature_for_space(space: Any) -> float | None:
+    """Return an explicitly configured curvature, if the space declares one."""
+
+    params, _sources = explicit_geometry_params(space)
+    if "curvature" not in params:
+        return None
+
+    raw_curvature = params["curvature"]
     try:
         curvature = float(raw_curvature)
     except (TypeError, ValueError) as exc:
@@ -32,6 +60,15 @@ def curvature_for_space(space: Any) -> float:
     if not np.isfinite(curvature) or curvature <= 0:
         raise ValueError(f"curvature must be > 0, got {curvature}")
     return curvature
+
+
+def resolve_hyperboloid_curvature(
+    space: Any,
+    vectors: list[float] | np.ndarray,
+) -> float:
+    """Use configured curvature when present, otherwise infer it from vectors."""
+
+    return resolve_geometry(space, vectors).require_float("curvature")
 
 
 def pairwise_embedding_distances(

@@ -14,6 +14,7 @@ interface SampleDerivedSpaceProps {
   selectionSamples: Sample[];
   neighborSamples: Sample[];
   neighborsMetric: string | null;
+  neighborsSourceLabel: string | null;
   neighborsLoading: boolean;
   hasMoreNeighbors: boolean;
   loadMoreNeighbors?: () => void;
@@ -38,6 +39,7 @@ export function SampleDerivedSpace({
   selectionSamples,
   neighborSamples,
   neighborsMetric,
+  neighborsSourceLabel,
   neighborsLoading,
   hasMoreNeighbors,
   loadMoreNeighbors,
@@ -50,6 +52,18 @@ export function SampleDerivedSpace({
     neighborSamples.length > 0 || neighborsLoading || neighborsError !== null;
   const distanceMetricLabel = getDistanceMetricLabel(neighborsMetric);
 
+  if (selectionSamples.length > 1 && !showNeighbors) {
+    return (
+      <div className="flex min-h-0 flex-1">
+        <SampleGridView
+          samples={selectionSamples}
+          scrollResetKey={neighborsScrollResetKey}
+          className="w-full"
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-1 min-h-0 flex-col">
       <div className="shrink-0">
@@ -59,7 +73,7 @@ export function SampleDerivedSpace({
               key={sample.id}
               type="button"
               className="shrink-0"
-              style={{ width: getAnchorTileWidth(sample) }}
+              style={{ width: getAnchorTileWidth(sample), maxWidth: "100%" }}
               onClick={() => useStore.getState().setSelectedIds(new Set([sample.id]), "grid")}
             >
               <SampleTile
@@ -80,6 +94,7 @@ export function SampleDerivedSpace({
           <div className="h-6 min-h-[24px] border-y border-border bg-secondary/20 px-2 flex items-center">
             <span className="text-[11px] leading-4 text-muted-foreground">
               Nearest neighbors{distanceMetricLabel ? ` · ${distanceMetricLabel}` : ""}
+              {neighborsSourceLabel ? ` · ${neighborsSourceLabel}` : ""}
             </span>
           </div>
           <div className="flex min-h-0 flex-1 w-full overflow-hidden">

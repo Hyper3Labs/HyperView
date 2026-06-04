@@ -67,6 +67,14 @@ export interface SimilaritySearchResponse {
   results: SimilarSample[];
 }
 
+export interface SimilarityQuery {
+  anchor_sample_id: string;
+  layout_key: string | null;
+  space_key: string | null;
+  k: number;
+  source: string | null;
+}
+
 export interface RuntimePanelData {
   module_src: string | null;
 }
@@ -82,12 +90,15 @@ export interface RuntimePanel {
   kind: RuntimePanelKind;
   title: string;
   position: RuntimePanelPosition;
+  extension: string | null;
+  extension_panel: string | null;
   module_file: string | null;
   layout_key: string | null;
   geometry: Geometry | string | null;
   layout_dimension: number | null;
   reference_panel_id: string | null;
   direction: RuntimePanelDirection | null;
+  props: Record<string, unknown>;
   data: RuntimePanelData;
 }
 
@@ -102,6 +113,7 @@ export interface RuntimeWorkspaceState {
   ui: {
     active_layout_key: string | null;
     selected_ids: string[];
+    similarity_query: SimilarityQuery | null;
     layout_views: Record<
       string,
       {
@@ -117,6 +129,7 @@ export interface RuntimeWorkspaceState {
       }
     >;
     custom_panels: RuntimePanel[];
+    view_revision: number;
   };
 }
 

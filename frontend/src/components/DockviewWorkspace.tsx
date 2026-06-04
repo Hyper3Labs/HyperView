@@ -17,7 +17,7 @@ import {
   type IWatermarkPanelProps,
   themeAbyss,
 } from "dockview";
-import { Columns2 } from "lucide-react";
+import { Columns2, X } from "lucide-react";
 
 import { addRuntimePanel, removeRuntimePanel } from "@/lib/api";
 import type { SamplesViewModel } from "@/lib/sampleCollections";
@@ -49,6 +49,7 @@ const MIN_SIDE_PANEL_WIDTH = 120;
 const MIN_BOTTOM_PANEL_HEIGHT = 150;
 const RUNTIME_PANEL_PREFIX = "runtime-panel:";
 const OPEN_COPY_TITLE = "Open copy to the right";
+const CLOSE_PANEL_TITLE = "Close panel";
 
 const NON_ANCHOR_PANEL_IDS = new Set<string>([
   PANEL.EXPLORER,
@@ -67,6 +68,15 @@ const CENTER_ANCHOR_PANEL_IDS = [
   PANEL.SCATTER_SPHERICAL_3D,
   PANEL.SCATTER_DEFAULT,
 ] as const;
+const BUILT_IN_SCATTER_TITLES = new Set([
+  "Euclidean",
+  "Hyperbolic",
+  "Spherical",
+  "Euclidean 3D",
+  "Sphere 3D",
+  "Embeddings",
+]);
+const CENTER_ANCHOR_PANEL_ID_SET = new Set<string>(CENTER_ANCHOR_PANEL_IDS);
 
 const getContainerWidth = (api?: DockviewApi | null) =>
   api?.width ??
@@ -91,6 +101,11 @@ const getBottomPanelMaxHeight = (containerHeight: number) =>
   Math.round(
     Math.max(containerHeight - MIN_BOTTOM_PANEL_HEIGHT, MIN_BOTTOM_PANEL_HEIGHT)
   );
+
+const getLayoutStorageKey = (
+  workspaceId: string | null,
+  viewRevision: number | null | undefined
+) => `${LAYOUT_STORAGE_KEY}:${workspaceId ?? "default"}:${viewRevision ?? 0}`;
 
 function getCenterAnchorPanel(api: DockviewApi) {
   for (const id of CENTER_ANCHOR_PANEL_IDS) {
@@ -144,11 +159,19 @@ function stripRuntimePanelPrefix(panelId: string) {
     : panelId;
 }
 
+function isClosableDockPanel(panelId: string) {
+  return (
+    panelId.startsWith(RUNTIME_PANEL_PREFIX) ||
+    (!NON_ANCHOR_PANEL_IDS.has(panelId) && !CENTER_ANCHOR_PANEL_ID_SET.has(panelId))
+  );
+}
+
 function DockviewPanelActions(props: IDockviewHeaderActionsProps) {
   const activeWorkspaceId = useStore((state) => state.activeWorkspaceId);
   const customPanels = useStore((state) => state.customPanels);
   const applyRuntimeSnapshot = useStore((state) => state.applyRuntimeSnapshot);
   const activePanel = props.activePanel;
+  const [closingPanelId, setClosingPanelId] = useState<string | null>(null);
 
   const handleOpenCopy = useCallback(async () => {
     if (!activePanel) return;
@@ -163,12 +186,14 @@ function DockviewPanelActions(props: IDockviewHeaderActionsProps) {
         workspaceId: activeWorkspaceId,
         panelId: nextPanelId,
         title: sourcePanel.title,
-        kind: sourcePanel.kind,
-        moduleFile: sourcePanel.module_file,
+        kind: sourcePanel.kind === "scatter" ? "scatter" : "extension",
+        extension: sourcePanel.extension,
+        extensionPanel: sourcePanel.extension_panel,
         layoutKey: sourcePanel.layout_key,
         position: "center",
         referencePanelId: sourcePanel.id,
         direction: "right",
+        props: sourcePanel.props,
       });
       applyRuntimeSnapshot(snapshot);
       return;
@@ -191,12 +216,42 @@ function DockviewPanelActions(props: IDockviewHeaderActionsProps) {
     nextPanel.api.setActive();
   }, [activePanel, activeWorkspaceId, applyRuntimeSnapshot, customPanels, props.containerApi]);
 
+  const handleClosePanel = useCallback(async () => {
+    if (!activePanel) return;
+
+    if (activePanel.id.startsWith(RUNTIME_PANEL_PREFIX)) {
+      if (!activeWorkspaceId) return;
+
+      const panelId = stripRuntimePanelPrefix(activePanel.id);
+      setClosingPanelId(activePanel.id);
+      try {
+        const snapshot = await removeRuntimePanel({
+          workspaceId: activeWorkspaceId,
+          panelId,
+        });
+        applyRuntimeSnapshot(snapshot);
+      } catch (error) {
+        console.error("Failed to remove runtime panel:", error);
+      } finally {
+        setClosingPanelId(null);
+      }
+      return;
+    }
+
+    activePanel.api.close();
+  }, [activePanel, activeWorkspaceId, applyRuntimeSnapshot]);
+
   if (!activePanel || NON_ANCHOR_PANEL_IDS.has(activePanel.id)) {
     return null;
   }
 
+  const canClosePanel = isClosableDockPanel(activePanel.id);
+  const isClosingPanel = closingPanelId === activePanel.id;
+  const closeDisabled =
+    isClosingPanel || (activePanel.id.startsWith(RUNTIME_PANEL_PREFIX) && !activeWorkspaceId);
+
   return (
-    <div className="flex h-full items-center pr-1">
+    <div className="flex h-full items-center gap-0.5 pr-1">
       <Button
         type="button"
         variant="ghost"
@@ -214,6 +269,26 @@ function DockviewPanelActions(props: IDockviewHeaderActionsProps) {
       >
         <Columns2 className="h-3.5 w-3.5" />
       </Button>
+      {canClosePanel && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          title={CLOSE_PANEL_TITLE}
+          aria-label={CLOSE_PANEL_TITLE}
+          disabled={closeDisabled}
+          onClick={(event) => {
+            event.stopPropagation();
+            void handleClosePanel();
+          }}
+          className={cn(
+            "h-6 w-6 rounded-[4px] text-muted-foreground",
+            "hover:bg-destructive/10 hover:text-destructive active:scale-[0.98]"
+          )}
+        >
+          <X className="h-3.5 w-3.5" />
+        </Button>
+      )}
     </div>
   );
 }
@@ -245,6 +320,8 @@ function getCenterTabPosition(api: DockviewApi) {
 export function useDockviewApi() {
   const ctx = useContext(DockviewContext);
   const datasetInfo = useStore((state) => state.datasetInfo);
+  const activeWorkspaceId = useStore((state) => state.activeWorkspaceId);
+  const viewRevision = useStore((state) => state.viewRevision);
   const {
     leftPanelOpen,
     rightPanelOpen,
@@ -269,9 +346,9 @@ export function useDockviewApi() {
   );
 
   const resetLayout = useCallback(() => {
-    localStorage.removeItem(LAYOUT_STORAGE_KEY);
+    localStorage.removeItem(getLayoutStorageKey(activeWorkspaceId, viewRevision));
     window.location.reload();
-  }, []);
+  }, [activeWorkspaceId, viewRevision]);
 
   const toggleZone = useCallback(
     (zone: "left" | "right" | "bottom") => {
@@ -464,6 +541,7 @@ export function DockviewWorkspace() {
   const datasetInfo = useStore((state) => state.datasetInfo);
   const customPanels = useStore((state) => state.customPanels);
   const activeWorkspaceId = useStore((state) => state.activeWorkspaceId);
+  const viewRevision = useStore((state) => state.viewRevision);
   const requestedLayoutKey = useStore((state) => state.requestedLayoutKey);
   const {
     applyRuntimeSnapshot,
@@ -653,13 +731,13 @@ export function DockviewWorkspace() {
     (event: DockviewReadyEvent) => {
       ctx.setApi(event.api);
 
-      const stored = localStorage.getItem(LAYOUT_STORAGE_KEY);
+      const stored = localStorage.getItem(getLayoutStorageKey(activeWorkspaceId, viewRevision));
       if (stored) {
         try {
           event.api.fromJSON(JSON.parse(stored));
 
           if (event.api.totalPanels === 0) {
-            localStorage.removeItem(LAYOUT_STORAGE_KEY);
+            localStorage.removeItem(getLayoutStorageKey(activeWorkspaceId, viewRevision));
             buildDefaultLayout(event.api);
           }
 
@@ -670,7 +748,7 @@ export function DockviewWorkspace() {
           return;
         } catch (err) {
           console.warn("Failed to restore dock layout, resetting.", err);
-          localStorage.removeItem(LAYOUT_STORAGE_KEY);
+          localStorage.removeItem(getLayoutStorageKey(activeWorkspaceId, viewRevision));
         }
       }
 
@@ -678,7 +756,15 @@ export function DockviewWorkspace() {
         buildDefaultLayout(event.api);
       }
     },
-    [buildDefaultLayout, ctx, setBottomPanelOpen, setLeftPanelOpen, setRightPanelOpen]
+    [
+      activeWorkspaceId,
+      buildDefaultLayout,
+      ctx,
+      setBottomPanelOpen,
+      setLeftPanelOpen,
+      setRightPanelOpen,
+      viewRevision,
+    ]
   );
 
   useEffect(() => {
@@ -687,11 +773,14 @@ export function DockviewWorkspace() {
 
     const disposable = api.onDidLayoutChange(() => {
       if (api.totalPanels === 0) return;
-      localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(api.toJSON()));
+      localStorage.setItem(
+        getLayoutStorageKey(activeWorkspaceId, viewRevision),
+        JSON.stringify(api.toJSON())
+      );
     });
 
     return () => disposable.dispose();
-  }, [ctx.api]);
+  }, [activeWorkspaceId, ctx.api, viewRevision]);
 
   useEffect(() => {
     const api = ctx.api;
@@ -775,15 +864,17 @@ export function DockviewWorkspace() {
       ctx.api.getPanel(PANEL.SCATTER_EUCLIDEAN_3D) ||
       ctx.api.getPanel(PANEL.SCATTER_SPHERICAL_3D) ||
       ctx.api.getPanel(PANEL.SCATTER_DEFAULT);
+    const hasRuntimeScatter = customPanels.some((panel) => panel.kind === "scatter");
 
-    if (!hasScatter) {
+    if (!hasScatter && !hasRuntimeScatter) {
       buildDefaultLayout(ctx.api);
     }
-  }, [buildDefaultLayout, ctx.api, datasetInfo]);
+  }, [buildDefaultLayout, ctx.api, customPanels, datasetInfo]);
 
   useEffect(() => {
     const api = ctx.api;
-    if (!api || !datasetInfo || !requestedLayoutKey) return;
+    const hasRuntimeScatter = customPanels.some((panel) => panel.kind === "scatter");
+    if (!api || !datasetInfo || !requestedLayoutKey || hasRuntimeScatter) return;
 
     const panelId = getBuiltInCenterPanelIdForLayout({
       datasetInfo,
@@ -798,7 +889,7 @@ export function DockviewWorkspace() {
       position: getCenterTabPosition(api) ?? undefined,
       focusIfPresent: true,
     });
-  }, [ctx.api, datasetInfo, requestedLayoutKey]);
+  }, [ctx.api, customPanels, datasetInfo, requestedLayoutKey]);
 
   useEffect(() => {
     const api = ctx.api;
@@ -807,6 +898,19 @@ export function DockviewWorkspace() {
     const desiredPanelIds = new Set(
       customPanels.map((panel) => `${RUNTIME_PANEL_PREFIX}${panel.id}`)
     );
+    const hasRuntimeScatter = customPanels.some((panel) => panel.kind === "scatter");
+
+    if (hasRuntimeScatter) {
+      for (const panelId of CENTER_ANCHOR_PANEL_IDS) {
+        if (panelId === PANEL.GRID) continue;
+        api.getPanel(panelId)?.api.close();
+      }
+      for (const panel of api.panels) {
+        if (panel.id.startsWith(RUNTIME_PANEL_PREFIX)) continue;
+        if (!panel.title || !BUILT_IN_SCATTER_TITLES.has(panel.title)) continue;
+        panel.api.close();
+      }
+    }
 
     for (const panel of api.panels) {
       if (!panel.id.startsWith(RUNTIME_PANEL_PREFIX)) continue;

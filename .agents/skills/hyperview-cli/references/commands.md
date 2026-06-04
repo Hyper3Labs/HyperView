@@ -46,7 +46,7 @@ Preview destinations without writing files:
 hyperview skill install --dry-run --json
 ```
 
-This is different from `hyperview extension add`, which installs a runtime plugin into a running HyperView workspace.
+This is different from `hyperview extension add`, which installs a runtime extension into a running HyperView workspace.
 
 ## Datasets and Workspaces
 
@@ -208,15 +208,18 @@ hyperview ui selection set --workspace research --ids sample-1,sample-8
 
 `--layout-key` must be an existing layout (use the `layout_key` returned by `/api/embeddings`). When the chosen layout is Euclidean 3D, HyperView opens or focuses the Euclidean 3D scatter panel.
 
-Add a native panel from a local JavaScript module file:
+Add a custom panel through an extension:
 
 ```bash
+hyperview extension add .hyperview/extensions/label-histogram \
+  --workspace research
+
 hyperview ui panel add \
   --workspace research \
   --panel-id label-histogram \
-  --title "Label Histogram" \
+  --extension label-histogram \
+  --extension-panel label-histogram \
   --position right \
-  --module-file agent-context/panels/label-histogram/index.js
 ```
 
 Add two runtime scatter panels bound to explicit layouts, side by side:
@@ -241,6 +244,22 @@ hyperview ui panel add \
   --direction right
 ```
 
+Python launch scripts can encode the same composition without calling runtime
+internals:
+
+```python
+view = hv.ui.View(
+    hv.ui.Horizontal(
+        hv.ui.Scatter("uncha-poincare", title="UNCHA", layout_key=uncha_layout),
+        hv.ui.Scatter("hycoclip-poincare", title="HyCoCLIP", layout_key=hycoclip_layout),
+    ),
+    hv.ui.ExtensionPanel("notes", extension="notes", panel="notes", position="right"),
+)
+session = hv.launch(dataset, block=False)
+session.ui.add_extension(".hyperview/extensions/notes")
+session.ui.apply_view(view)
+```
+
 Remove a runtime panel by id:
 
 ```bash
@@ -249,9 +268,25 @@ hyperview ui panel remove \
   --panel-id hycoclip-poincare
 ```
 
-## Plugins and Tools
+Pin nearest-neighbor results to a specific embedding layout:
 
-Create backend-plus-frontend plugins under `.hyperview/extensions/<name>/` so they can be versioned with the project and auto-attached on `hyperview serve`. For a server that is already running, install one explicitly:
+```bash
+hyperview ui similarity set \
+  --workspace research \
+  --sample-id <sample-id> \
+  --layout-key <layout-key> \
+  --k 18
+```
+
+Clear the explicit nearest-neighbor context:
+
+```bash
+hyperview ui similarity clear --workspace research
+```
+
+## Extensions and Tools
+
+Create backend-plus-frontend extensions under `.hyperview/extensions/<name>/` so they can be versioned with the project and auto-registered on `hyperview serve`. For a server that is already running, install one explicitly:
 
 ```bash
 hyperview extension add .hyperview/extensions/selection-profile \
@@ -259,11 +294,11 @@ hyperview extension add .hyperview/extensions/selection-profile \
   --json
 ```
 
-Inspect and run installed plugin tools:
+Inspect and run installed extension tools:
 
 ```bash
 hyperview extension list --json
-# => {"extensions":[{"name":"selection-profile","folder":"...","workspace_id":"research","panels":["selection-profile"],"tools":[{"uri":"selection_profile.summarize",...}]}]}
+# => {"extensions":[{"name":"selection-profile","folder":"...","workspace_id":"research","panel_definitions":[{"id":"selection-profile",...}],"tools":[{"uri":"selection_profile.summarize",...}]}]}
 
 hyperview tools list --json
 hyperview tools run selection_profile.summarize \

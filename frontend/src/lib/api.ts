@@ -10,8 +10,22 @@ import type {
   SimilaritySearchResponse,
 } from "@/types";
 
-const API_BASE = process.env.NODE_ENV === "development" ? "http://127.0.0.1:6262" : "";
+const API_BASE =
+  process.env.NEXT_PUBLIC_HYPERVIEW_API_BASE ??
+  (process.env.NODE_ENV === "development" ? "http://127.0.0.1:6262" : "");
 const MISSING_LABEL_SENTINEL = "undefined";
+
+export function apiUrl(path: string): string {
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  return `${API_BASE}/api${normalizedPath}`;
+}
+
+export function backendUrl(pathOrUrl: string | null | undefined): string | null {
+  if (!pathOrUrl) return null;
+  if (/^https?:\/\//.test(pathOrUrl)) return pathOrUrl;
+  if (pathOrUrl.startsWith("/api/")) return `${API_BASE}${pathOrUrl}`;
+  return pathOrUrl;
+}
 
 function toApiLabel(label: string | null | undefined): string | null {
   if (!label || label === MISSING_LABEL_SENTINEL) {
@@ -68,11 +82,11 @@ async function throwApiError(res: Response, context: string): Promise<never> {
 }
 
 export function getRuntimeEventsUrl(): string {
-  return `${API_BASE}/api/events`;
+  return apiUrl("/events");
 }
 
 export async function fetchDataset(signal?: AbortSignal): Promise<DatasetInfo> {
-  const res = await fetch(`${API_BASE}/api/dataset`, signal ? { signal } : undefined);
+  const res = await fetch(apiUrl("/dataset"), signal ? { signal } : undefined);
   if (!res.ok) {
     await throwApiError(res, "Failed to fetch dataset");
   }
@@ -80,7 +94,7 @@ export async function fetchDataset(signal?: AbortSignal): Promise<DatasetInfo> {
 }
 
 export async function fetchRuntimeState(): Promise<RuntimeSnapshot> {
-  const res = await fetch(`${API_BASE}/api/runtime`);
+  const res = await fetch(apiUrl("/runtime"));
   if (!res.ok) {
     await throwApiError(res, "Failed to fetch runtime state");
   }
@@ -88,7 +102,7 @@ export async function fetchRuntimeState(): Promise<RuntimeSnapshot> {
 }
 
 export async function setActiveWorkspace(workspaceId: string): Promise<RuntimeSnapshot> {
-  const res = await fetch(`${API_BASE}/api/control/workspaces/set-active`, {
+  const res = await fetch(apiUrl("/control/workspaces/set-active"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -104,15 +118,17 @@ export async function setActiveWorkspace(workspaceId: string): Promise<RuntimeSn
 export async function addRuntimePanel(args: {
   workspaceId: string;
   panelId: string;
-  title: string;
-  kind?: RuntimePanelKind;
-  moduleFile?: string | null;
+  title?: string | null;
+  kind?: RuntimePanelKind | "extension";
+  extension?: string | null;
+  extensionPanel?: string | null;
   layoutKey?: string | null;
   position?: RuntimePanelPosition;
   referencePanelId?: string | null;
   direction?: RuntimePanelDirection | null;
+  props?: Record<string, unknown> | null;
 }): Promise<RuntimeSnapshot> {
-  const res = await fetch(`${API_BASE}/api/control/ui/panels`, {
+  const res = await fetch(apiUrl("/control/ui/panels"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -121,12 +137,14 @@ export async function addRuntimePanel(args: {
       workspace_id: args.workspaceId,
       panel_id: args.panelId,
       title: args.title,
-      kind: args.kind ?? "module",
-      module_file: args.moduleFile ?? null,
+      kind: args.kind ?? "extension",
+      extension: args.extension ?? null,
+      extension_panel: args.extensionPanel ?? null,
       layout_key: args.layoutKey ?? null,
       position: args.position ?? "right",
       reference_panel_id: args.referencePanelId ?? null,
       direction: args.direction ?? null,
+      props: args.props ?? null,
     }),
   });
   if (!res.ok) {
@@ -139,7 +157,7 @@ export async function removeRuntimePanel(args: {
   workspaceId: string;
   panelId: string;
 }): Promise<RuntimeSnapshot> {
-  const res = await fetch(`${API_BASE}/api/control/ui/panels`, {
+  const res = await fetch(apiUrl("/control/ui/panels"), {
     method: "DELETE",
     headers: {
       "Content-Type": "application/json",
@@ -170,7 +188,7 @@ export async function fetchSamples(
     params.set("label", apiLabel);
   }
 
-  const res = await fetch(`${API_BASE}/api/samples?${params}`, signal ? { signal } : undefined);
+  const res = await fetch(`${apiUrl("/samples")}?${params}`, signal ? { signal } : undefined);
   if (!res.ok) {
     await throwApiError(res, "Failed to fetch samples");
   }
@@ -183,7 +201,7 @@ export async function fetchEmbeddings(layoutKey?: string): Promise<EmbeddingsDat
     params.set("layout_key", layoutKey);
   }
   const query = params.toString();
-  const res = await fetch(`${API_BASE}/api/embeddings${query ? `?${query}` : ""}`);
+  const res = await fetch(`${apiUrl("/embeddings")}${query ? `?${query}` : ""}`);
   if (!res.ok) {
     await throwApiError(res, "Failed to fetch embeddings");
   }
@@ -191,7 +209,7 @@ export async function fetchEmbeddings(layoutKey?: string): Promise<EmbeddingsDat
 }
 
 export async function fetchSamplesBatch(sampleIds: string[]): Promise<Sample[]> {
-  const res = await fetch(`${API_BASE}/api/samples/batch`, {
+  const res = await fetch(apiUrl("/samples/batch"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -210,6 +228,7 @@ export async function fetchSimilarSamples(
   args: {
     k?: number;
     spaceKey?: string;
+    layoutKey?: string;
     signal?: AbortSignal;
   } = {}
 ): Promise<SimilaritySearchResponse> {
@@ -219,9 +238,12 @@ export async function fetchSimilarSamples(
   if (args.spaceKey) {
     params.set("space_key", args.spaceKey);
   }
+  if (args.layoutKey) {
+    params.set("layout_key", args.layoutKey);
+  }
 
   const res = await fetch(
-    `${API_BASE}/api/search/similar/${encodeURIComponent(sampleId)}?${params.toString()}`,
+    `${apiUrl(`/search/similar/${encodeURIComponent(sampleId)}`)}?${params.toString()}`,
     {
       signal: args.signal,
     }
@@ -255,7 +277,7 @@ export async function setLayoutView(args: {
   layoutKey: string;
   camera3d?: OrbitView3DRequest | null;
 }): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/control/ui/layout-view`, {
+  const res = await fetch(apiUrl("/control/ui/layout-view"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -283,7 +305,7 @@ export async function fetchLassoSelection(args: {
   includeThumbnails?: boolean;
   signal?: AbortSignal;
 }): Promise<LassoSelectionResponse> {
-  const res = await fetch(`${API_BASE}/api/selection/lasso`, {
+  const res = await fetch(apiUrl("/selection/lasso"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

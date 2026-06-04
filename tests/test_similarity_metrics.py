@@ -11,6 +11,7 @@ from hyperview.storage.lancedb_backend import LanceDBBackend
 from hyperview.storage.metrics import (
     curvature_for_space,
     hyperboloid_dot_query,
+    infer_hyperboloid_curvature,
     pairwise_embedding_distances,
 )
 from hyperview.storage.schema import SpaceInfo
@@ -77,8 +78,66 @@ def test_lancedb_backend_uses_exact_hyperboloid_distance(tmp_path: Path) -> None
     results = backend.find_similar("q", k=2, space_key=space_key)
 
     assert [sample.id for sample, _ in results] == ["near", "far"]
-    assert results[0][1] == pytest.approx(near_distance)
-    assert results[1][1] == pytest.approx(far_distance)
+    assert results[0][1] == pytest.approx(near_distance, abs=1e-6)
+    assert results[1][1] == pytest.approx(far_distance, abs=1e-6)
+
+
+def test_lancedb_backend_infers_missing_hyperboloid_curvature(tmp_path: Path) -> None:
+    backend = LanceDBBackend(
+        "hyperboloid_inferred_curvature",
+        StorageConfig(datasets_dir=tmp_path / "datasets", media_dir=tmp_path / "media"),
+    )
+    ids = ["q", "near", "far"]
+    for sample_id in ids:
+        backend.add_sample(Sample(id=sample_id, filepath=f"/missing/{sample_id}.png"))
+
+    curvature = 0.1
+    near_distance = 0.25
+    far_distance = 0.75
+    vectors = _hyperboloid_from_tangent(
+        np.array(
+            [
+                [0.0, 0.0],
+                [near_distance, 0.0],
+                [0.0, far_distance],
+            ],
+            dtype=np.float32,
+        ),
+        curvature,
+    )
+    space_key = "hyperboloid_space"
+    backend.ensure_space(
+        model_id="hyper-model",
+        dim=3,
+        config={"provider": "test", "geometry": "hyperboloid"},
+        space_key=space_key,
+    )
+    backend.add_embeddings(space_key, ids, vectors)
+
+    results = backend.find_similar("q", k=2, space_key=space_key)
+
+    assert infer_hyperboloid_curvature(vectors) == pytest.approx(curvature)
+    assert [sample.id for sample, _ in results] == ["near", "far"]
+    assert results[0][1] == pytest.approx(near_distance, abs=1e-6)
+    assert results[1][1] == pytest.approx(far_distance, abs=1e-6)
+
+
+def test_curvature_for_space_reads_geometry_params() -> None:
+    space = SpaceInfo(
+        space_key="nested",
+        model_id="test",
+        dim=3,
+        count=0,
+        created_at=0,
+        updated_at=0,
+        config={
+            "geometry": "hyperboloid",
+            "params": {"curvature": 0.1},
+            "params_source": {"curvature": "provider"},
+        },
+    )
+
+    assert curvature_for_space(space) == pytest.approx(0.1)
 
 
 @pytest.mark.parametrize("curvature", [0.0, -1.0, float("nan"), float("inf"), None])

@@ -5,6 +5,7 @@ import type {
   RuntimePanel,
   RuntimeSnapshot,
   Sample,
+  SimilarityQuery,
   SimilarSample,
   WorkspaceSummary,
 } from "@/types";
@@ -37,6 +38,7 @@ function createClearedDatasetScopedState() {
     samplesLoaded: 0,
     embeddingsByLayoutKey: {} as Record<string, EmbeddingsData>,
     activeLayoutKey: null as string | null,
+    activeSimilarityQuery: null as SimilarityQuery | null,
     labelFilter: null as string | null,
     hoveredId: null as string | null,
     isLoading: false,
@@ -89,6 +91,7 @@ interface AppState {
   workspaces: WorkspaceSummary[];
   runtimeDatasetName: string | null;
   customPanels: RuntimePanel[];
+  viewRevision: number;
   requestedLayoutKey: string | null;
   layoutViews: Record<string, { camera_3d: OrbitView3DPayload | null }>;
   setLayoutViewCamera: (layoutKey: string, camera3d: OrbitView3DPayload | null) => void;
@@ -110,6 +113,8 @@ interface AppState {
   // Active layout (for sidebar context)
   activeLayoutKey: string | null;
   setActiveLayoutKey: (layoutKey: string | null) => void;
+  activeSimilarityQuery: SimilarityQuery | null;
+  setActiveSimilarityQuery: (query: SimilarityQuery | null) => void;
 
   // Label filter (sidebar-driven)
   labelFilter: string | null;
@@ -118,8 +123,8 @@ interface AppState {
   // Selection
   selectedIds: Set<string>;
   isLassoSelection: boolean;
-  selectionSource: "scatter" | "grid" | "lasso" | null;
-  setSelectedIds: (ids: Set<string>, source?: "scatter" | "grid") => void;
+  selectionSource: "scatter" | "grid" | "panel" | "lasso" | null;
+  setSelectedIds: (ids: Set<string>, source?: "scatter" | "grid" | "panel") => void;
   toggleSelection: (id: string) => void;
   addToSelection: (ids: string[]) => void;
   clearSelection: () => void;
@@ -180,6 +185,7 @@ export const useStore = create<AppState>((set) => ({
   workspaces: [],
   runtimeDatasetName: null,
   customPanels: [],
+  viewRevision: 0,
   requestedLayoutKey: null,
   layoutViews: {},
   setLayoutViewCamera: (layoutKey, camera3d) =>
@@ -201,16 +207,18 @@ export const useStore = create<AppState>((set) => ({
         state.runtimeDatasetName !== nextDatasetName;
 
       return {
+        ...(runtimeScopeChanged ? createClearedDatasetScopedState() : {}),
         activeWorkspaceId: nextWorkspaceId,
         workspaces: snapshot.workspaces,
         runtimeDatasetName: nextDatasetName,
         customPanels: snapshot.workspace.ui.custom_panels,
+        viewRevision: snapshot.workspace.ui.view_revision ?? 0,
         requestedLayoutKey: snapshot.workspace.ui.active_layout_key,
         layoutViews: snapshot.workspace.ui.layout_views ?? {},
         selectedIds: new Set(snapshot.workspace.ui.selected_ids),
         selectionSource:
           snapshot.workspace.ui.selected_ids.length > 0 ? "scatter" : null,
-        ...(runtimeScopeChanged ? createClearedDatasetScopedState() : {}),
+        activeSimilarityQuery: snapshot.workspace.ui.similarity_query ?? null,
         ...createClearedLassoState(),
         ...createClearedNeighborsState(),
       };
@@ -250,6 +258,8 @@ export const useStore = create<AppState>((set) => ({
   // Active layout
   activeLayoutKey: null,
   setActiveLayoutKey: (layoutKey) => set({ activeLayoutKey: layoutKey }),
+  activeSimilarityQuery: null,
+  setActiveSimilarityQuery: (query) => set({ activeSimilarityQuery: query }),
 
   // Label filter
   labelFilter: null,
@@ -259,6 +269,7 @@ export const useStore = create<AppState>((set) => ({
       labelFilter: nextLabel,
       selectedIds: new Set<string>(),
       selectionSource: null,
+      activeSimilarityQuery: null,
       ...createClearedLassoState(),
       ...createClearedNeighborsState(),
     });
@@ -285,6 +296,10 @@ export const useStore = create<AppState>((set) => ({
       return {
         selectedIds: ids,
         selectionSource: nextSelectionSource,
+        activeSimilarityQuery:
+          state.activeSimilarityQuery && ids.has(state.activeSimilarityQuery.anchor_sample_id)
+            ? state.activeSimilarityQuery
+            : null,
         ...createClearedLassoState(),
         ...createClearedNeighborsState(),
       };
@@ -301,6 +316,10 @@ export const useStore = create<AppState>((set) => ({
       return {
         selectedIds: newSet,
         selectionSource: newSet.size > 0 ? "grid" : null,
+        activeSimilarityQuery:
+          state.activeSimilarityQuery && newSet.has(state.activeSimilarityQuery.anchor_sample_id)
+            ? state.activeSimilarityQuery
+            : null,
         ...createClearedLassoState(),
         ...createClearedNeighborsState(),
       };
@@ -313,6 +332,10 @@ export const useStore = create<AppState>((set) => ({
       return {
         selectedIds: newSet,
         selectionSource: newSet.size > 0 ? "grid" : null,
+        activeSimilarityQuery:
+          state.activeSimilarityQuery && newSet.has(state.activeSimilarityQuery.anchor_sample_id)
+            ? state.activeSimilarityQuery
+            : null,
         ...createClearedLassoState(),
         ...createClearedNeighborsState(),
       };
@@ -321,6 +344,7 @@ export const useStore = create<AppState>((set) => ({
     set({
       selectedIds: new Set<string>(),
       selectionSource: null,
+      activeSimilarityQuery: null,
       ...createClearedLassoState(),
       ...createClearedNeighborsState(),
     }),
@@ -334,6 +358,7 @@ export const useStore = create<AppState>((set) => ({
     set({
       selectedIds: new Set<string>(),
       selectionSource: "lasso",
+      activeSimilarityQuery: null,
       isLassoSelection: true,
       lassoQuery: query,
       lassoSamples: [],
