@@ -14,6 +14,7 @@ const API_BASE =
   process.env.NEXT_PUBLIC_HYPERVIEW_API_BASE ??
   (process.env.NODE_ENV === "development" ? "http://127.0.0.1:6262" : "");
 const MISSING_LABEL_SENTINEL = "undefined";
+const RUNTIME_CLIENT_ID = `hv-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`;
 
 export function apiUrl(path: string): string {
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
@@ -81,8 +82,12 @@ async function throwApiError(res: Response, context: string): Promise<never> {
   throw new ApiError(`${context}: ${res.status} ${res.statusText}${suffix}`.trim(), res.status, detail);
 }
 
+export function getRuntimeClientId(): string {
+  return RUNTIME_CLIENT_ID;
+}
+
 export function getRuntimeEventsUrl(): string {
-  return apiUrl("/events");
+  return `${apiUrl("/events")}?client_id=${encodeURIComponent(RUNTIME_CLIENT_ID)}`;
 }
 
 export async function fetchDataset(signal?: AbortSignal): Promise<DatasetInfo> {
@@ -229,6 +234,7 @@ export async function fetchSimilarSamples(
     k?: number;
     spaceKey?: string;
     layoutKey?: string;
+    includeThumbnails?: boolean;
     signal?: AbortSignal;
   } = {}
 ): Promise<SimilaritySearchResponse> {
@@ -240,6 +246,9 @@ export async function fetchSimilarSamples(
   }
   if (args.layoutKey) {
     params.set("layout_key", args.layoutKey);
+  }
+  if (args.includeThumbnails !== undefined) {
+    params.set("include_thumbnails", String(args.includeThumbnails));
   }
 
   const res = await fetch(

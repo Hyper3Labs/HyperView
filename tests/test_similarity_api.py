@@ -63,6 +63,43 @@ def test_similarity_endpoint_returns_query_sample_and_resolved_space() -> None:
     assert payload["results"][0]["distance"] < payload["results"][1]["distance"]
 
 
+def test_similarity_endpoint_can_omit_thumbnails() -> None:
+    dataset, space_key = _make_dataset()
+    dataset._storage.add_sample(
+        Sample(
+            id="s0",
+            filepath="/missing/0.png",
+            label="cat",
+            thumbnail_base64="query-thumb",
+        )
+    )
+    dataset._storage.add_sample(
+        Sample(
+            id="s1",
+            filepath="/missing/1.png",
+            label="cat",
+            thumbnail_base64="neighbor-thumb",
+        )
+    )
+    client = TestClient(create_app(dataset))
+
+    default_response = client.get(
+        "/api/search/similar/s0", params={"k": 1, "space_key": space_key}
+    )
+    no_thumbnail_response = client.get(
+        "/api/search/similar/s0",
+        params={"k": 1, "space_key": space_key, "include_thumbnails": "false"},
+    )
+
+    assert default_response.status_code == 200
+    assert no_thumbnail_response.status_code == 200
+    assert default_response.json()["query_sample"]["thumbnail"] == "query-thumb"
+    assert default_response.json()["results"][0]["thumbnail"] == "neighbor-thumb"
+    assert no_thumbnail_response.json()["query_sample"]["thumbnail"] is None
+    assert no_thumbnail_response.json()["results"][0]["thumbnail"] is None
+    assert no_thumbnail_response.json()["results"][0]["media_url"] == "/api/samples/s1/content"
+
+
 def test_similarity_endpoint_uses_hyperboloid_geodesic_distance() -> None:
     dataset = Dataset("similarity_hyperboloid_api", persist=False)
     ids = ["q", "near", "far"]

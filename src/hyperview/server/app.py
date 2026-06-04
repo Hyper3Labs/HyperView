@@ -103,6 +103,25 @@ class UiSimilarityClearRequest(BaseModel):
     workspace_id: str
 
 
+class UiStatePatchSimilarity(BaseModel):
+    sample_id: str
+    layout_key: str | None = None
+    space_key: str | None = None
+    k: int = 18
+    source: str | None = None
+
+
+class UiStatePatchRequest(BaseModel):
+    workspace_id: str
+    client_id: str | None = None
+    set_active_layout: bool = False
+    active_layout_key: str | None = None
+    set_selection: bool = False
+    selected_ids: list[str] | None = None
+    set_similarity_query: bool = False
+    similarity_query: UiStatePatchSimilarity | None = None
+
+
 class UiLayoutViewRequest(BaseModel):
     workspace_id: str
     layout_key: str
@@ -386,15 +405,22 @@ def create_app(
     async def stream_runtime_events(
         runtime_dep: HyperViewRuntime = Depends(get_runtime),
         workspace_id: str | None = Query(None),
+        client_id: str | None = Query(None),
     ):
         async def event_stream():
             last_version = -1
             while True:
                 snapshot = runtime_dep.snapshot(workspace_id)
                 if snapshot["version"] != last_version:
+                    last_version = snapshot["version"]
+                    if (
+                        client_id
+                        and runtime_dep.version_source_client_id == client_id
+                    ):
+                        await asyncio.sleep(0.5)
+                        continue
                     payload = json.dumps(snapshot)
                     yield f"data: {payload}\n\n"
-                    last_version = snapshot["version"]
                 await asyncio.sleep(0.5)
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
@@ -631,6 +657,42 @@ def create_app(
         runtime_dep: HyperViewRuntime = Depends(get_runtime),
     ):
         workspace = runtime_dep.set_similarity_query(request.workspace_id, None)
+        return {"workspace": workspace.to_dict()}
+
+    @app.patch("/api/control/ui/state")
+    async def patch_ui_state_endpoint(
+        request: UiStatePatchRequest,
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+    ):
+        query = None
+        if request.set_similarity_query and request.similarity_query is not None:
+            try:
+                query = runtime_dep.resolve_similarity_query(
+                    request.workspace_id,
+                    request.similarity_query.sample_id,
+                    layout_key=request.similarity_query.layout_key,
+                    space_key=request.similarity_query.space_key,
+                    k=request.similarity_query.k,
+                    source=request.similarity_query.source,
+                )
+            except (KeyError, LookupError) as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        try:
+            workspace = runtime_dep.patch_ui_state(
+                request.workspace_id,
+                set_active_layout=request.set_active_layout,
+                active_layout_key=request.active_layout_key,
+                set_selection=request.set_selection,
+                selected_ids=request.selected_ids,
+                set_similarity_query=request.set_similarity_query,
+                similarity_query=query,
+                source_client_id=request.client_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"workspace": workspace.to_dict()}
 
     @app.post("/api/control/ui/layout-view")
@@ -1147,6 +1209,7 @@ def create_app(
         k: int = Query(10, ge=1, le=100),
         space_key: str | None = None,
         layout_key: str | None = None,
+        include_thumbnails: bool = True,
     ):
         """Return k nearest neighbors for a given sample."""
         resolved_space_key = space_key
@@ -1183,14 +1246,20 @@ def create_app(
         for sample, distance in similar:
             results.append(
                 SimilarSampleResponse(
-                    **serialize_sample_for_response(sample),
+                    **serialize_sample_for_response(
+                        sample, include_thumbnail=include_thumbnails
+                    ),
                     distance=distance,
                 )
             )
 
         return SimilaritySearchResponse(
             query_id=sample_id,
-            query_sample=SampleResponse(**serialize_sample_for_response(query_sample)),
+            query_sample=SampleResponse(
+                **serialize_sample_for_response(
+                    query_sample, include_thumbnail=include_thumbnails
+                )
+            ),
             space_key=resolved_space_key,
             metric=metric,
             k=k,

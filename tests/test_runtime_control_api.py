@@ -465,6 +465,97 @@ def test_ui_similarity_query_is_explicit_and_cleared_with_selection() -> None:
     assert clear_response.json()["workspace"]["ui"]["similarity_query"] is None
 
 
+def test_ui_state_patch_batches_layout_selection_and_similarity() -> None:
+    dataset = _make_dataset()
+    ids = [sample.id for sample in dataset]
+    layout_key = dataset.set_coords(
+        "euclidean",
+        ids,
+        [[float(index), float(index % 2)] for index, _ in enumerate(ids)],
+    )
+    space_key = dataset.list_layouts()[0].space_key
+
+    runtime = HyperViewRuntime()
+    runtime.attach_dataset_instance("default", dataset)
+    before_version = runtime.version
+    client = TestClient(create_app(runtime=runtime))
+
+    response = client.patch(
+        "/api/control/ui/state",
+        json={
+            "workspace_id": "default",
+            "set_active_layout": True,
+            "active_layout_key": layout_key,
+            "set_selection": True,
+            "selected_ids": ["sample-2"],
+            "set_similarity_query": True,
+            "similarity_query": {
+                "sample_id": "sample-2",
+                "layout_key": layout_key,
+                "k": 12,
+                "source": "test",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert runtime.version == before_version + 1
+    assert runtime.version_source_client_id is None
+    ui = response.json()["workspace"]["ui"]
+    assert ui["active_layout_key"] == layout_key
+    assert ui["selected_ids"] == ["sample-2"]
+    assert ui["similarity_query"] == {
+        "anchor_sample_id": "sample-2",
+        "layout_key": layout_key,
+        "space_key": space_key,
+        "k": 12,
+        "source": "test",
+    }
+
+    sourced_response = client.patch(
+        "/api/control/ui/state",
+        json={
+            "workspace_id": "default",
+            "client_id": "client-1",
+            "set_active_layout": True,
+            "active_layout_key": None,
+        },
+    )
+    assert sourced_response.status_code == 200
+    assert runtime.version_source_client_id == "client-1"
+
+
+def test_ui_state_patch_rejects_similarity_anchor_outside_selection() -> None:
+    dataset = _make_dataset()
+    ids = [sample.id for sample in dataset]
+    layout_key = dataset.set_coords(
+        "euclidean",
+        ids,
+        [[float(index), float(index % 2)] for index, _ in enumerate(ids)],
+    )
+
+    runtime = HyperViewRuntime()
+    runtime.attach_dataset_instance("default", dataset)
+    client = TestClient(create_app(runtime=runtime))
+
+    response = client.patch(
+        "/api/control/ui/state",
+        json={
+            "workspace_id": "default",
+            "set_selection": True,
+            "selected_ids": ["sample-3"],
+            "set_similarity_query": True,
+            "similarity_query": {
+                "sample_id": "sample-2",
+                "layout_key": layout_key,
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert "anchor_sample_id must be included" in response.json()["detail"]
+
+
 def test_sample_responses_include_media_url_and_content_endpoint_serves_file(tmp_path: Path) -> None:
     image_path = tmp_path / "sample.png"
     Image.new("RGB", (12, 12), color=(32, 128, 224)).save(image_path)

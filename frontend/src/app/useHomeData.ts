@@ -398,6 +398,7 @@ function useNeighborsDataFlow(args: {
           k: neighborsLimit,
           spaceKey: activeSimilarityQuery?.layout_key ? undefined : resolvedNeighborSpace.space_key,
           layoutKey: activeSimilarityQuery?.layout_key ?? undefined,
+          includeThumbnails: false,
           signal: abort.signal,
         });
 

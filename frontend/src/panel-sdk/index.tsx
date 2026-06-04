@@ -12,7 +12,7 @@ import {
   PanelToolbarMenu,
   type PanelToolbarItem,
 } from "@/components/PanelToolbar";
-import { apiUrl } from "@/lib/api";
+import { apiUrl, getRuntimeClientId } from "@/lib/api";
 import { getLayoutDimension } from "@/lib/layouts";
 import { useHyperViewSamplesView } from "@/panels/runtime";
 import { PANEL } from "@/panels/registry";
@@ -30,8 +30,11 @@ import type {
 type SelectionUpdateSource = "scatter" | "grid" | "panel";
 type BuiltinPanelRole = "samples" | "labels" | "explorer" | "scatter" | "euclidean" | "hyperbolic" | "spherical";
 
+type PanelCommandPersistence = boolean | "background";
+type PanelCommandPersistenceMode = "none" | "background" | "blocking";
+
 interface PanelCommandOptions {
-  persist?: boolean;
+  persist?: PanelCommandPersistence;
 }
 
 interface SelectionCommandOptions extends PanelCommandOptions {
@@ -48,6 +51,23 @@ interface SimilarityCommandOptions extends PanelCommandOptions {
   k?: number;
   source?: string | null;
   focus?: BuiltinPanelRole | false;
+}
+
+interface RuntimeUiPatchSimilarity {
+  sample_id: string;
+  layout_key?: string | null;
+  space_key?: string | null;
+  k?: number;
+  source?: string | null;
+}
+
+interface RuntimeUiPatch {
+  set_active_layout?: boolean;
+  active_layout_key?: string | null;
+  set_selection?: boolean;
+  selected_ids?: string[] | null;
+  set_similarity_query?: boolean;
+  similarity_query?: RuntimeUiPatchSimilarity | null;
 }
 
 interface LayoutFindQuery {
@@ -100,6 +120,14 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return (await response.json()) as T;
+}
+
+function getPersistenceMode(
+  persist: PanelCommandPersistence | undefined
+): PanelCommandPersistenceMode {
+  if (persist === false) return "none";
+  if (persist === true) return "blocking";
+  return "background";
 }
 
 export function createHyperViewPanelClient(workspaceId: string | null) {
@@ -734,6 +762,72 @@ export function usePanelCommands() {
         return snapshot;
       };
 
+      const persistSelection = async (
+        ids: string[],
+        source: SelectionUpdateSource
+      ): Promise<RuntimeSnapshot> => {
+        if (!activeWorkspaceId) {
+          throw new Error("No active workspace");
+        }
+        const sampleIds = Array.from(new Set(ids));
+        await fetchJson(apiUrl("/control/ui/selection"), {
+          method: "POST",
+          body: JSON.stringify({
+            workspace_id: activeWorkspaceId,
+            sample_ids: sampleIds,
+          }),
+        });
+        const snapshot = await fetchJson<RuntimeSnapshot>(
+          buildUrl(apiUrl("/runtime"), { workspace_id: activeWorkspaceId })
+        );
+        applyRuntimeSnapshot(snapshot);
+        setSelectedIds(new Set(sampleIds), source);
+        return snapshot;
+      };
+
+      const persistSimilarityQuery = async (
+        options: SimilarityCommandOptions,
+        source: string | null
+      ): Promise<RuntimeSnapshot> => {
+        if (!activeWorkspaceId) {
+          throw new Error("No active workspace");
+        }
+        await fetchJson(apiUrl("/control/ui/similarity"), {
+          method: "POST",
+          body: JSON.stringify({
+            workspace_id: activeWorkspaceId,
+            sample_id: options.sampleId,
+            layout_key: options.layoutKey ?? null,
+            space_key: options.spaceKey ?? null,
+            k: options.k ?? 18,
+            source,
+          }),
+        });
+        const snapshot = await fetchJson<RuntimeSnapshot>(
+          buildUrl(apiUrl("/runtime"), { workspace_id: activeWorkspaceId })
+        );
+        applyRuntimeSnapshot(snapshot);
+        return snapshot;
+      };
+
+      const persistRuntimeUiPatch = (patch: RuntimeUiPatch): void => {
+        if (!activeWorkspaceId) {
+          console.warn("Skipping background UI persistence: no active workspace");
+          return;
+        }
+
+        void fetchJson(apiUrl("/control/ui/state"), {
+          method: "PATCH",
+          body: JSON.stringify({
+            workspace_id: activeWorkspaceId,
+            client_id: getRuntimeClientId(),
+            ...patch,
+          }),
+        }).catch((error) => {
+          console.error("Failed to persist runtime UI state:", error);
+        });
+      };
+
       const setSelection = async (
         ids: string[],
         options: SelectionCommandOptions = {},
@@ -742,24 +836,20 @@ export function usePanelCommands() {
         if (options.clearLasso ?? true) {
           clearLassoSelection();
         }
-        setSelectedIds(new Set(ids), source);
-        if (options.persist === false) return null;
-        if (!activeWorkspaceId) {
-          throw new Error("No active workspace");
+        const sampleIds = Array.from(new Set(ids));
+        setSelectedIds(new Set(sampleIds), source);
+
+        const persistenceMode = getPersistenceMode(options.persist);
+        if (persistenceMode === "none") return null;
+        if (persistenceMode === "background") {
+          persistRuntimeUiPatch({
+            set_selection: true,
+            selected_ids: sampleIds,
+          });
+          return null;
         }
-        await fetchJson(apiUrl("/control/ui/selection"), {
-          method: "POST",
-          body: JSON.stringify({
-            workspace_id: activeWorkspaceId,
-            sample_ids: Array.from(new Set(ids)),
-          }),
-        });
-        const snapshot = await fetchJson<RuntimeSnapshot>(
-          buildUrl(apiUrl("/runtime"), { workspace_id: activeWorkspaceId })
-        );
-        applyRuntimeSnapshot(snapshot);
-        setSelectedIds(new Set(ids), source);
-        return snapshot;
+
+        return persistSelection(sampleIds, source);
       };
 
       const showSimilar = async (
@@ -780,36 +870,34 @@ export function usePanelCommands() {
         clearLassoSelection();
         setSelectedIds(new Set([sampleId]), "panel");
         setActiveSimilarityQuery(query);
-        if (options.persist === false) {
-          if (options.focus) {
-            const panelId = getPanelIdForBuiltinRole(options.focus);
-            if (panelId) focusDockPanel(dockview.api, panelId);
-          }
-          return null;
-        }
-        if (!activeWorkspaceId) {
-          throw new Error("No active workspace");
-        }
-        await fetchJson(apiUrl("/control/ui/similarity"), {
-          method: "POST",
-          body: JSON.stringify({
-            workspace_id: activeWorkspaceId,
-            sample_id: sampleId,
-            layout_key: options.layoutKey ?? null,
-            space_key: options.spaceKey ?? null,
-            k: options.k ?? 18,
-            source,
-          }),
-        });
-        const snapshot = await fetchJson<RuntimeSnapshot>(
-          buildUrl(apiUrl("/runtime"), { workspace_id: activeWorkspaceId })
-        );
-        applyRuntimeSnapshot(snapshot);
+
         if (options.focus) {
           const panelId = getPanelIdForBuiltinRole(options.focus);
           if (panelId) focusDockPanel(dockview.api, panelId);
         }
-        return snapshot;
+
+        const persistenceMode = getPersistenceMode(options.persist);
+        if (persistenceMode === "none") {
+          return null;
+        }
+
+        if (persistenceMode === "background") {
+          persistRuntimeUiPatch({
+            set_selection: true,
+            selected_ids: [sampleId],
+            set_similarity_query: true,
+            similarity_query: {
+              sample_id: sampleId,
+              layout_key: options.layoutKey ?? null,
+              space_key: options.spaceKey ?? null,
+              k: options.k ?? 18,
+              source,
+            },
+          });
+          return null;
+        }
+
+        return persistSimilarityQuery(options, source);
       };
 
       return {
@@ -820,7 +908,15 @@ export function usePanelCommands() {
           setSelection([], options),
         setActiveLayout: async (layoutKey: string | null, options: LayoutCommandOptions = {}) => {
           setActiveLayoutKey(layoutKey);
-          if (options.persist === false) return null;
+          const persistenceMode = getPersistenceMode(options.persist);
+          if (persistenceMode === "none") return null;
+          if (persistenceMode === "background") {
+            persistRuntimeUiPatch({
+              set_active_layout: true,
+              active_layout_key: layoutKey,
+            });
+            return null;
+          }
           return persistActiveLayout(layoutKey);
         },
         setSelection,

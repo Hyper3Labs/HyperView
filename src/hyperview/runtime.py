@@ -570,14 +570,20 @@ class HyperViewRuntime:
         self._panel_module_revisions: dict[tuple[str, str, str], str] = {}
         self._lock = threading.RLock()
         self._version = 1
+        self._version_source_client_id: str | None = None
 
     @property
     def version(self) -> int:
         return self._version
 
-    def _bump_version(self) -> None:
+    @property
+    def version_source_client_id(self) -> str | None:
+        return self._version_source_client_id
+
+    def _bump_version(self, *, source_client_id: str | None = None) -> None:
         with self._lock:
             self._version += 1
+            self._version_source_client_id = source_client_id
 
     def _panel_module_revision(self, panel: CustomPanelSpec) -> str | None:
         module_file = panel.resolved_module_file()
@@ -614,7 +620,7 @@ class HyperViewRuntime:
                 del self._panel_module_revisions[key]
 
         if changed:
-            self._version += 1
+            self._bump_version()
 
     def list_available_datasets(self) -> list[str]:
         datasets_dir = StorageConfig.default().datasets_dir
@@ -731,6 +737,65 @@ class HyperViewRuntime:
             workspace.ui.similarity_query = query
             self.workspace_registry.update_workspace(workspace)
             self._bump_version()
+            return workspace
+
+    def patch_ui_state(
+        self,
+        workspace_id: str,
+        *,
+        set_active_layout: bool = False,
+        active_layout_key: str | None = None,
+        set_selection: bool = False,
+        selected_ids: list[str] | None = None,
+        set_similarity_query: bool = False,
+        similarity_query: SimilarityQueryState | None = None,
+        source_client_id: str | None = None,
+    ) -> WorkspaceState:
+        """Apply multiple UI-state updates under one runtime version bump."""
+        with self._lock:
+            workspace = self.get_workspace(workspace_id)
+            changed = False
+            next_selected_ids = (
+                list(dict.fromkeys(selected_ids or []))
+                if set_selection
+                else list(workspace.ui.selected_ids)
+            )
+
+            if (
+                set_similarity_query
+                and similarity_query is not None
+                and similarity_query.anchor_sample_id not in next_selected_ids
+            ):
+                raise ValueError(
+                    "similarity_query anchor_sample_id must be included in selected_ids"
+                )
+
+            if set_active_layout and workspace.ui.active_layout_key != active_layout_key:
+                workspace.ui.active_layout_key = active_layout_key
+                changed = True
+
+            if set_selection:
+                if workspace.ui.selected_ids != next_selected_ids:
+                    workspace.ui.selected_ids = next_selected_ids
+                    changed = True
+                if (
+                    workspace.ui.similarity_query is not None
+                    and workspace.ui.similarity_query.anchor_sample_id
+                    not in workspace.ui.selected_ids
+                ):
+                    workspace.ui.similarity_query = None
+                    changed = True
+
+            if (
+                set_similarity_query
+                and workspace.ui.similarity_query != similarity_query
+            ):
+                workspace.ui.similarity_query = similarity_query
+                changed = True
+
+            if changed:
+                self.workspace_registry.update_workspace(workspace)
+                self._bump_version(source_client_id=source_client_id)
             return workspace
 
     def resolve_similarity_query(

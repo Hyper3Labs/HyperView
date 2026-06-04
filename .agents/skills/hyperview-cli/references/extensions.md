@@ -144,8 +144,10 @@ importing frontend internals. Use narrower hooks such as `usePanelSelection()`,
 `usePanelSelectedSamples()`, `usePanelHover()`, `usePanelLayouts()`, and
 `usePanelLayoutView()` when the panel only needs one part of that state. Use
 `usePanelCommands()` for host writes. Selection and active-layout changes
-persist to runtime UI state by default; pass `{ persist: false }` only for
-local transient UI changes.
+update frontend state immediately and persist to runtime UI state in the
+background by default. Pass `{ persist: true }` only when the caller must wait
+for durable runtime state, and pass `{ persist: false }` for local transient UI
+changes.
 
 `useTool(uri)` returns `{ run, result, loading, error, reset }`. Call `run(params)` to invoke the tool; `result` holds the last successful return value, `loading` is true while a call is in flight, and `error` is the last failure message (or `null`). See [panel-modules.md](panel-modules.md#hook-return-shapes) for the full hook return shape table.
 

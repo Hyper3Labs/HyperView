@@ -98,7 +98,7 @@ Important distinction:
 Verified against the current `panel-sdk` surface:
 
 - `usePanelSelection()` → `{ selectedIds: string[], selectionSource: SelectionUpdateSource }`
-- `usePanelCommands()` → `{ setLabelFilter, setHoveredId, clearLassoSelection, clearSelection(): void, setSelection(ids, { source?, persist?, clearLasso? }): Promise<RuntimeSnapshot | null>, showSimilar({ sampleId, layoutKey?, spaceKey?, k?, source?, focus?, persist? }): Promise<RuntimeSnapshot | null>, setActiveLayout(layoutKey, { persist? }): Promise<RuntimeSnapshot | null>, setLayoutViewCamera(layoutKey, camera3d): void, setLayoutViewCameraPersisted(layoutKey, camera3d): Promise<null>, focusPanel(panelId): boolean, focusBuiltin(role): boolean, focusPanelByRole(role): boolean, closePanel(panelId): boolean }`
+- `usePanelCommands()` → `{ setLabelFilter, setHoveredId, clearLassoSelection, clearSelection(): void, setSelection(ids, { source?, persist?, clearLasso? }): Promise<RuntimeSnapshot | null>, showSimilar({ sampleId, layoutKey?, spaceKey?, k?, source?, focus?, persist? }): Promise<RuntimeSnapshot | null>, setActiveLayout(layoutKey, { persist? }): Promise<RuntimeSnapshot | null>, setLayoutViewCamera(layoutKey, camera3d): void, setLayoutViewCameraPersisted(layoutKey, camera3d): Promise<null>, focusPanel(panelId): boolean, focusBuiltin(role): boolean, focusPanelByRole(role): boolean, closePanel(panelId): boolean }`. `persist` accepts `true`, `false`, or `"background"`; omitted/`"background"` updates local state immediately and writes runtime state asynchronously, `true` waits for runtime persistence, and `false` is local-only.
 - `usePanelHover()` → `{ hoveredId, setHoveredId(id), clearHover() }`
 - `usePanelLayoutView(layoutKey?)` → `{ layoutKey, view, camera3d, setCamera3d(camera3d) }`
 - `usePanelLayouts()` → `{ layouts, spaces, get(layoutKey), getSpace(spaceKey), find(query), filter(query) }`; query supports `layoutKey`, `spaceKey`, `geometry`, `modelId`, and `dimension`.
@@ -111,7 +111,7 @@ Verified against the current `panel-sdk` surface:
 - `useTool(uri)` → `{ loading: boolean, result: TResult | null, error: string | null, run(params?): Promise<TResult | null>, reset(): void }`
 - `usePanelClient()` → low-level client; pair with `createClient(workspaceId)` for direct API calls. Useful methods include `querySamples`, `aggregateSamples`, `getSamplesByIds`, `searchSimilar`, `setSimilarityQuery`, `clearSimilarityQuery`, `setSelection`, and `selectSamples`.
 
-To clear the current selection from a panel and persist it to the runtime, use `await usePanelCommands().setSelection([])`. Pass `{ persist: false }` only for local transient UI changes.
+To clear the current selection from a panel and enqueue runtime persistence, use `await usePanelCommands().setSelection([])`. Pass `{ persist: true }` when the code must wait for runtime persistence, and pass `{ persist: false }` only for local transient UI changes.
 
 ## Placement
 
