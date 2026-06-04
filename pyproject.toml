@@ -28,7 +28,7 @@ dependencies = [
     "uvicorn[standard]>=0.40.0",
     "embed-anything>=0.7.0",
     "huggingface-hub>=1.11.0,<2.0",
-    "hyper-models>=0.2.0",  # PyPI package: https://pypi.org/project/hyper-models/
+    "hyper-models>=0.3.0",  # PyPI package: https://pypi.org/project/hyper-models/
     "numpy>=1.26.4,<2.4",
     "umap-learn>=0.5.11",
     "pillow>=12.1.0",
@@ -50,6 +50,7 @@ dev = [
     "ruff>=0.14.13",
 ]
 ml = [
+    "hyper-models[ml]>=0.3.0",
     "torch>=2.9.1",
     "torchvision>=0.24.1",
     "timm>=1.0.0",
