@@ -51,6 +51,11 @@ export function SampleDerivedSpace({
   const showNeighbors =
     neighborSamples.length > 0 || neighborsLoading || neighborsError !== null;
   const distanceMetricLabel = getDistanceMetricLabel(neighborsMetric);
+  const neighborsLabel = [
+    "Nearest neighbors",
+    distanceMetricLabel,
+    neighborsSourceLabel,
+  ].filter(Boolean).join(" · ");
 
   if (selectionSamples.length > 1 && !showNeighbors) {
     return (
@@ -91,10 +96,9 @@ export function SampleDerivedSpace({
 
       {showNeighbors && (
         <div className="flex min-h-0 flex-1 flex-col">
-          <div className="h-6 min-h-[24px] border-y border-border bg-secondary/20 px-2 flex items-center">
-            <span className="text-[11px] leading-4 text-muted-foreground">
-              Nearest neighbors{distanceMetricLabel ? ` · ${distanceMetricLabel}` : ""}
-              {neighborsSourceLabel ? ` · ${neighborsSourceLabel}` : ""}
+          <div className="flex h-6 min-h-[24px] min-w-0 items-center overflow-hidden border-y border-border bg-secondary/20 px-2">
+            <span className="min-w-0 truncate text-[11px] leading-4 text-muted-foreground" title={neighborsLabel}>
+              {neighborsLabel}
             </span>
           </div>
           <div className="flex min-h-0 flex-1 w-full overflow-hidden">
