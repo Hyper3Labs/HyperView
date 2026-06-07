@@ -63,7 +63,27 @@ def test_similarity_endpoint_returns_query_sample_and_resolved_space() -> None:
     assert payload["results"][0]["distance"] < payload["results"][1]["distance"]
 
 
-def test_similarity_endpoint_can_omit_thumbnails() -> None:
+def test_dataset_similarity_accepts_layout_key() -> None:
+    dataset, space_key = _make_dataset()
+    layout_key = "test_layout"
+    dataset._storage.ensure_layout(  # noqa: SLF001 - test setup for low-level layout metadata
+        layout_key=layout_key,
+        space_key=space_key,
+        method="test",
+        geometry="euclidean",
+        params=None,
+    )
+
+    similar = dataset.find_similar("s0", k=1, layout_key=layout_key)
+    vector_similar = dataset.find_similar_by_vector([1.0, 0.0], k=1, layout_key=layout_key)
+
+    assert [sample.id for sample, _distance in similar] == ["s1"]
+    assert [sample.id for sample, _distance in vector_similar] == ["s0"]
+    with pytest.raises(ValueError, match="space_key does not match"):
+        dataset.find_similar("s0", k=1, space_key="other-space", layout_key=layout_key)
+
+
+def test_similarity_endpoint_embeds_thumbnails_only_when_requested() -> None:
     dataset, space_key = _make_dataset()
     dataset._storage.add_sample(
         Sample(
@@ -83,21 +103,20 @@ def test_similarity_endpoint_can_omit_thumbnails() -> None:
     )
     client = TestClient(create_app(dataset))
 
-    default_response = client.get(
-        "/api/search/similar/s0", params={"k": 1, "space_key": space_key}
-    )
-    no_thumbnail_response = client.get(
+    default_response = client.get("/api/search/similar/s0", params={"k": 1, "space_key": space_key})
+    inline_thumbnail_response = client.get(
         "/api/search/similar/s0",
-        params={"k": 1, "space_key": space_key, "include_thumbnails": "false"},
+        params={"k": 1, "space_key": space_key, "include_thumbnails": "true"},
     )
 
     assert default_response.status_code == 200
-    assert no_thumbnail_response.status_code == 200
-    assert default_response.json()["query_sample"]["thumbnail"] == "query-thumb"
-    assert default_response.json()["results"][0]["thumbnail"] == "neighbor-thumb"
-    assert no_thumbnail_response.json()["query_sample"]["thumbnail"] is None
-    assert no_thumbnail_response.json()["results"][0]["thumbnail"] is None
-    assert no_thumbnail_response.json()["results"][0]["media_url"] == "/api/samples/s1/content"
+    assert inline_thumbnail_response.status_code == 200
+    assert default_response.json()["query_sample"]["thumbnail"] is None
+    assert default_response.json()["results"][0]["thumbnail"] is None
+    assert default_response.json()["results"][0]["media_url"] == "/api/samples/s1/content"
+    assert default_response.json()["results"][0]["thumbnail_url"] == "/api/samples/s1/thumbnail"
+    assert inline_thumbnail_response.json()["query_sample"]["thumbnail"] == "query-thumb"
+    assert inline_thumbnail_response.json()["results"][0]["thumbnail"] == "neighbor-thumb"
 
 
 def test_similarity_endpoint_uses_hyperboloid_geodesic_distance() -> None:
@@ -120,7 +139,7 @@ def test_similarity_endpoint_uses_hyperboloid_geodesic_distance() -> None:
     dataset._storage.ensure_space(
         model_id="hyper-model",
         dim=3,
-        config={"provider": "test", "geometry": "hyperboloid", "curvature": 1.0},
+        config={"provider": "test", "geometry": "hyperboloid", "params": {"curvature": 1.0}},
         space_key=space_key,
     )
     dataset._storage.add_embeddings(space_key, ids, vectors)

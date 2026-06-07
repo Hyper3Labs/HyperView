@@ -11,17 +11,16 @@ Runtime custom panels are now panel modules:
 - the user writes a local JavaScript module file
 - the module is declared in an extension manifest
 - the module is instantiated through `hv.ui.ExtensionPanel(...)` or `hyperview ui panel add --extension ...`
-- HyperView loads that module directly into the host React tree
+- HyperView loads that module through the host panel system
 - the module can use the stable `window.HyperViewPanelSDK` surface
 
 Built-in panels and runtime panels now share the same host panel system.
 
-Use this surface for frontend-only panel code. Package it as an extension even
+Use this surface for browser panel code. Package it as an extension even
 when it does not need Python tools. If the task is to open several panels in a
 particular arrangement, use a workspace view from Python
 (`hv.ui.View(...)` with `hv.launch(..., view=...)`) or the CLI `hyperview ui ...`
-commands. Do not import `HyperViewRuntime`, `CustomPanelSpec`, or `Session` from
-demo/user-facing scripts just to arrange panels.
+commands.
 
 ## Panel Module Contract
 
@@ -89,16 +88,16 @@ Current global SDK fields:
 Important distinction:
 
 - `usePanelSamplesView()` gives access to host-managed collection state and is the best hook for panels that should stay synchronized with the visible HyperView UI.
-- `usePanelHostState()` gives low-level read access to the same host state used by built-in panels, without importing frontend internals.
-- `usePanelClient()` or `createClient()` is the escape hatch for direct backend reads and control-plane calls.
-- `useTool(uri)` calls an installed backend tool registered by an extension and returns `{ loading, result, error, run, reset }`.
+- `usePanelHostState()` gives read access to the same host state used by built-in panels.
+- `usePanelClient()` is an escape hatch for API data reads that are not already exposed through host state or commands.
+- `useTool(uri)` calls an installed Python tool registered by an extension and returns `{ loading, result, error, run, reset }`.
 
 ### Hook return shapes
 
-Verified against the current `panel-sdk` surface:
+Current hook return shapes:
 
 - `usePanelSelection()` → `{ selectedIds: string[], selectionSource: SelectionUpdateSource }`
-- `usePanelCommands()` → `{ setLabelFilter, setHoveredId, clearLassoSelection, clearSelection(): void, setSelection(ids, { source?, persist?, clearLasso? }): Promise<RuntimeSnapshot | null>, showSimilar({ sampleId, layoutKey?, spaceKey?, k?, source?, focus?, persist? }): Promise<RuntimeSnapshot | null>, setActiveLayout(layoutKey, { persist? }): Promise<RuntimeSnapshot | null>, setLayoutViewCamera(layoutKey, camera3d): void, setLayoutViewCameraPersisted(layoutKey, camera3d): Promise<null>, focusPanel(panelId): boolean, focusBuiltin(role): boolean, focusPanelByRole(role): boolean, closePanel(panelId): boolean }`. `persist` accepts `true`, `false`, or `"background"`; omitted/`"background"` updates local state immediately and writes runtime state asynchronously, `true` waits for runtime persistence, and `false` is local-only.
+- `usePanelCommands()` → `{ setLabelFilter, setHoveredId, clearLassoSelection, clearSelection(): void, setSelection(ids, { source?, persist?, clearLasso? }): Promise<RuntimeSnapshot | null>, showSimilar({ sampleId, layoutKey, k?, source?, focus?, persist? }): Promise<RuntimeSnapshot | null>, setActiveLayout(layoutKey, { persist? }): Promise<RuntimeSnapshot | null>, setLayoutViewCamera(layoutKey, camera3d): void, setLayoutViewCameraPersisted(layoutKey, camera3d): Promise<null>, setPanelLayout(panelId, { width?, height?, minWidth?, minHeight?, maxWidth?, maxHeight? }), resizePanel(panelId, { width?, height?, minWidth?, minHeight?, maxWidth?, maxHeight? }), movePanel(panelId, { position, referencePanelId?, direction? }), setPanelVisible(panelId, visible), setActivePanel(panelId), focusPanel(panelId): boolean, focusBuiltin(role): boolean, focusPanelByRole(role): boolean, closePanel(panelId): boolean }`. `showSimilar` is layout-scoped: pass the layout key and HyperView resolves the associated embedding space automatically. `persist` accepts `true`, `false`, or `"background"` for selection/layout/similarity commands; omitted/`"background"` updates local state immediately and writes runtime state asynchronously, `true` waits for runtime persistence, and `false` is local-only.
 - `usePanelHover()` → `{ hoveredId, setHoveredId(id), clearHover() }`
 - `usePanelLayoutView(layoutKey?)` → `{ layoutKey, view, camera3d, setCamera3d(camera3d) }`
 - `usePanelLayouts()` → `{ layouts, spaces, get(layoutKey), getSpace(spaceKey), find(query), filter(query) }`; query supports `layoutKey`, `spaceKey`, `geometry`, `modelId`, and `dimension`.
@@ -109,7 +108,11 @@ Verified against the current `panel-sdk` surface:
 - `usePanelUiState()` → `{ sampleGridSize, setSampleGridSize, scatterLabelOverlayMode, setScatterLabelOverlayMode }`
 - `usePanelDatasetInfo()` / `usePanelSamples()` / `usePanelSamplesView()` → host-managed dataset and view state
 - `useTool(uri)` → `{ loading: boolean, result: TResult | null, error: string | null, run(params?): Promise<TResult | null>, reset(): void }`
-- `usePanelClient()` → low-level client; pair with `createClient(workspaceId)` for direct API calls. Useful methods include `querySamples`, `aggregateSamples`, `getSamplesByIds`, `searchSimilar`, `setSimilarityQuery`, `clearSimilarityQuery`, `setSelection`, and `selectSamples`.
+- `usePanelClient()` → API data client. Prefer host hooks and `usePanelCommands()` for UI state; useful data methods include `querySamples`, `aggregateSamples`, `getSamplesByIds`, `searchSimilar`, and `selectSamples`.
+
+Sample reads default to `includeThumbnails: false` and return `thumbnail_url`
+for image rendering. Request inline thumbnails only when the panel specifically
+needs base64 thumbnail payloads.
 
 To clear the current selection from a panel and enqueue runtime persistence, use `await usePanelCommands().setSelection([])`. Pass `{ persist: true }` when the code must wait for runtime persistence, and pass `{ persist: false }` only for local transient UI changes.
 
@@ -141,14 +144,6 @@ hyperview ui panel add \
   --position right
 ```
 
-## Verification
-
-After `hyperview ui panel add --extension ...`:
-
-- `curl 'http://127.0.0.1:6262/api/runtime?workspace_id=<ws>'` should list the panel under `workspace.ui.custom_panels[*]` with `data.module_src` set to a `/api/panels/content/<ws>/<panel-id>/<file>` URL.
-- Fetching `data.module_src` should return `application/javascript` with your module body.
-- The panel should appear in the live UI in the requested `position` slot.
-
 ## Good Practices
 
 - Prefer panel modules over HTML or iframe content.
@@ -160,12 +155,17 @@ After `hyperview ui panel add --extension ...`:
 - Use `usePanelClient()` only for data that is not already available through the host state.
 - Use `usePanelClient().querySamples(...)`, `aggregateSamples(...)`, or `selectSamples(...)` for dataset-wide behavior instead of fixed-limit client scans.
 - Use `usePanelClient().searchSimilar(...)` instead of hand-building `/api/search/similar/...` URLs.
+- Use `commands.showSimilar({ sampleId, layoutKey })` for nearest-neighbor UI state; pass the layout key and let HyperView resolve the embedding space.
+- Use SDK commands or client methods for control-plane writes.
+- Use `setActivePanel`, `setPanelVisible`, `resizePanel`, and `movePanel` when a panel needs to durably control panel view state. Use local `focusPanel` and `closePanel` only for transient user actions.
+- Do not use `window.dispatchEvent` / `window.addEventListener` to synchronize panel state. Keep shared state in the host/runtime model, or keep the interaction inside one owner panel until a public shared-state hook exists.
+- Do not use `focusPanel` or `closePanel` from mount effects to create the initial workspace layout. Compose startup layout with `hv.ui.View(...)` or CLI panel commands.
+- Pass only documented panel props.
+- Do not embed large generated result sets, base64 contact sheets, or evaluation artifacts in panel JavaScript. Use compact props, extension assets, or extension tools that return artifact URLs.
 - Keep the panel self-contained under `.hyperview/extensions/<extension-name>/`.
 - If the panel needs sibling assets, keep them next to the module and reference them with relative URLs.
-- Do not render a second title/header inside a normal Dockview runtime panel unless there is a strong reason. Dockview already provides the tab title. Built-in center and runtime panels should usually start with the standardized `PanelToolbar` row.
+- Avoid duplicate title/header rows unless the panel has a specific reason. Built-in center and runtime panels should usually start with the standardized `PanelToolbar` row.
 
 ## Current Limitation
 
-Panel modules should currently be authored as browser-loadable JavaScript modules.
-
-If an agent wants TypeScript or JSX ergonomics, it should bundle or transpile to JavaScript before registration.
+Panel modules must be browser-loadable JavaScript modules.

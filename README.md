@@ -104,7 +104,7 @@ If you use HyperView in research, please cite:
   author  = {{Hyper3Labs}},
   title   = {HyperView: An Interactive Geometric Workbench for Embedding Space Analysis},
   year    = {2026},
-  version = {0.5.0},
+  version = {0.6.2},
   url     = {https://github.com/Hyper3Labs/HyperView}
 }
 ```

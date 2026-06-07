@@ -5,6 +5,7 @@ export interface Sample {
   label: string | null;
   thumbnail: string | null;
   media_url?: string | null;
+  thumbnail_url?: string | null;
   metadata: Record<string, unknown>;
   width: number | null;
   height: number | null;
@@ -79,7 +80,7 @@ export interface RuntimePanelData {
   module_src: string | null;
 }
 
-export type RuntimePanelKind = "module" | "scatter";
+export type RuntimePanelKind = "module" | "scatter" | "builtin";
 
 export type RuntimePanelPosition = "center" | "right" | "bottom";
 
@@ -90,6 +91,7 @@ export interface RuntimePanel {
   kind: RuntimePanelKind;
   title: string;
   position: RuntimePanelPosition;
+  builtin_panel: "samples" | string | null;
   extension: string | null;
   extension_panel: string | null;
   module_file: string | null;
@@ -98,6 +100,13 @@ export interface RuntimePanel {
   layout_dimension: number | null;
   reference_panel_id: string | null;
   direction: RuntimePanelDirection | null;
+  width: number | null;
+  height: number | null;
+  min_width: number | null;
+  min_height: number | null;
+  max_width: number | null;
+  max_height: number | null;
+  visible: boolean;
   props: Record<string, unknown>;
   data: RuntimePanelData;
 }
@@ -129,6 +138,8 @@ export interface RuntimeWorkspaceState {
       }
     >;
     custom_panels: RuntimePanel[];
+    has_explicit_view: boolean;
+    active_panel_id: string | null;
     view_revision: number;
   };
 }

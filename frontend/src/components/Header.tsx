@@ -6,7 +6,10 @@ import { CENTER_PANEL_DEFS } from "@/panels/registry";
 import { HyperViewLogo } from "./icons";
 import { FaDiscord } from "react-icons/fa";
 import { useDockviewApi } from "./DockviewWorkspace";
-import { useDockviewOpenPanelIds } from "./DockviewContext";
+import {
+  useDockviewOpenEdgeZones,
+  useDockviewOpenPanelIds,
+} from "./DockviewContext";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -52,21 +55,20 @@ import {
 
 const PANEL_CONFIG = CENTER_PANEL_DEFS;
 const VIEW_MENU_PANEL_IDS = PANEL_CONFIG.map((panel) => panel.id);
+const EDGE_ZONE_IDS = ["left", "bottom", "right"] as const;
 const GITHUB_URL = "https://github.com/Hyper3Labs/HyperView";
 const DISCORD_URL = process.env.NEXT_PUBLIC_DISCORD_URL ?? "https://discord.gg/Za3rBkTPSf";
 
 export function Header() {
   const {
     datasetInfo,
-    leftPanelOpen,
-    rightPanelOpen,
-    bottomPanelOpen,
     activeWorkspaceId,
     workspaces,
   } = useStore();
   const applyRuntimeSnapshot = useStore((state) => state.applyRuntimeSnapshot);
   const dockview = useDockviewApi();
   const openPanels = useDockviewOpenPanelIds(VIEW_MENU_PANEL_IDS);
+  const openEdgeZones = useDockviewOpenEdgeZones(EDGE_ZONE_IDS);
   const [datasetPickerOpen, setDatasetPickerOpen] = useState(false);
   const labelColorMapId = useColorSettings((state) => state.labelColorMapId);
   const setLabelColorMapId = useColorSettings((state) => state.setLabelColorMapId);
@@ -232,13 +234,15 @@ export function Header() {
           <Button
             variant="ghost"
             size="sm"
+            aria-label="Toggle labels panel"
+            title="Toggle labels panel"
             onClick={() => dockview?.toggleZone("left")}
             className={cn(
-              "h-6 w-6 p-0",
-              leftPanelOpen
-                ? "text-foreground bg-muted/50"
-                : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
-            )}
+                "h-6 w-6 p-0",
+                openEdgeZones.has("left")
+                  ? "text-foreground bg-muted/50"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
+              )}
           >
             <PanelLeft className="h-3.5 w-3.5" />
           </Button>
@@ -247,13 +251,15 @@ export function Header() {
           <Button
             variant="ghost"
             size="sm"
+            aria-label="Toggle bottom panel"
+            title="Toggle bottom panel"
             onClick={() => dockview?.toggleZone("bottom")}
             className={cn(
-              "h-6 w-6 p-0",
-              bottomPanelOpen
-                ? "text-foreground bg-muted/50"
-                : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
-            )}
+                "h-6 w-6 p-0",
+                openEdgeZones.has("bottom")
+                  ? "text-foreground bg-muted/50"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
+              )}
           >
             <PanelBottom className="h-3.5 w-3.5" />
           </Button>
@@ -262,13 +268,15 @@ export function Header() {
           <Button
             variant="ghost"
             size="sm"
+            aria-label="Toggle right panel"
+            title="Toggle right panel"
             onClick={() => dockview?.toggleZone("right")}
             className={cn(
-              "h-6 w-6 p-0",
-              rightPanelOpen
-                ? "text-foreground bg-muted/50"
-                : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
-            )}
+                "h-6 w-6 p-0",
+                openEdgeZones.has("right")
+                  ? "text-foreground bg-muted/50"
+                  : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
+              )}
           >
             <PanelRight className="h-3.5 w-3.5" />
           </Button>

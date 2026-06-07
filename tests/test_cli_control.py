@@ -38,7 +38,9 @@ class FigureRuntimeFixture:
     def get_workspace(self, workspace_id: str | None = None) -> WorkspaceState:
         return self.workspace
 
-    def get_dataset(self, workspace_id: str | None = None, dataset_name: str | None = None) -> Dataset:
+    def get_dataset(
+        self, workspace_id: str | None = None, dataset_name: str | None = None
+    ) -> Dataset:
         return self.dataset
 
 
@@ -214,7 +216,15 @@ def test_cli_figure_export_reports_validation_error(
     monkeypatch.setattr("hyperview.cli.HyperViewRuntime", fake_runtime)
 
     with pytest.raises(SystemExit) as exc_info:
-        main(["figure", "export", str(output), "--layout", "precomputed_2d__euclidean_precomputed__2d"])
+        main(
+            [
+                "figure",
+                "export",
+                str(output),
+                "--layout",
+                "precomputed_2d__euclidean_precomputed__2d",
+            ]
+        )
 
     assert "3D layouts only" in str(exc_info.value)
 
@@ -261,12 +271,15 @@ def test_cli_panel_add_posts_extension_panel_instance(
         "panel_id": "agent-panel",
         "title": None,
         "kind": "extension",
+        "builtin_panel": None,
         "extension": "agent-tools",
         "extension_panel": "agent-panel",
         "layout_key": None,
         "position": "right",
         "reference_panel_id": None,
         "direction": None,
+        "visible": True,
+        "props": None,
     }
 
 
@@ -315,12 +328,205 @@ def test_cli_panel_add_posts_scatter_panel_layout_binding(monkeypatch, capsys) -
         "panel_id": "uncha-poincare",
         "title": "UNCHA",
         "kind": "scatter",
+        "builtin_panel": None,
         "extension": None,
         "extension_panel": None,
         "layout_key": "uncha__poincare_umap__2d",
         "position": "center",
         "reference_panel_id": "hycoclip-poincare",
         "direction": "right",
+        "visible": True,
+        "props": None,
+    }
+
+
+def test_cli_panel_add_posts_builtin_samples_panel(monkeypatch, capsys) -> None:
+    recorded: dict[str, object] = {}
+
+    def fake_send(url: str, payload: dict[str, object], method: str = "POST") -> dict[str, object]:
+        recorded["url"] = url
+        recorded["payload"] = payload
+        recorded["method"] = method
+        return {"workspace": {"id": "default"}}
+
+    monkeypatch.setattr("hyperview.cli._http_send_json", fake_send)
+
+    main(
+        [
+            "ui",
+            "panel",
+            "add",
+            "--workspace",
+            "default",
+            "--panel-id",
+            "samples",
+            "--kind",
+            "builtin",
+            "--builtin-panel",
+            "samples",
+            "--position",
+            "right",
+            "--json",
+        ]
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["workspace"]["id"] == "default"
+    assert recorded["method"] == "POST"
+    assert recorded["url"] == "http://127.0.0.1:6262/api/control/ui/panels"
+    assert recorded["payload"] == {
+        "workspace_id": "default",
+        "panel_id": "samples",
+        "title": None,
+        "kind": "builtin",
+        "builtin_panel": "samples",
+        "extension": None,
+        "extension_panel": None,
+        "layout_key": None,
+        "position": "right",
+        "reference_panel_id": None,
+        "direction": None,
+        "visible": True,
+        "props": None,
+    }
+
+
+def test_cli_panel_update_posts_runtime_panel_props(monkeypatch, capsys) -> None:
+    recorded: dict[str, object] = {}
+
+    def fake_send(url: str, payload: dict[str, object], method: str = "POST") -> dict[str, object]:
+        recorded["url"] = url
+        recorded["payload"] = payload
+        recorded["method"] = method
+        return {"workspace": {"id": "default"}}
+
+    monkeypatch.setattr("hyperview.cli._http_send_json", fake_send)
+
+    main(
+        [
+            "ui",
+            "panel",
+            "update",
+            "--workspace",
+            "default",
+            "--panel-id",
+            "ranked-clip",
+            "--props-json",
+            '{"mode":"ranked","rank":{"anchorSampleId":"sample-1","k":24}}',
+            "--json",
+        ]
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["workspace"]["id"] == "default"
+    assert recorded["method"] == "PATCH"
+    assert recorded["url"] == "http://127.0.0.1:6262/api/control/ui/panels"
+    assert recorded["payload"] == {
+        "workspace_id": "default",
+        "panel_id": "ranked-clip",
+        "props": {
+            "mode": "ranked",
+            "rank": {
+                "anchorSampleId": "sample-1",
+                "k": 24,
+            },
+        },
+    }
+
+
+def test_cli_panel_layout_commands_patch_runtime_panel_state(monkeypatch, capsys) -> None:
+    recorded: list[dict[str, object]] = []
+
+    def fake_send(url: str, payload: dict[str, object], method: str = "POST") -> dict[str, object]:
+        recorded.append({"url": url, "payload": payload, "method": method})
+        return {"workspace": {"id": "default"}}
+
+    monkeypatch.setattr("hyperview.cli._http_send_json", fake_send)
+
+    main(
+        [
+            "ui",
+            "panel",
+            "resize",
+            "--workspace",
+            "default",
+            "--panel-id",
+            "readout",
+            "--width",
+            "360",
+            "--min-width",
+            "280",
+            "--json",
+        ]
+    )
+    main(
+        [
+            "ui",
+            "panel",
+            "move",
+            "--workspace",
+            "default",
+            "--panel-id",
+            "readout",
+            "--position",
+            "right",
+            "--reference-panel-id",
+            "samples",
+            "--direction",
+            "right",
+            "--json",
+        ]
+    )
+    main(
+        [
+            "ui",
+            "panel",
+            "focus",
+            "--workspace",
+            "default",
+            "--panel-id",
+            "readout",
+            "--json",
+        ]
+    )
+    main(
+        [
+            "ui",
+            "panel",
+            "close",
+            "--workspace",
+            "default",
+            "--panel-id",
+            "readout",
+            "--json",
+        ]
+    )
+
+    _ = capsys.readouterr()
+    assert [entry["method"] for entry in recorded] == ["PATCH", "PATCH", "PATCH", "PATCH"]
+    assert recorded[0]["payload"] == {
+        "workspace_id": "default",
+        "panel_id": "readout",
+        "width": 360,
+        "min_width": 280,
+    }
+    assert recorded[1]["payload"] == {
+        "workspace_id": "default",
+        "panel_id": "readout",
+        "position": "right",
+        "reference_panel_id": "samples",
+        "direction": "right",
+    }
+    assert recorded[2]["payload"] == {
+        "workspace_id": "default",
+        "panel_id": "readout",
+        "active": True,
+        "visible": True,
+    }
+    assert recorded[3]["payload"] == {
+        "workspace_id": "default",
+        "panel_id": "readout",
+        "visible": False,
     }
 
 
@@ -699,10 +905,12 @@ def test_cli_skill_install_refuses_overlapping_destination(
     monkeypatch.setattr(skill_install_module, "_resolve_skill_source", lambda: source)
 
     with pytest.raises(ValueError, match="source and destination overlap"):
-        main([
-            "skill",
-            "install",
-            "--destination",
-            str(source / "nested"),
-            "--json",
-        ])
+        main(
+            [
+                "skill",
+                "install",
+                "--destination",
+                str(source / "nested"),
+                "--json",
+            ]
+        )

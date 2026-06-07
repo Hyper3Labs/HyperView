@@ -62,12 +62,12 @@ export function PanelContextBar({ items, rightContent, className }: PanelContext
   return (
     <div
       className={cn(
-        "h-6 min-h-[24px] border-b border-border bg-secondary/20 px-2",
-        "flex items-center gap-2",
+        "h-6 min-h-[24px] border-b border-border bg-secondary/20 pl-1.5 pr-2",
+        "flex items-center gap-1.5",
         className
       )}
     >
-      <div className="min-w-0 flex-1 flex items-center gap-2 overflow-x-auto">
+      <div className="min-w-0 flex-1 flex items-center gap-1.5 overflow-x-auto">
         {visibleItems.map((item, index) => {
           const valueTitle = item.valueTitle ?? item.value;
           const showLabel = item.showLabel ?? item.label.trim().length > 0;
@@ -78,7 +78,7 @@ export function PanelContextBar({ items, rightContent, className }: PanelContext
           const displayValue = selectedLabel ?? item.value ?? item.placeholder ?? "Select";
 
           return (
-            <div key={item.id} className="flex items-center gap-2 min-w-0">
+            <div key={item.id} className="flex items-center gap-1.5 min-w-0">
               {index > 0 && <span className="h-3 w-px bg-border/80 flex-shrink-0" aria-hidden="true" />}
 
               {showLabel && (
@@ -95,8 +95,8 @@ export function PanelContextBar({ items, rightContent, className }: PanelContext
                       size="sm"
                       disabled={item.disabled || item.options.length === 0}
                       className={cn(
-                        "h-6 max-w-[260px] justify-start gap-1.5 rounded-sm px-1.5",
-                        "text-[12px] leading-[16px] tracking-[-0.15px] font-normal text-foreground",
+                        "h-[22px] max-w-[260px] justify-start gap-1.5 rounded-sm px-0.5",
+                        "text-[12px] leading-[16px] font-normal text-foreground",
                         "hover:bg-muted/50",
                         item.valueClassName
                       )}

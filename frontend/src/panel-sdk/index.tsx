@@ -12,7 +12,7 @@ import {
   PanelToolbarMenu,
   type PanelToolbarItem,
 } from "@/components/PanelToolbar";
-import { apiUrl, getRuntimeClientId } from "@/lib/api";
+import { apiUrl, fetchSamplesBatch, getRuntimeClientId } from "@/lib/api";
 import { getLayoutDimension } from "@/lib/layouts";
 import { useHyperViewSamplesView } from "@/panels/runtime";
 import { PANEL } from "@/panels/registry";
@@ -44,10 +44,35 @@ interface SelectionCommandOptions extends PanelCommandOptions {
 
 interface LayoutCommandOptions extends PanelCommandOptions {}
 
+interface PanelLayoutCommandOptions extends PanelCommandOptions {
+  width?: number | null;
+  height?: number | null;
+  minWidth?: number | null;
+  minHeight?: number | null;
+  maxWidth?: number | null;
+  maxHeight?: number | null;
+}
+
+interface PanelMoveCommandOptions extends PanelCommandOptions {
+  position: "center" | "right" | "bottom";
+  referencePanelId?: string | null;
+  direction?: "right" | "left" | "above" | "below" | "within" | null;
+}
+
+function panelLayoutPatch(options: PanelLayoutCommandOptions): Record<string, unknown> {
+  const patch: Record<string, unknown> = {};
+  if ("width" in options) patch.width = options.width ?? null;
+  if ("height" in options) patch.height = options.height ?? null;
+  if ("minWidth" in options) patch.min_width = options.minWidth ?? null;
+  if ("minHeight" in options) patch.min_height = options.minHeight ?? null;
+  if ("maxWidth" in options) patch.max_width = options.maxWidth ?? null;
+  if ("maxHeight" in options) patch.max_height = options.maxHeight ?? null;
+  return patch;
+}
+
 interface SimilarityCommandOptions extends PanelCommandOptions {
   sampleId: string;
-  layoutKey?: string | null;
-  spaceKey?: string | null;
+  layoutKey: string;
   k?: number;
   source?: string | null;
   focus?: BuiltinPanelRole | false;
@@ -130,6 +155,13 @@ function getPersistenceMode(
   return "background";
 }
 
+function spaceKeyForSimilarity(
+  layoutKey: string | null | undefined,
+  spaceKey: string | null | undefined
+): string | null | undefined {
+  return layoutKey ? undefined : spaceKey;
+}
+
 export function createHyperViewPanelClient(workspaceId: string | null) {
   return {
     async getDatasetInfo() {
@@ -148,7 +180,7 @@ export function createHyperViewPanelClient(workspaceId: string | null) {
           workspace_id: workspaceId,
           offset: args?.offset ?? 0,
           limit: args?.limit ?? 100,
-          include_thumbnails: args?.includeThumbnails ?? true,
+          include_thumbnails: args?.includeThumbnails ?? false,
         })
       );
     },
@@ -169,7 +201,7 @@ export function createHyperViewPanelClient(workspaceId: string | null) {
           metadata: args?.metadata ?? null,
           offset: args?.offset ?? 0,
           limit: args?.limit ?? 100,
-          include_thumbnails: args?.includeThumbnails ?? true,
+          include_thumbnails: args?.includeThumbnails ?? false,
         }),
       });
     },
@@ -179,16 +211,11 @@ export function createHyperViewPanelClient(workspaceId: string | null) {
         includeThumbnails?: boolean;
       }
     ) {
-      return fetchJson(apiUrl("/samples/query"), {
-        method: "POST",
-        body: JSON.stringify({
-          workspace_id: workspaceId,
-          ids,
-          offset: 0,
-          limit: Math.max(ids.length, 1),
-          include_thumbnails: args?.includeThumbnails ?? true,
-        }),
+      const samples = await fetchSamplesBatch(ids, {
+        workspaceId,
+        includeThumbnails: args?.includeThumbnails ?? false,
       });
+      return { samples };
     },
     async aggregateSamples(args?: {
       groupBy?: "label" | `metadata.${string}`;
@@ -213,14 +240,16 @@ export function createHyperViewPanelClient(workspaceId: string | null) {
         k?: number;
         spaceKey?: string | null;
         layoutKey?: string | null;
+        includeThumbnails?: boolean;
       }
     ) {
       return fetchJson(
         buildUrl(apiUrl(`/search/similar/${encodeURIComponent(sampleId)}`), {
           workspace_id: workspaceId,
           k: args?.k ?? 10,
-          space_key: args?.spaceKey ?? undefined,
           layout_key: args?.layoutKey ?? undefined,
+          space_key: spaceKeyForSimilarity(args?.layoutKey, args?.spaceKey),
+          include_thumbnails: args?.includeThumbnails ?? false,
         })
       );
     },
@@ -237,7 +266,7 @@ export function createHyperViewPanelClient(workspaceId: string | null) {
           workspace_id: workspaceId,
           sample_id: args.sampleId,
           layout_key: args.layoutKey ?? null,
-          space_key: args.spaceKey ?? null,
+          space_key: spaceKeyForSimilarity(args.layoutKey, args.spaceKey),
           k: args.k ?? 18,
           source: args.source ?? "panel-client",
         }),
@@ -472,6 +501,7 @@ export function usePanelRuntimeState() {
   const runtimeDatasetName = useStore((state) => state.runtimeDatasetName);
   const activeLayoutKey = useStore((state) => state.activeLayoutKey);
   const activeSimilarityQuery = useStore((state) => state.activeSimilarityQuery);
+  const activePanelId = useStore((state) => state.activePanelId);
   const requestedLayoutKey = useStore((state) => state.requestedLayoutKey);
   const workspaces = useStore((state) => state.workspaces);
   const customPanels = useStore((state) => state.customPanels);
@@ -484,6 +514,7 @@ export function usePanelRuntimeState() {
       runtimeDatasetName,
       activeLayoutKey,
       activeSimilarityQuery,
+      activePanelId,
       requestedLayoutKey,
       workspaces,
       customPanels,
@@ -493,6 +524,7 @@ export function usePanelRuntimeState() {
     [
       activeLayoutKey,
       activeSimilarityQuery,
+      activePanelId,
       activeWorkspaceId,
       customPanels,
       layoutViews,
@@ -798,7 +830,7 @@ export function usePanelCommands() {
             workspace_id: activeWorkspaceId,
             sample_id: options.sampleId,
             layout_key: options.layoutKey ?? null,
-            space_key: options.spaceKey ?? null,
+            space_key: null,
             k: options.k ?? 18,
             source,
           }),
@@ -826,6 +858,28 @@ export function usePanelCommands() {
         }).catch((error) => {
           console.error("Failed to persist runtime UI state:", error);
         });
+      };
+
+      const persistPanelPatch = async (
+        panelId: string,
+        patch: Record<string, unknown>
+      ): Promise<RuntimeSnapshot> => {
+        if (!activeWorkspaceId) {
+          throw new Error("No active workspace");
+        }
+        await fetchJson(apiUrl("/control/ui/panels"), {
+          method: "PATCH",
+          body: JSON.stringify({
+            workspace_id: activeWorkspaceId,
+            panel_id: panelId,
+            ...patch,
+          }),
+        });
+        const snapshot = await fetchJson<RuntimeSnapshot>(
+          buildUrl(apiUrl("/runtime"), { workspace_id: activeWorkspaceId })
+        );
+        applyRuntimeSnapshot(snapshot);
+        return snapshot;
       };
 
       const setSelection = async (
@@ -863,12 +917,12 @@ export function usePanelCommands() {
         const query: SimilarityQuery = {
           anchor_sample_id: sampleId,
           layout_key: options.layoutKey ?? null,
-          space_key: options.spaceKey ?? null,
+          space_key: null,
           k: options.k ?? 18,
           source,
         };
         clearLassoSelection();
-        setSelectedIds(new Set([sampleId]), "panel");
+        setSelectedIds(new Set<string>(), "panel");
         setActiveSimilarityQuery(query);
 
         if (options.focus) {
@@ -883,13 +937,11 @@ export function usePanelCommands() {
 
         if (persistenceMode === "background") {
           persistRuntimeUiPatch({
-            set_selection: true,
-            selected_ids: [sampleId],
             set_similarity_query: true,
             similarity_query: {
               sample_id: sampleId,
               layout_key: options.layoutKey ?? null,
-              space_key: options.spaceKey ?? null,
+              space_key: null,
               k: options.k ?? 18,
               source,
             },
@@ -938,6 +990,26 @@ export function usePanelCommands() {
           });
           return null;
         },
+        setPanelLayout: async (
+          panelId: string,
+          options: PanelLayoutCommandOptions,
+        ) => persistPanelPatch(panelId, panelLayoutPatch(options)),
+        resizePanel: async (
+          panelId: string,
+          options: PanelLayoutCommandOptions,
+        ) => persistPanelPatch(panelId, panelLayoutPatch(options)),
+        movePanel: async (
+          panelId: string,
+          options: PanelMoveCommandOptions,
+        ) => persistPanelPatch(panelId, {
+          position: options.position,
+          reference_panel_id: options.referencePanelId ?? null,
+          direction: options.direction ?? null,
+        }),
+        setPanelVisible: async (panelId: string, visible: boolean) =>
+          persistPanelPatch(panelId, { visible }),
+        setActivePanel: async (panelId: string) =>
+          persistPanelPatch(panelId, { active: true, visible: true }),
         focusBuiltin: (role: BuiltinPanelRole) => {
           const panelId = getPanelIdForBuiltinRole(role);
           return panelId ? focusDockPanel(dockview.api, panelId) : false;

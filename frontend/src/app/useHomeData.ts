@@ -40,7 +40,8 @@ function useRefreshDatasetMetadata() {
 
 function useSamplesDataFlow(
   refreshDatasetMetadata: (signal?: AbortSignal) => Promise<void>,
-  runtimeResetKey: string
+  runtimeResetKey: string,
+  runtimeReady: boolean
 ) {
   const datasetInfo = useStore((state) => state.datasetInfo);
   const samples = useStore((state) => state.samples);
@@ -55,8 +56,10 @@ function useSamplesDataFlow(
   const error = useStore((state) => state.error);
   const setError = useStore((state) => state.setError);
   const selectedIds = useStore((state) => state.selectedIds);
+  const activeSimilarityQuery = useStore((state) => state.activeSimilarityQuery);
   const isLassoSelection = useStore((state) => state.isLassoSelection);
   const selectionSource = useStore((state) => state.selectionSource);
+  const selectionLayoutKey = useStore((state) => state.selectionLayoutKey);
   const lassoQuery = useStore((state) => state.lassoQuery);
   const lassoSamples = useStore((state) => state.lassoSamples);
   const lassoTotal = useStore((state) => state.lassoTotal);
@@ -97,24 +100,32 @@ function useSamplesDataFlow(
   }, [setDatasetInfo, setError, setIsLoading, setSamples]);
 
   useEffect(() => {
+    if (!runtimeReady) return;
+
     const controller = new AbortController();
     void loadInitialData(controller.signal);
 
     return () => {
       controller.abort();
     };
-  }, [loadInitialData, runtimeResetKey]);
+  }, [loadInitialData, runtimeReady, runtimeResetKey]);
 
   const retryInitialLoad = useCallback(() => {
+    if (!runtimeReady) return;
     void loadInitialData();
-  }, [loadInitialData]);
+  }, [loadInitialData, runtimeReady]);
 
   useEffect(() => {
-    const fetchSelectedSamples = async () => {
-      if (isLassoSelection || selectedIds.size === 0) return;
+    const fetchContextSamples = async () => {
+      if (isLassoSelection) return;
 
       const loadedIds = new Set(samples.map((sample) => sample.id));
-      const missingIds = Array.from(selectedIds).filter((id) => !loadedIds.has(id));
+      const contextIds = new Set(selectedIds);
+      if (activeSimilarityQuery?.anchor_sample_id) {
+        contextIds.add(activeSimilarityQuery.anchor_sample_id);
+      }
+      if (contextIds.size === 0) return;
+      const missingIds = Array.from(contextIds).filter((id) => !loadedIds.has(id));
 
       if (missingIds.length === 0) return;
 
@@ -126,8 +137,14 @@ function useSamplesDataFlow(
       }
     };
 
-    void fetchSelectedSamples();
-  }, [addSamplesIfMissing, isLassoSelection, samples, selectedIds]);
+    void fetchContextSamples();
+  }, [
+    activeSimilarityQuery?.anchor_sample_id,
+    addSamplesIfMissing,
+    isLassoSelection,
+    samples,
+    selectedIds,
+  ]);
 
   useEffect(() => {
     if (isLassoSelection) {
@@ -290,6 +307,7 @@ function useSamplesDataFlow(
     selectedAnchorId,
     selectedIds,
     selectedIdsList,
+    selectionLayoutKey,
     selectionSource,
     totalSamples,
   };
@@ -302,6 +320,7 @@ function useNeighborsDataFlow(args: {
   isLassoSelection: boolean;
   selectedAnchorId: string | null;
   selectedCount: number;
+  selectionLayoutKey: string | null;
 }) {
   const {
     activeLayoutKey,
@@ -310,6 +329,7 @@ function useNeighborsDataFlow(args: {
     isLassoSelection,
     selectedAnchorId,
     selectedCount,
+    selectionLayoutKey,
   } = args;
 
   const neighborsResults = useStore((state) => state.neighborsResults);
@@ -335,9 +355,12 @@ function useNeighborsDataFlow(args: {
         null
       );
     }
+    if (selectionLayoutKey) {
+      return findLayoutByKey(datasetInfo.layouts, selectionLayoutKey) ?? null;
+    }
     if (!activeLayoutKey) return datasetInfo.layouts[0] ?? null;
     return findLayoutByKey(datasetInfo.layouts, activeLayoutKey) ?? datasetInfo.layouts[0] ?? null;
-  }, [activeLayoutKey, activeSimilarityQuery, datasetInfo]);
+  }, [activeLayoutKey, activeSimilarityQuery, datasetInfo, selectionLayoutKey]);
 
   const resolvedNeighborSpace = useMemo(() => {
     if (!datasetInfo) return null;
@@ -394,10 +417,13 @@ function useNeighborsDataFlow(args: {
 
     const run = async () => {
       try {
+        const queryLayoutKey =
+          activeSimilarityQuery?.layout_key ??
+          (activeSimilarityQuery ? undefined : resolvedNeighborLayout?.layout_key ?? undefined);
         const response = await fetchSimilarSamples(resolvedNeighborAnchorId, {
           k: neighborsLimit,
-          spaceKey: activeSimilarityQuery?.layout_key ? undefined : resolvedNeighborSpace.space_key,
-          layoutKey: activeSimilarityQuery?.layout_key ?? undefined,
+          spaceKey: queryLayoutKey ? undefined : resolvedNeighborSpace.space_key,
+          layoutKey: queryLayoutKey,
           includeThumbnails: false,
           signal: abort.signal,
         });
@@ -423,6 +449,7 @@ function useNeighborsDataFlow(args: {
     resolvedNeighborLayout?.layout_key,
     resolvedNeighborSpace,
     resolvedNeighborAnchorId,
+    selectionLayoutKey,
     selectedCount,
     setNeighborsError,
     setNeighborsResults,
@@ -472,10 +499,14 @@ export function useHomeData(): {
   retry: () => void;
 } {
   const refreshDatasetMetadata = useRefreshDatasetMetadata();
-  const runtimeResetKey = useRuntimeSync(async () => {
+  const { runtimeReady, runtimeResetKey } = useRuntimeSync(async () => {
     await refreshDatasetMetadata();
   });
-  const samplesFlow = useSamplesDataFlow(refreshDatasetMetadata, runtimeResetKey);
+  const samplesFlow = useSamplesDataFlow(
+    refreshDatasetMetadata,
+    runtimeResetKey,
+    runtimeReady
+  );
   const activeSimilarityQuery = useStore((state) => state.activeSimilarityQuery);
   const neighborsFlow = useNeighborsDataFlow({
     activeLayoutKey: samplesFlow.activeLayoutKey,
@@ -484,6 +515,7 @@ export function useHomeData(): {
     isLassoSelection: samplesFlow.isLassoSelection,
     selectedAnchorId: samplesFlow.selectedAnchorId,
     selectedCount: samplesFlow.selectedIdsList.length,
+    selectionLayoutKey: samplesFlow.selectionLayoutKey,
   });
 
   const samplesById = useMemo(() => {
@@ -495,20 +527,33 @@ export function useHomeData(): {
   }, [samplesFlow.samples]);
 
   const selectedSamples = useMemo(() => {
+    const queryAnchorId = activeSimilarityQuery?.anchor_sample_id;
+    if (queryAnchorId) {
+      const queryAnchor = samplesById.get(queryAnchorId);
+      return queryAnchor ? [queryAnchor] : [];
+    }
+
     return samplesFlow.selectedIdsList
       .map((id) => samplesById.get(id) ?? null)
       .filter((sample): sample is Sample => sample !== null);
-  }, [samplesById, samplesFlow.selectedIdsList]);
+  }, [activeSimilarityQuery?.anchor_sample_id, samplesById, samplesFlow.selectedIdsList]);
 
   const derivedNeighborSamples = useMemo(() => {
-    if (samplesFlow.selectedIdsList.length !== 1) {
+    const queryAnchorId = activeSimilarityQuery?.anchor_sample_id ?? null;
+    if (!queryAnchorId && samplesFlow.selectedIdsList.length !== 1) {
       return [] as Sample[];
     }
 
+    const excludedIds = queryAnchorId ? new Set([queryAnchorId]) : samplesFlow.selectedIds;
     return neighborsFlow.neighborsResults.filter(
-      (sample) => !samplesFlow.selectedIds.has(sample.id)
+      (sample) => !excludedIds.has(sample.id)
     );
-  }, [neighborsFlow.neighborsResults, samplesFlow.selectedIds, samplesFlow.selectedIdsList.length]);
+  }, [
+    activeSimilarityQuery?.anchor_sample_id,
+    neighborsFlow.neighborsResults,
+    samplesFlow.selectedIds,
+    samplesFlow.selectedIdsList,
+  ]);
 
   const neighborsSourceLabel = useMemo(() => {
     const space = neighborsFlow.resolvedNeighborSpace;
@@ -575,37 +620,44 @@ export function useHomeData(): {
   ]);
 
   const samplesView = useMemo<SamplesViewModel>(
-    () => ({
-      collection: samplesCollection,
-      derivedSpace: {
-        visible: !samplesFlow.isLassoSelection && selectedSamples.length > 0,
-        selectionSamples: selectedSamples,
-        neighborSamples:
-          samplesFlow.selectedIdsList.length === 1 ? derivedNeighborSamples : [],
-        neighborsMetric:
-          samplesFlow.selectedIdsList.length === 1 ? neighborsFlow.neighborsMetric : null,
-        neighborsSourceLabel:
-          samplesFlow.selectedIdsList.length === 1 ? neighborsSourceLabel : null,
-        neighborsLoading:
-          samplesFlow.selectedIdsList.length === 1 ? neighborsFlow.neighborsLoading : false,
-        hasMoreNeighbors:
-          samplesFlow.selectedIdsList.length === 1 ? neighborsFlow.hasMoreNeighbors : false,
-        loadMoreNeighbors:
-          samplesFlow.selectedIdsList.length === 1 ? neighborsFlow.loadMoreNeighbors : undefined,
-        neighborsError:
-          samplesFlow.selectedIdsList.length === 1 ? neighborsFlow.neighborsError : null,
-        neighborsScrollResetKey: samplesFlow.selectedAnchorId
-          ? `neighbors:${samplesFlow.selectedAnchorId}`
-          : `selection:${samplesFlow.selectedIdsList.join(",")}`,
-      },
-    }),
+    () => {
+      const queryAnchorId = activeSimilarityQuery?.anchor_sample_id ?? null;
+      const neighborAnchorId = queryAnchorId ?? samplesFlow.selectedAnchorId;
+      const hasNeighborContext = Boolean(queryAnchorId) || samplesFlow.selectedIdsList.length === 1;
+
+      return {
+        collection: samplesCollection,
+        derivedSpace: {
+          visible: !samplesFlow.isLassoSelection && selectedSamples.length > 0,
+          selectionSamples: selectedSamples,
+          neighborSamples: hasNeighborContext ? derivedNeighborSamples : [],
+          neighborsMetric: hasNeighborContext ? neighborsFlow.neighborsMetric : null,
+          neighborsSourceLabel: hasNeighborContext ? neighborsSourceLabel : null,
+          neighborsLoading: hasNeighborContext ? neighborsFlow.neighborsLoading : false,
+          hasMoreNeighbors: hasNeighborContext ? neighborsFlow.hasMoreNeighbors : false,
+          loadMoreNeighbors: hasNeighborContext ? neighborsFlow.loadMoreNeighbors : undefined,
+          neighborsError: hasNeighborContext ? neighborsFlow.neighborsError : null,
+          neighborsScrollResetKey: neighborAnchorId
+            ? [
+                "neighbors",
+                neighborAnchorId,
+                neighborsFlow.resolvedNeighborSpace?.space_key ?? "none",
+                neighborsFlow.resolvedNeighborLayout?.layout_key ?? "none",
+              ].join(":")
+            : `selection:${samplesFlow.selectedIdsList.join(",")}`,
+        },
+      };
+    },
     [
+      activeSimilarityQuery?.anchor_sample_id,
       derivedNeighborSamples,
       neighborsFlow.hasMoreNeighbors,
       neighborsFlow.loadMoreNeighbors,
       neighborsFlow.neighborsError,
       neighborsFlow.neighborsLoading,
       neighborsFlow.neighborsMetric,
+      neighborsFlow.resolvedNeighborLayout,
+      neighborsFlow.resolvedNeighborSpace,
       neighborsSourceLabel,
       samplesCollection,
       samplesFlow.isLassoSelection,
@@ -618,7 +670,7 @@ export function useHomeData(): {
   return {
     samplesView,
     error: samplesFlow.error,
-    isLoading: samplesFlow.isLoading,
+    isLoading: !runtimeReady || samplesFlow.isLoading,
     retry: samplesFlow.retryInitialLoad,
   };
 }

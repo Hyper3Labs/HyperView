@@ -44,7 +44,7 @@ def _make_dataset_with_embeddings(
         "geometry": geometry,
     }
     if curvature is not None:
-        config["curvature"] = curvature
+        config["params"] = {"curvature": curvature}
 
     space_key = f"{name}_space"
     dataset._storage.ensure_space(

@@ -1,4 +1,4 @@
-@import "dockview/dist/styles/dockview.css";
+@import "dockview-react/dist/styles/dockview.css";
 
 @tailwind base;
 @tailwind components;
@@ -137,20 +137,15 @@
   --dv-tabs-container-scrollbar-color: hsl(var(--muted-foreground) / 0.25);
   --dv-scrollbar-background-color: hsl(var(--muted-foreground) / 0.25);
   --dv-tab-divider-color: hsl(var(--border));
-  --dv-separator-border: transparent;
+  --dv-separator-border: hsl(var(--border));
   --dv-paneview-header-border-color: hsl(var(--border));
-  --dv-sash-color: hsl(var(--border));
+  --dv-sash-color: transparent;
   --dv-icon-hover-background-color: hsl(var(--accent));
   --dv-active-sash-color: hsl(var(--primary));
   --dv-drag-over-background-color: hsl(var(--primary) / 0.15);
   --dv-drag-over-border-color: hsl(var(--primary) / 0.6);
   /* Remove tab margins for flush appearance */
   --dv-tab-margin: 0;
-}
-
-/* Remove any gaps between panels - Rerun-style flush layout */
-.hyperview-dockview .dv-groupview {
-  border: none;
 }
 
 .hyperview-dockview .dv-tabs-and-actions-container {
@@ -165,6 +160,16 @@
   line-height: 16px;
 }
 
+.hyperview-dockview .dv-tab.dv-active-tab {
+  box-shadow:
+    inset 0 0 0 1px hsl(var(--border)),
+    0 1px 0 0 hsl(var(--border));
+}
+
+.hyperview-dockview .dv-tab:has(.dv-default-tab-action) {
+  padding-right: 4px;
+}
+
 .hyperview-dockview .dv-tab .dv-react-part {
   height: 100%;
   min-width: 0;
@@ -172,60 +177,50 @@
   align-items: center;
 }
 
-.hyperview-dockview .dv-scrollable .dv-scrollbar-horizontal {
-  height: 6px;
-  border-radius: 3px;
+.hyperview-dockview .hyperview-dockview-icon-tab {
+  height: 100%;
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-/* Hide Dockview tab scrollbars (avoid extra bar under tabs) */
-.hyperview-dockview .dv-tabs-container {
-  scrollbar-width: none;
+.hyperview-dockview .hyperview-dockview-icon-tab .dv-default-tab-content {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.hyperview-dockview .dv-tabs-container::-webkit-scrollbar {
-  height: 0;
+.hyperview-dockview .hyperview-dockview-icon-tab .dv-default-tab-action {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin-left: 2px;
+  padding: 0;
+  color: hsl(var(--muted-foreground));
 }
 
-.hyperview-dockview .dv-scrollable .dv-scrollbar-horizontal {
-  display: none;
+.hyperview-dockview .hyperview-dockview-icon-tab .dv-default-tab-action:hover {
+  color: hsl(var(--foreground));
 }
 
-/* Sash styling: transparent hit area with centered 1px visible line via pseudo-element */
-.hyperview-dockview .dv-split-view-container > .dv-sash-container > .dv-sash {
-  /* Keep the sash itself transparent - we'll draw the line with ::after */
-  background-color: transparent !important;
+.hyperview-dockview .hyperview-dockview-icon-tab .dv-default-tab-action svg {
+  display: block;
 }
 
-/* Horizontal sash (vertical divider line) */
-.hyperview-dockview .dv-split-view-container.dv-horizontal > .dv-sash-container > .dv-sash::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 1px;
-  background-color: hsl(var(--border));
-  pointer-events: none;
+.hyperview-dockview .hyperview-dockview-icon-tab-icon {
+  flex: 0 0 auto;
+  color: hsl(var(--muted-foreground));
 }
 
-.hyperview-dockview .dv-split-view-container.dv-horizontal > .dv-sash-container > .dv-sash.dv-enabled:hover::after {
-  background-color: hsl(var(--primary));
-}
-
-/* Vertical sash (horizontal divider line) */
-.hyperview-dockview .dv-split-view-container.dv-vertical > .dv-sash-container > .dv-sash::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  height: 1px;
-  background-color: hsl(var(--border));
-  pointer-events: none;
-}
-
-.hyperview-dockview .dv-split-view-container.dv-vertical > .dv-sash-container > .dv-sash.dv-enabled:hover::after {
-  background-color: hsl(var(--primary));
+.hyperview-dockview .hyperview-dockview-icon-tab-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

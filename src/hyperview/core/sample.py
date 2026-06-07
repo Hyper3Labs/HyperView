@@ -62,10 +62,15 @@ class Sample(BaseModel):
         if self.thumbnail_base64 is None:
             self.thumbnail_base64 = self._encode_thumbnail(size)
 
-    def to_api_dict(self, include_thumbnail: bool = True) -> dict[str, Any]:
+    def to_api_dict(
+        self,
+        include_thumbnail: bool = True,
+        *,
+        ensure_dimensions: bool = True,
+    ) -> dict[str, Any]:
         """Convert to dictionary for API response."""
-        # Ensure dimensions are populated (loads image if needed but not cached)
-        if self.width is None or self.height is None:
+        # Dimension loading may touch image files, so list APIs can opt out.
+        if ensure_dimensions and (self.width is None or self.height is None):
             self.ensure_dimensions()
 
         data = {
@@ -90,6 +95,5 @@ class Sample(BaseModel):
             except Exception:
                 # If image can't be loaded, leave as None
                 pass
-
 
 

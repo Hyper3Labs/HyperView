@@ -1,6 +1,6 @@
 # Extensions
 
-Use this guide when creating a HyperView extension that includes backend Python tools and a frontend panel.
+Use this guide when creating a HyperView extension that includes Python tools and a browser panel.
 
 ## Model
 
@@ -10,6 +10,11 @@ Extensions define reusable capabilities. They should not encode a whole workspac
 layout or know about sibling panels. Compose concrete demo/workspace layouts
 from Python with `hv.ui.View(...)` and `session.ui.apply_view(...)`, or from
 the CLI with `hyperview ui panel add --extension ...`.
+
+Extensions should also keep generated data out of panel source. If a panel
+needs ranked query results, benchmark summaries, contact sheets, or other
+artifacts, generate or read them from an extension tool and return compact JSON or
+URLs from `ctx.url_for(...)`.
 
 Preferred shape for agent-authored, project-versioned extensions:
 
@@ -46,7 +51,7 @@ Treat `position` as a weak default for where the panel usually belongs. Cross-pa
 relationships such as "this scatter is right of that scatter" belong to the
 workspace view/composition layer, not the extension manifest.
 
-## Backend Tools
+## Python Tools
 
 Tools are plain Python functions decorated with `@tool("namespace.name")`. The first argument is a `RunContext`.
 
@@ -94,9 +99,9 @@ Use `ctx.dataset` for active dataset reads, `ctx.workspace` for workspace UI sta
 - `sample.label: str | None`
 - `sample.metadata: dict[str, Any]`
 
-## Frontend Panel
+## Browser Panel
 
-Panel modules must be browser-loadable JavaScript modules. They export a default React component or named `Panel`, and use `globalThis.HyperViewPanelSDK` rather than importing from app internals.
+Panel modules must be browser-loadable JavaScript modules. They export a default React component or named `Panel`, and use `globalThis.HyperViewPanelSDK`.
 
 ```js
 const sdk = globalThis.HyperViewPanelSDK;
@@ -136,18 +141,23 @@ Available SDK hooks include `usePanelRuntimeState`, `usePanelHostState`, `usePan
 
 For dataset-wide panel behavior, prefer `usePanelClient().querySamples(...)`,
 `aggregateSamples(...)`, `selectSamples(...)`, `getSamplesByIds(...)`,
-`searchSimilar(...)`, or a backend tool over scanning a fixed
+`searchSimilar(...)`, or an extension tool over scanning a fixed
 `listSamples({ limit: ... })` page or hand-building API URLs in the browser.
+Sample reads default to `includeThumbnails: false`; use each sample's
+`thumbnail_url` for images, and request inline thumbnails only when a panel
+explicitly needs base64 data.
 
-Use `usePanelHostState()` for low-level synchronized host state instead of
-importing frontend internals. Use narrower hooks such as `usePanelSelection()`,
+Use `usePanelHostState()` for synchronized host state. Use narrower hooks such as `usePanelSelection()`,
 `usePanelSelectedSamples()`, `usePanelHover()`, `usePanelLayouts()`, and
 `usePanelLayoutView()` when the panel only needs one part of that state. Use
 `usePanelCommands()` for host writes. Selection and active-layout changes
-update frontend state immediately and persist to runtime UI state in the
+update host state immediately and persist to runtime UI state in the
 background by default. Pass `{ persist: true }` only when the caller must wait
 for durable runtime state, and pass `{ persist: false }` for local transient UI
 changes.
+
+Do not use browser globals such as `window.dispatchEvent` to synchronize panels,
+and use SDK commands for control-plane writes.
 
 `useTool(uri)` returns `{ run, result, loading, error, reset }`. Call `run(params)` to invoke the tool; `result` holds the last successful return value, `loading` is true while a call is in flight, and `error` is the last failure message (or `null`). See [panel-modules.md](panel-modules.md#hook-return-shapes) for the full hook return shape table.
 
@@ -197,13 +207,13 @@ hyperview tools run selection_profile.summarize \
   --json
 ```
 
-Reload after editing files:
+Reload an installed extension:
 
 ```bash
 hyperview extension reload selection-profile --json
 ```
 
-Compose a demo view from Python instead of importing runtime internals:
+Compose a demo view from Python:
 
 ```python
 import hyperview as hv
@@ -218,7 +228,9 @@ view = hv.ui.View(
         extension="catalog-readout",
         panel="readout",
         position="right",
+        layout=hv.ui.PanelLayout(width=340, min_width=280),
     ),
+    active_panel="readout",
 )
 
 session = hv.launch(dataset, block=False)
@@ -226,21 +238,9 @@ session.ui.add_extension(".hyperview/extensions/catalog-readout")
 session.ui.apply_view(view)
 ```
 
-## Verification
-
-A good extension smoke test proves all of these paths:
-
-- `extension add` returns the extension with expected tools and panel definitions.
-- `GET /api/tools` (or `hyperview tools list --json`) includes the tool URI.
-- `hyperview tools run ...` returns data from the active dataset.
-- Tool-generated files under `ctx.extension_storage` are fetchable from URLs returned by `ctx.url_for(...)`.
-- `GET /api/runtime?workspace_id=<workspace>` includes the panel under `workspace.ui.custom_panels[*]` with `data.module_src` set to a `/api/panels/content/<workspace>/<panel-id>/<file>` URL.
-- Fetching `data.module_src` returns `application/javascript` with your module body.
-- In the browser, the panel imports successfully and a `useTool()` call returns a result.
-
 ## Constraints
 
 - Treat extensions as trusted local code. Python tools are imported and executed in the HyperView runtime process.
-- Do not use bare npm imports in panel modules unless you bundle first.
-- Keep extension source outside `frontend/src`; the runtime loads panel modules from local extension files.
-- Keep extension examples small and high-level. Avoid private HyperView APIs in user-facing examples.
+- Panel modules should use the SDK global and extension-local assets.
+- Keep extension files under `.hyperview/extensions/<name>/`.
+- Keep extension examples small and high-level. Use documented HyperView APIs.

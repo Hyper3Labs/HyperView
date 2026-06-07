@@ -32,7 +32,10 @@ def test_compute_embeddings_can_be_limited_to_requested_sample_ids() -> None:
 
     engine.embed_images.reset_mock()
 
-    with patch("hyperview.embeddings.engine.get_engine", return_value=engine):
+    with patch(
+        "hyperview.embeddings.engine.get_engine",
+        side_effect=AssertionError("cached embeddings should not initialize the engine"),
+    ):
         same_space_key = dataset.compute_embeddings(
             model="mock-model",
             sample_ids=["s0", "s1"],

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { fetchRuntimeState, getRuntimeEventsUrl } from "@/lib/api";
 import { useStore } from "@/store/useStore";
@@ -8,13 +8,14 @@ import type { RuntimeSnapshot } from "@/types";
 
 export function useRuntimeSync(
   onRuntimeRefresh?: (snapshot: RuntimeSnapshot) => Promise<void> | void
-): string {
+): { runtimeResetKey: string; runtimeReady: boolean } {
   const applyRuntimeSnapshot = useStore((state) => state.applyRuntimeSnapshot);
   const activeWorkspaceId = useStore((state) => state.activeWorkspaceId);
   const runtimeDatasetName = useStore((state) => state.runtimeDatasetName);
   const refreshRef = useRef(onRuntimeRefresh);
   const lastAppliedRuntimeIdRef = useRef<string | null>(null);
   const lastAppliedVersionRef = useRef(-1);
+  const [runtimeReady, setRuntimeReady] = useState(false);
 
   useEffect(() => {
     refreshRef.current = onRuntimeRefresh;
@@ -35,6 +36,7 @@ export function useRuntimeSync(
 
       lastAppliedVersionRef.current = snapshot.version;
       applyRuntimeSnapshot(snapshot);
+      setRuntimeReady(true);
       if (refreshRef.current) {
         await refreshRef.current(snapshot);
       }
@@ -46,6 +48,7 @@ export function useRuntimeSync(
         await handleSnapshot(snapshot);
       } catch (err) {
         console.error("Failed to bootstrap runtime state:", err);
+        setRuntimeReady(true);
       }
     };
 
@@ -70,5 +73,8 @@ export function useRuntimeSync(
     };
   }, [applyRuntimeSnapshot]);
 
-  return `${activeWorkspaceId ?? "none"}:${runtimeDatasetName ?? "none"}`;
+  return {
+    runtimeResetKey: `${activeWorkspaceId ?? "none"}:${runtimeDatasetName ?? "none"}`,
+    runtimeReady,
+  };
 }

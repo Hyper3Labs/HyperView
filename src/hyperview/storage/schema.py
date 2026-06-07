@@ -2,7 +2,6 @@
 
 Storage architecture:
 - samples: Core sample metadata (no embeddings)
-- metadata: Key-value pairs for dataset config
 - spaces: Registry of embedding spaces
 - embeddings__<space_key>: One table per embedding space (id + vector)
 - layouts__<layout_key>: One table per layout (id + x + y [+ z])
@@ -21,10 +20,7 @@ from hyperview.core.sample import Sample
 def normalize_layout_dimension(layout_dimension: int) -> int:
     """Validate and normalize a visualization layout dimension."""
     if layout_dimension not in (2, 3):
-        raise ValueError(
-            "layout_dimension must be one of "
-            f"(2, 3), got {layout_dimension}"
-        )
+        raise ValueError(f"layout_dimension must be one of (2, 3), got {layout_dimension}")
     return int(layout_dimension)
 
 
@@ -56,16 +52,6 @@ def create_sample_schema() -> pa.Schema:
             pa.field("label", pa.utf8(), nullable=True),
             pa.field("metadata_json", pa.utf8(), nullable=True),
             pa.field("thumbnail_base64", pa.utf8(), nullable=True),
-        ]
-    )
-
-
-def create_metadata_schema() -> pa.Schema:
-    """Create the PyArrow schema for dataset metadata (key-value store)."""
-    return pa.schema(
-        [
-            pa.field("key", pa.utf8(), nullable=False),
-            pa.field("value", pa.utf8(), nullable=True),
         ]
     )
 
@@ -291,6 +277,7 @@ def make_layout_key(
     if params:
         # Create a stable hash of params
         import hashlib
+
         params_str = "_".join(f"{k}={v}" for k, v in sorted(params.items()))
         params_hash = hashlib.md5(params_str.encode()).hexdigest()[:8]
         return f"{base}_{params_hash}"
@@ -320,4 +307,3 @@ def dict_to_sample(row: dict[str, Any]) -> Sample:
         metadata=metadata,
         thumbnail_base64=row.get("thumbnail_base64"),
     )
-

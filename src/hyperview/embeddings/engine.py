@@ -69,12 +69,7 @@ class EmbeddingSpec:
         """Get the output geometry for this spec."""
 
         if self.provider == "hyper-models":
-            model_name = self.model_id or self.provider_kwargs.get("name")
-            if model_name is None:
-                return "hyperboloid"
-            import hyper_models
-
-            geom = str(hyper_models.get_model_info(str(model_name)).geometry)
+            geom = str(self.provider_kwargs.get("geometry") or "hyperboloid")
             return "hyperboloid" if geom in ("hyperboloid", "poincare") else "euclidean"
 
         if self.provider in HYPERBOLIC_PROVIDERS:
@@ -132,7 +127,8 @@ class EmbeddingEngine:
     HyperView providers are registered automatically on import.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, provider_registry: ProviderRegistry | None = None) -> None:
+        self.provider_registry = provider_registry or ProviderRegistry()
         self._cache: dict[str, Any] = {}  # spec_hash -> embedding function
 
     def get_function(self, spec: EmbeddingSpec) -> Any:
@@ -151,8 +147,7 @@ class EmbeddingEngine:
         if cache_key in self._cache:
             return self._cache[cache_key]
 
-        custom_registry = ProviderRegistry()
-        custom_registration = custom_registry.get(spec.provider)
+        custom_registration = self.provider_registry.get(spec.provider)
         if custom_registration is not None:
             create_kwargs: dict[str, Any] = {}
             if spec.model_id:
@@ -161,7 +156,7 @@ class EmbeddingEngine:
                 create_kwargs["checkpoint"] = spec.checkpoint
             create_kwargs.update(spec.provider_kwargs)
 
-            func = custom_registry.instantiate(spec.provider, **create_kwargs)
+            func = self.provider_registry.instantiate(spec.provider, **create_kwargs)
             self._cache[cache_key] = func
             return func
 
@@ -173,10 +168,11 @@ class EmbeddingEngine:
         try:
             factory = registry.get(spec.provider)
         except KeyError:
-            available = list_embedding_providers()
+            available = list_embedding_providers(
+                provider_registry=self.provider_registry,
+            )
             raise ValueError(
-                f"Unknown provider: '{spec.provider}'. "
-                f"Available: {', '.join(sorted(available))}"
+                f"Unknown provider: '{spec.provider}'. Available: {', '.join(sorted(available))}"
             ) from None
 
         create_kwargs: dict[str, Any] = {}
@@ -240,7 +236,7 @@ class EmbeddingEngine:
         last_report_at = started_at
 
         for batch_index, i in enumerate(range(0, len(samples), batch_size), start=1):
-            batch_samples = samples[i:i + batch_size]
+            batch_samples = samples[i : i + batch_size]
 
             batch_paths = [s.filepath for s in batch_samples]
             batch_embeddings = func.compute_source_embeddings(batch_paths)
@@ -340,15 +336,27 @@ class EmbeddingEngine:
 _ENGINE: EmbeddingEngine | None = None
 
 
-def get_engine() -> EmbeddingEngine:
-    """Get the global embedding engine singleton."""
+def get_engine(provider_registry: ProviderRegistry | None = None) -> EmbeddingEngine:
+    """Get an embedding engine.
+
+    Calls without a custom provider registry use the process singleton. Calls
+    with an explicit registry get an engine bound to that registry so runtime
+    jobs see providers registered through their runtime control plane.
+    """
+
+    if provider_registry is not None:
+        return EmbeddingEngine(provider_registry=provider_registry)
+
     global _ENGINE
     if _ENGINE is None:
         _ENGINE = EmbeddingEngine()
     return _ENGINE
 
 
-def list_embedding_providers(available_only: bool = False) -> list[str]:
+def list_embedding_providers(
+    available_only: bool = False,
+    provider_registry: ProviderRegistry | None = None,
+) -> list[str]:
     """List all registered embedding providers.
 
     Args:
@@ -362,7 +370,7 @@ def list_embedding_providers(available_only: bool = False) -> list[str]:
     registry = get_registry()
 
     all_providers = list(getattr(registry, "_functions", {}).keys())
-    custom_registry = ProviderRegistry()
+    custom_registry = provider_registry or ProviderRegistry()
     all_known_providers = sorted(
         set(all_providers) | {provider.alias for provider in custom_registry.list()}
     )
@@ -389,7 +397,10 @@ def list_embedding_providers(available_only: bool = False) -> list[str]:
     return sorted(available)
 
 
-def get_provider_info(provider: str) -> dict[str, Any]:
+def get_provider_info(
+    provider: str,
+    provider_registry: ProviderRegistry | None = None,
+) -> dict[str, Any]:
     """Get information about an embedding provider.
 
     Args:
@@ -398,7 +409,7 @@ def get_provider_info(provider: str) -> dict[str, Any]:
     Returns:
         Dict with provider info.
     """
-    custom_registry = ProviderRegistry()
+    custom_registry = provider_registry or ProviderRegistry()
     custom_registration = custom_registry.get(provider)
     if custom_registration is not None:
         return {

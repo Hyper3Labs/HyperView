@@ -20,6 +20,7 @@ interface SampleDerivedSpaceProps {
   loadMoreNeighbors?: () => void;
   neighborsError: string | null;
   neighborsScrollResetKey: string;
+  neighborsTitle?: string;
 }
 
 const ANCHOR_TILE_HEIGHT = 180;
@@ -45,6 +46,7 @@ export function SampleDerivedSpace({
   loadMoreNeighbors,
   neighborsError,
   neighborsScrollResetKey,
+  neighborsTitle = "Nearest neighbors",
 }: SampleDerivedSpaceProps) {
   const { hoveredId, selectedIds, setHoveredId } = useStore();
 
@@ -52,7 +54,7 @@ export function SampleDerivedSpace({
     neighborSamples.length > 0 || neighborsLoading || neighborsError !== null;
   const distanceMetricLabel = getDistanceMetricLabel(neighborsMetric);
   const neighborsLabel = [
-    "Nearest neighbors",
+    neighborsTitle,
     distanceMetricLabel,
     neighborsSourceLabel,
   ].filter(Boolean).join(" · ");

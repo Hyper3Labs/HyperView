@@ -5,7 +5,7 @@ import type {
   DockviewApi,
   IDockviewPanelHeaderProps,
   IDockviewPanelProps,
-} from "dockview";
+} from "dockview-react";
 import { Circle, Disc, Globe2 } from "lucide-react";
 
 import { ScatterPanel } from "@/components/ScatterPanel";
@@ -23,8 +23,6 @@ const PANEL = {
   SCATTER_EUCLIDEAN_3D: "scatter-euclidean-3d",
   SCATTER_SPHERICAL_3D: "scatter-spherical-3d",
   SCATTER_DEFAULT: "scatter-default",
-  RIGHT_PLACEHOLDER: "right-placeholder",
-  BOTTOM_PLACEHOLDER: "bottom-placeholder",
 } as const;
 
 type ScatterPanelParams = {
@@ -102,7 +100,6 @@ function createScatterPanelDefinition(args: {
           geometry,
           layoutDimension,
         },
-        renderer: "always",
         ...(position ? { position } : {}),
       };
     },
@@ -191,7 +188,6 @@ const fallbackScatterBuiltInPanel = defineBuiltInCenterPanel<ScatterPanelParams>
         layoutKey: resolvedLayout?.layout_key,
         layoutDimension,
       },
-      renderer: "always",
       ...(position ? { position } : {}),
     };
   },

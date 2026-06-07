@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterator
 import lancedb
 import numpy as np
 import pyarrow as pa
+from lancedb.expr import col, lit
 
 from hyperview.core.sample import Sample
 from hyperview.storage.backend import StorageBackend
@@ -31,16 +32,14 @@ from hyperview.storage.schema import (
 )
 
 
-def _sql_escape(value: str) -> str:
-    """Escape single quotes for SQL WHERE clauses."""
-    return value.replace("'", "''")
+def _eq_sql(column: str, value: object) -> str:
+    return (col(column) == lit(value)).to_sql()
 
 
-def _sql_float(value: float) -> str:
-    """Format finite floats for SQL WHERE clauses."""
-    if not np.isfinite(value):
-        raise ValueError("Expected finite float for SQL predicate")
-    return format(float(value), ".17g")
+def _in_sql(column: str, values: list[str]) -> str:
+    if not values:
+        raise ValueError("SQL IN predicate requires at least one value")
+    return f"{col(column).to_sql()} IN ({', '.join(lit(value).to_sql() for value in values)})"
 
 
 def _replace_hyperboloid_distances(
@@ -67,6 +66,58 @@ def _replace_hyperboloid_distances(
     return out
 
 
+def _dedupe_rows_by_id(rows: list[dict]) -> list[dict]:
+    """Return rows unique by id, keeping the last occurrence."""
+
+    deduped: dict[str, dict] = {}
+    for row in rows:
+        row_id = str(row["id"])
+        if row_id in deduped:
+            del deduped[row_id]
+        deduped[row_id] = row
+    return list(deduped.values())
+
+
+def _ensure_scalar_index(
+    table: lancedb.table.Table,
+    column: str,
+    *,
+    index_type: str = "BTREE",
+) -> None:
+    expected_type = index_type.lower()
+    for index in table.list_indices():
+        if column in list(getattr(index, "columns", []) or []):
+            existing_type = str(getattr(index, "index_type", "")).lower()
+            if existing_type == expected_type:
+                return
+            table.create_scalar_index(
+                column,
+                index_type=index_type,
+                name=getattr(index, "name", None) or f"{column}_idx",
+                replace=True,
+            )
+            return
+    table.create_scalar_index(
+        column,
+        index_type=index_type,
+        name=f"{column}_idx",
+        replace=False,
+    )
+
+
+def _ensure_samples_indices(table: lancedb.table.Table) -> None:
+    _ensure_scalar_index(table, "id")
+    _ensure_scalar_index(table, "label", index_type="BITMAP")
+
+
+def _ensure_layout_indices(table: lancedb.table.Table, *, layout_dimension: int) -> None:
+    _ensure_scalar_index(table, "id")
+    _ensure_scalar_index(table, "x")
+    _ensure_scalar_index(table, "y")
+    if layout_dimension == 3:
+        _ensure_scalar_index(table, "z")
+
+
 class LanceDBBackend(StorageBackend):
     """LanceDB-based storage backend for HyperView datasets."""
 
@@ -89,7 +140,9 @@ class LanceDBBackend(StorageBackend):
 
     def _get_or_create_samples_table(self) -> lancedb.table.Table | None:
         if "samples" in self._table_names():
-            return self._db.open_table("samples")
+            table = self._db.open_table("samples")
+            _ensure_samples_indices(table)
+            return table
         return None
 
     def _ensure_samples_table(self, data: list[dict]) -> lancedb.table.Table:
@@ -97,35 +150,36 @@ class LanceDBBackend(StorageBackend):
             schema = create_sample_schema()
             arrow_table = pa.Table.from_pylist(data, schema=schema)
             self._samples_table = self._db.create_table("samples", data=arrow_table)
+            _ensure_samples_indices(self._samples_table)
         return self._samples_table
 
     def _get_or_create_spaces_table(self) -> lancedb.table.Table:
         if "spaces" in self._table_names():
-            return self._db.open_table("spaces")
+            table = self._db.open_table("spaces")
+            _ensure_scalar_index(table, "space_key")
+            return table
         return self._db.create_table("spaces", schema=create_spaces_schema())
 
     def add_sample(self, sample: Sample) -> None:
-        data = [sample_to_dict(sample)]
-        if self._samples_table is None:
-            self._ensure_samples_table(data)
-        else:
-            arrow = pa.Table.from_pylist(data, schema=self._samples_table.schema)
-            self._samples_table.merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(arrow)
+        self.add_samples_batch([sample])
 
     def add_samples_batch(self, samples: list[Sample]) -> None:
         if not samples:
             return
-        data = [sample_to_dict(s) for s in samples]
+        data = _dedupe_rows_by_id([sample_to_dict(s) for s in samples])
         if self._samples_table is None:
             self._ensure_samples_table(data)
         else:
+            _ensure_samples_indices(self._samples_table)
             arrow = pa.Table.from_pylist(data, schema=self._samples_table.schema)
-            self._samples_table.merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(arrow)
+            self._samples_table.merge_insert(
+                "id"
+            ).when_matched_update_all().when_not_matched_insert_all().execute(arrow)
 
     def get_sample(self, sample_id: str) -> Sample | None:
         if self._samples_table is None:
             return None
-        results = self._samples_table.search().where(f"id = '{_sql_escape(sample_id)}'").limit(1).to_list()
+        results = self._samples_table.search().where(col("id") == lit(sample_id)).limit(1).to_list()
         return dict_to_sample(results[0]) if results else None
 
     def get_samples_paginated(
@@ -137,13 +191,15 @@ class LanceDBBackend(StorageBackend):
         if self._samples_table is None:
             return [], 0
 
-        import pyarrow.compute as pc
-
         if label:
-            arrow_table = self._samples_table.search().select(["label"]).to_arrow()
-            mask = pc.fill_null(pc.equal(arrow_table.column("label"), pa.scalar(label)), False)
-            total = pc.sum(pc.cast(mask, pa.int64())).as_py()
-            results = self._samples_table.search().where(f"label = '{_sql_escape(label)}'").offset(offset).limit(limit).to_list()
+            total = self._samples_table.count_rows(_eq_sql("label", label))
+            results = (
+                self._samples_table.search()
+                .where(col("label") == lit(label))
+                .offset(offset)
+                .limit(limit)
+                .to_list()
+            )
         else:
             total = self._samples_table.count_rows()
             results = self._samples_table.search().offset(offset).limit(limit).to_list()
@@ -164,7 +220,8 @@ class LanceDBBackend(StorageBackend):
     def delete_sample(self, sample_id: str) -> bool:
         if self._samples_table is None:
             return False
-        self._samples_table.delete(f"id = '{_sql_escape(sample_id)}'")
+        self._samples_table.delete(_eq_sql("id", sample_id))
+        self._samples_table.optimize()
         return True
 
     def __len__(self) -> int:
@@ -181,13 +238,19 @@ class LanceDBBackend(StorageBackend):
     def __contains__(self, sample_id: str) -> bool:
         if self._samples_table is None:
             return False
-        return len(self._samples_table.search().where(f"id = '{_sql_escape(sample_id)}'").limit(1).to_list()) > 0
+        return (
+            len(self._samples_table.search().where(col("id") == lit(sample_id)).limit(1).to_list())
+            > 0
+        )
 
     def get_unique_labels(self) -> list[str]:
         if self._samples_table is None:
             return []
         import pyarrow.compute as pc
-        labels = pc.unique(self._samples_table.search().select(["label"]).to_arrow().column("label")).to_pylist()
+
+        labels = pc.unique(
+            self._samples_table.search().select(["label"]).to_arrow().column("label")
+        ).to_pylist()
         return sorted([label for label in labels if label is not None])
 
     def get_existing_ids(self, sample_ids: list[str]) -> set[str]:
@@ -196,8 +259,9 @@ class LanceDBBackend(StorageBackend):
         existing: set[str] = set()
         for i in range(0, len(sample_ids), 1000):
             chunk = sample_ids[i : i + 1000]
-            id_list = "', '".join(_sql_escape(sid) for sid in chunk)
-            results = self._samples_table.search().where(f"id IN ('{id_list}')").select(["id"]).to_list()
+            results = (
+                self._samples_table.search().where(_in_sql("id", chunk)).select(["id"]).to_list()
+            )
             existing.update(r["id"] for r in results)
         return existing
 
@@ -207,8 +271,7 @@ class LanceDBBackend(StorageBackend):
         rows_by_id: dict[str, dict] = {}
         for i in range(0, len(sample_ids), 1000):
             chunk = sample_ids[i : i + 1000]
-            id_list = "', '".join(_sql_escape(sid) for sid in chunk)
-            for r in self._samples_table.search().where(f"id IN ('{id_list}')").to_list():
+            for r in self._samples_table.search().where(_in_sql("id", chunk)).to_list():
                 rows_by_id[r["id"]] = r
         return [dict_to_sample(rows_by_id[sid]) for sid in sample_ids if sid in rows_by_id]
 
@@ -218,8 +281,12 @@ class LanceDBBackend(StorageBackend):
         labels: dict[str, str | None] = {}
         for i in range(0, len(sample_ids), 1000):
             chunk = sample_ids[i : i + 1000]
-            id_list = "', '".join(_sql_escape(sid) for sid in chunk)
-            for r in self._samples_table.search().select(["id", "label"]).where(f"id IN ('{id_list}')").to_list():
+            for r in (
+                self._samples_table.search()
+                .select(["id", "label"])
+                .where(_in_sql("id", chunk))
+                .to_list()
+            ):
                 labels[r["id"]] = r.get("label")
         return labels
 
@@ -230,7 +297,9 @@ class LanceDBBackend(StorageBackend):
         return [SpaceInfo.from_dict(r) for r in self._spaces_table.to_arrow().to_pylist()]
 
     def get_space(self, space_key: str) -> SpaceInfo | None:
-        results = self._spaces_table.search().where(f"space_key = '{_sql_escape(space_key)}'").limit(1).to_list()
+        results = (
+            self._spaces_table.search().where(col("space_key") == lit(space_key)).limit(1).to_list()
+        )
         return SpaceInfo.from_dict(results[0]) if results else None
 
     def ensure_space(
@@ -245,20 +314,32 @@ class LanceDBBackend(StorageBackend):
         existing = self.get_space(space_key)
         if existing is not None:
             if existing.dim != dim:
-                raise ValueError(f"Space '{space_key}' exists with dim={existing.dim}, requested dim={dim}")
+                raise ValueError(
+                    f"Space '{space_key}' exists with dim={existing.dim}, requested dim={dim}"
+                )
             return existing
 
         now = int(time.time())
         space_info = SpaceInfo(
-            space_key=space_key, model_id=model_id, dim=dim, count=0,
-            created_at=now, updated_at=now, config=config,
+            space_key=space_key,
+            model_id=model_id,
+            dim=dim,
+            count=0,
+            created_at=now,
+            updated_at=now,
+            config=config,
         )
-        self._spaces_table.add(pa.Table.from_pylist([space_info.to_dict()], schema=create_spaces_schema()))
+        _ensure_scalar_index(self._spaces_table, "space_key")
+        self._spaces_table.add(
+            pa.Table.from_pylist([space_info.to_dict()], schema=create_spaces_schema())
+        )
+        self._spaces_table.optimize()
         self._db.create_table(f"embeddings__{space_key}", schema=create_embeddings_schema(dim))
         return space_info
 
     def delete_space(self, space_key: str) -> bool:
-        self._spaces_table.delete(f"space_key = '{_sql_escape(space_key)}'")
+        self._spaces_table.delete(_eq_sql("space_key", space_key))
+        self._spaces_table.optimize()
         emb_table = f"embeddings__{space_key}"
         if emb_table in self._table_names():
             self._db.drop_table(emb_table)
@@ -276,17 +357,30 @@ class LanceDBBackend(StorageBackend):
             self._db.create_table(emb_table_name, schema=create_embeddings_schema(space.dim))
 
         emb_table = self._db.open_table(emb_table_name)
-        data = [{"id": id_, "vector": vec.astype(np.float32).tolist()} for id_, vec in zip(ids, vectors)]
-        emb_table.merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(
+        _ensure_scalar_index(emb_table, "id")
+        data = _dedupe_rows_by_id(
+            [
+                {"id": id_, "vector": vec.astype(np.float32).tolist()}
+                for id_, vec in zip(ids, vectors)
+            ]
+        )
+        emb_table.merge_insert(
+            "id"
+        ).when_matched_update_all().when_not_matched_insert_all().execute(
             pa.Table.from_pylist(data, schema=create_embeddings_schema(space.dim))
         )
+        emb_table.optimize()
 
         # Update space count
-        self._spaces_table.update(where=f"space_key = '{_sql_escape(space_key)}'", values={
-            "count": emb_table.count_rows(), "updated_at": int(time.time())
-        })
+        self._spaces_table.update(
+            where=_eq_sql("space_key", space_key),
+            values={"count": emb_table.count_rows(), "updated_at": int(time.time())},
+        )
+        self._spaces_table.optimize()
 
-    def get_embeddings(self, space_key: str, ids: list[str] | None = None) -> tuple[list[str], np.ndarray]:
+    def get_embeddings(
+        self, space_key: str, ids: list[str] | None = None
+    ) -> tuple[list[str], np.ndarray]:
         space = self.get_space(space_key)
         if space is None:
             raise ValueError(f"Space not found: {space_key}")
@@ -297,8 +391,9 @@ class LanceDBBackend(StorageBackend):
 
         emb_table = self._db.open_table(emb_table_name)
         if ids is not None:
-            id_list = "', '".join(_sql_escape(sid) for sid in ids)
-            rows = emb_table.search().where(f"id IN ('{id_list}')").to_list()
+            if not ids:
+                return [], np.empty((0, space.dim), dtype=np.float32)
+            rows = emb_table.search().where(_in_sql("id", ids)).to_list()
         else:
             rows = emb_table.to_arrow().to_pylist()
 
@@ -310,7 +405,9 @@ class LanceDBBackend(StorageBackend):
         emb_table_name = f"embeddings__{space_key}"
         if emb_table_name not in self._table_names():
             return set()
-        return {r["id"] for r in self._db.open_table(emb_table_name).search().select(["id"]).to_list()}
+        return {
+            r["id"] for r in self._db.open_table(emb_table_name).search().select(["id"]).to_list()
+        }
 
     def get_missing_embedding_ids(self, space_key: str) -> list[str]:
         if self._samples_table is None:
@@ -319,7 +416,11 @@ class LanceDBBackend(StorageBackend):
         return list(all_ids - self.get_embedded_ids(space_key))
 
     def _get_layouts_registry_table(self) -> lancedb.table.Table | None:
-        return self._db.open_table("layouts_registry") if "layouts_registry" in self._table_names() else None
+        return (
+            self._db.open_table("layouts_registry")
+            if "layouts_registry" in self._table_names()
+            else None
+        )
 
     def _layout_table_name(self, layout_key: str) -> str:
         return f"layouts__{layout_key}"
@@ -335,11 +436,13 @@ class LanceDBBackend(StorageBackend):
     def _ensure_layouts_registry_table(self) -> lancedb.table.Table:
         schema = create_layouts_registry_schema()
         if "layouts_registry" not in self._table_names():
-            self._db.create_table("layouts_registry", schema=schema)
-            return self._db.open_table("layouts_registry")
+            table = self._db.create_table("layouts_registry", schema=schema)
+            _ensure_scalar_index(table, "layout_key")
+            return table
 
         table = self._db.open_table("layouts_registry")
         if table.schema.equals(schema):
+            _ensure_scalar_index(table, "layout_key")
             return table
         raise ValueError(
             "layouts_registry uses an unsupported persisted schema. "
@@ -354,7 +457,7 @@ class LanceDBBackend(StorageBackend):
         table = self._get_layouts_registry_table()
         if table is None:
             return None
-        rows = table.search().where(f"layout_key = '{_sql_escape(layout_key)}'").limit(1).to_list()
+        rows = table.search().where(col("layout_key") == lit(layout_key)).limit(1).to_list()
         return LayoutInfo.from_dict(rows[0]) if rows else None
 
     def ensure_layout(
@@ -372,17 +475,26 @@ class LanceDBBackend(StorageBackend):
         layout_dimension = parse_layout_dimension(layout_key)
 
         layout_info = LayoutInfo(
-            layout_key=layout_key, space_key=space_key, method=method, geometry=geometry,
+            layout_key=layout_key,
+            space_key=space_key,
+            method=method,
+            geometry=geometry,
             count=0,
             created_at=int(time.time()),
             params=params,
         )
         registry_table = self._ensure_layouts_registry_table()
-        registry_table.add(pa.Table.from_pylist([layout_info.to_dict()], schema=create_layouts_registry_schema()))
+        _ensure_scalar_index(registry_table, "layout_key")
+        registry_table.add(
+            pa.Table.from_pylist([layout_info.to_dict()], schema=create_layouts_registry_schema())
+        )
+        registry_table.optimize()
 
         table_name = self._layout_table_name(layout_key)
         if table_name not in self._table_names():
-            self._db.create_table(table_name, schema=create_layouts_schema(layout_dimension=layout_dimension))
+            self._db.create_table(
+                table_name, schema=create_layouts_schema(layout_dimension=layout_dimension)
+            )
         return layout_info
 
     def delete_layout(self, layout_key: str) -> bool:
@@ -391,7 +503,8 @@ class LanceDBBackend(StorageBackend):
             self._db.drop_table(table_name)
         registry = self._get_layouts_registry_table()
         if registry:
-            registry.delete(f"layout_key = '{_sql_escape(layout_key)}'")
+            registry.delete(_eq_sql("layout_key", layout_key))
+            registry.optimize()
         return True
 
     def add_layout_coords(self, layout_key: str, ids: list[str], coords: np.ndarray) -> None:
@@ -424,38 +537,50 @@ class LanceDBBackend(StorageBackend):
                 f"Layout '{layout_key}' uses an unsupported persisted schema. "
                 "Delete the stale dataset storage and recompute layouts."
             )
+        _ensure_layout_indices(table, layout_dimension=layout_dimension)
 
         if layout_dimension == 2:
-            data = [
-                {
-                    "id": id_,
-                    "x": float(c[0]),
-                    "y": float(c[1]),
-                }
-                for id_, c in zip(ids, coords_arr, strict=False)
-            ]
+            data = _dedupe_rows_by_id(
+                [
+                    {
+                        "id": id_,
+                        "x": float(c[0]),
+                        "y": float(c[1]),
+                    }
+                    for id_, c in zip(ids, coords_arr, strict=False)
+                ]
+            )
         else:
-            data = [
-                {
-                    "id": id_,
-                    "x": float(c[0]),
-                    "y": float(c[1]),
-                    "z": float(c[2]),
-                }
-                for id_, c in zip(ids, coords_arr, strict=False)
-            ]
+            data = _dedupe_rows_by_id(
+                [
+                    {
+                        "id": id_,
+                        "x": float(c[0]),
+                        "y": float(c[1]),
+                        "z": float(c[2]),
+                    }
+                    for id_, c in zip(ids, coords_arr, strict=False)
+                ]
+            )
         schema = create_layouts_schema(layout_dimension=layout_dimension)
 
         table.merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(
             pa.Table.from_pylist(data, schema=schema)
         )
+        table.optimize()
 
         # Update count
         registry = self._get_layouts_registry_table()
         if registry:
-            registry.update(where=f"layout_key = '{_sql_escape(layout_key)}'", values={"count": table.count_rows()})
+            registry.update(
+                where=_eq_sql("layout_key", layout_key),
+                values={"count": table.count_rows()},
+            )
+            registry.optimize()
 
-    def get_layout_coords(self, layout_key: str, ids: list[str] | None = None) -> tuple[list[str], np.ndarray]:
+    def get_layout_coords(
+        self, layout_key: str, ids: list[str] | None = None
+    ) -> tuple[list[str], np.ndarray]:
         layout_dimension = parse_layout_dimension(layout_key)
 
         table_name = self._layout_table_name(layout_key)
@@ -470,8 +595,7 @@ class LanceDBBackend(StorageBackend):
         if ids is not None:
             if not ids:
                 return [], np.empty((0, layout_dimension), dtype=np.float32)
-            id_list = "', '".join(_sql_escape(sid) for sid in ids)
-            rows = table.search().select(select_cols).where(f"id IN ('{id_list}')").to_list()
+            rows = table.search().select(select_cols).where(_in_sql("id", ids)).to_list()
         else:
             rows = table.search().select(select_cols).to_list()
 
@@ -519,8 +643,10 @@ class LanceDBBackend(StorageBackend):
             )
 
         where = (
-            f"x >= {_sql_float(x_min)} AND x <= {_sql_float(x_max)} "
-            f"AND y >= {_sql_float(y_min)} AND y <= {_sql_float(y_max)}"
+            (col("x") >= lit(float(x_min)))
+            & (col("x") <= lit(float(x_max)))
+            & (col("y") >= lit(float(y_min)))
+            & (col("y") <= lit(float(y_max)))
         )
         rows = table.search().select(["id", "x", "y"]).where(where).to_list()
 
@@ -529,14 +655,12 @@ class LanceDBBackend(StorageBackend):
                 return [], np.empty((0, 2), dtype=np.float32)
 
             matching_ids: set[str] = set()
-            escaped_label = _sql_escape(label_filter)
             candidate_ids = [r["id"] for r in rows]
             for i in range(0, len(candidate_ids), 1000):
                 chunk = candidate_ids[i : i + 1000]
                 if not chunk:
                     continue
-                id_list = "', '".join(_sql_escape(sid) for sid in chunk)
-                where = f"id IN ('{id_list}') AND label = '{escaped_label}'"
+                where = f"{_in_sql('id', chunk)} AND {_eq_sql('label', label_filter)}"
                 for r in self._samples_table.search().select(["id"]).where(where).to_list():
                     matching_ids.add(r["id"])
 
@@ -549,7 +673,9 @@ class LanceDBBackend(StorageBackend):
 
         return [r["id"] for r in rows], coords
 
-    def find_similar(self, sample_id: str, k: int = 10, space_key: str | None = None) -> list[tuple[Sample, float]]:
+    def find_similar(
+        self, sample_id: str, k: int = 10, space_key: str | None = None
+    ) -> list[tuple[Sample, float]]:
         if space_key is None:
             spaces = self.list_spaces()
             if not spaces:
@@ -626,7 +752,9 @@ class LanceDBBackend(StorageBackend):
         )
         if rows:
             vectors = np.asarray([row["vector"] for row in rows], dtype=np.float32)
-            curvature = resolve_hyperboloid_curvature(space, np.vstack([np.asarray(vector), vectors]))
+            curvature = resolve_hyperboloid_curvature(
+                space, np.vstack([np.asarray(vector), vectors])
+            )
         else:
             curvature = resolve_hyperboloid_curvature(space, vector)
         return _replace_hyperboloid_distances(rows, vector, curvature)

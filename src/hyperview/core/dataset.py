@@ -8,13 +8,11 @@ import math
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
-from datasets import DownloadConfig, load_dataset
-from datasets.fingerprint import Hasher
 from PIL import Image
 
 from hyperview.core.sample import Sample
@@ -27,6 +25,25 @@ from hyperview.storage.schema import (
 
 DEFAULT_VISUALIZATION_LAYOUT = "euclidean"
 VALID_VISUALIZATION_GEOMETRIES = ("euclidean", "poincare", "spherical")
+
+
+def load_dataset(*args: Any, **kwargs: Any) -> Any:
+    """Lazy wrapper for Hugging Face dataset loading."""
+    from datasets import load_dataset as hf_load_dataset
+
+    return hf_load_dataset(*args, **kwargs)
+
+
+def _download_config(**kwargs: Any) -> Any:
+    from datasets import DownloadConfig
+
+    return DownloadConfig(**kwargs)
+
+
+def _hash_huggingface_dataset(dataset: Any) -> str:
+    from datasets.fingerprint import Hasher
+
+    return str(Hasher.hash(dataset))
 
 
 def _format_elapsed(seconds: float) -> str:
@@ -64,6 +81,17 @@ def _normalize_sample_filepath(sample: Sample) -> Sample:
     return sample.model_copy(update={"filepath": normalized})
 
 
+def _dedupe_samples_by_id(samples: list[Sample]) -> list[Sample]:
+    """Return samples unique by id, keeping the last occurrence."""
+
+    deduped: dict[str, Sample] = {}
+    for sample in samples:
+        if sample.id in deduped:
+            del deduped[sample.id]
+        deduped[sample.id] = sample
+    return list(deduped.values())
+
+
 def parse_visualization_layout(layout: str) -> tuple[str, int]:
     """Parse a public visualization layout spec like ``euclidean:3d``.
 
@@ -85,14 +113,12 @@ def parse_visualization_layout(layout: str) -> tuple[str, int]:
 
     if geometry not in VALID_VISUALIZATION_GEOMETRIES:
         raise ValueError(
-            "layout geometry must be one of "
-            f"{VALID_VISUALIZATION_GEOMETRIES}, got '{geometry}'"
+            f"layout geometry must be one of {VALID_VISUALIZATION_GEOMETRIES}, got '{geometry}'"
         )
 
     if dimension_spec not in ("2d", "3d"):
         raise ValueError(
-            "layout must use the form '<geometry>:2d' or '<geometry>:3d', "
-            f"got '{layout}'"
+            f"layout must use the form '<geometry>:2d' or '<geometry>:3d', got '{layout}'"
         )
 
     layout_dimension = normalize_layout_dimension(int(dimension_spec[0]))
@@ -149,57 +175,42 @@ class Dataset:
         return sample
 
     def add_sample(self, sample: Sample) -> None:
-        """Add a sample to the dataset (idempotent)."""
-        self._storage.add_sample(_normalize_sample_filepath(sample))
+        """Add or update a single sample."""
+        self.add_samples([sample], skip_existing=False)
 
-    def _ingest_samples(
+    def add_samples(
         self,
-        samples: list[Sample],
+        samples: Iterable[Sample],
         *,
-        skip_existing: bool = True,
+        skip_existing: bool = False,
     ) -> tuple[int, int]:
-        """Shared ingestion helper for batch sample insertion."""
-        self.last_requested_sample_ids = [sample.id for sample in samples]
-        samples = [_normalize_sample_filepath(sample) for sample in samples]
+        """Add or update samples in a single batch.
 
-        if not samples:
+        Returns ``(num_added_or_upserted, num_skipped_existing)``.
+        """
+        sample_list = list(samples)
+        self.last_requested_sample_ids = [sample.id for sample in sample_list]
+        sample_list = [_normalize_sample_filepath(sample) for sample in sample_list]
+
+        if not sample_list:
             return 0, 0
+
+        sample_list = _dedupe_samples_by_id(sample_list)
 
         skipped = 0
         if skip_existing:
-            all_ids = [sample.id for sample in samples]
+            all_ids = [sample.id for sample in sample_list]
             existing_ids = self._storage.get_existing_ids(all_ids)
             if existing_ids:
-                samples = [sample for sample in samples if sample.id not in existing_ids]
-                skipped = len(all_ids) - len(samples)
+                sample_list = [sample for sample in sample_list if sample.id not in existing_ids]
+                skipped = len(all_ids) - len(sample_list)
 
-        if not samples:
+        if not sample_list:
             return 0, skipped
 
-        self._storage.add_samples_batch(samples)
+        self._storage.add_samples_batch(sample_list)
 
-        return len(samples), skipped
-
-    def add_image(
-        self,
-        filepath: str,
-        label: str | None = None,
-        metadata: dict[str, Any] | None = None,
-        sample_id: str | None = None,
-    ) -> Sample:
-        """Add a single image to the dataset."""
-        filepath = _normalize_local_filepath(filepath)
-        if sample_id is None:
-            sample_id = hashlib.md5(filepath.encode()).hexdigest()[:12]
-
-        sample = Sample(
-            id=sample_id,
-            filepath=filepath,
-            label=label,
-            metadata=metadata or {},
-        )
-        self.add_sample(sample)
-        return sample
+        return len(sample_list), skipped
 
     def add_images_dir(
         self,
@@ -229,7 +240,7 @@ class Dataset:
                 )
                 samples.append(sample)
 
-        return self._ingest_samples(samples, skip_existing=skip_existing)
+        return self.add_samples(samples, skip_existing=skip_existing)
 
     def add_from_huggingface(
         self,
@@ -282,7 +293,7 @@ class Dataset:
                         dataset_name,
                         name=config,
                         split=split,
-                        download_config=DownloadConfig(local_files_only=True),
+                        download_config=_download_config(local_files_only=True),
                     ),
                 )
             except Exception:
@@ -290,7 +301,7 @@ class Dataset:
 
         source_fingerprint = getattr(ds, "_fingerprint", None)
         if source_fingerprint is None:
-            source_fingerprint = Hasher.hash(ds)
+            source_fingerprint = _hash_huggingface_dataset(ds)
         source_fingerprint = str(source_fingerprint)
 
         label_names = None
@@ -381,8 +392,7 @@ class Dataset:
             rate = loaded / elapsed
             if total is None:
                 print(
-                    f"Loaded {loaded} samples "
-                    f"({rate:.1f}/s, elapsed {_format_elapsed(elapsed)})",
+                    f"Loaded {loaded} samples ({rate:.1f}/s, elapsed {_format_elapsed(elapsed)})",
                     flush=True,
                 )
                 return
@@ -398,6 +408,7 @@ class Dataset:
 
         heartbeat: threading.Thread | None = None
         if show_progress and streaming:
+
             def heartbeat_reporter() -> None:
                 while not progress_stop.wait(10.0):
                     now = time.perf_counter()
@@ -501,7 +512,7 @@ class Dataset:
         if total is None:
             total = loaded
 
-        num_added, skipped = self._ingest_samples(samples, skip_existing=skip_existing)
+        num_added, skipped = self.add_samples(samples, skip_existing=skip_existing)
 
         if show_progress:
             print(
@@ -523,6 +534,7 @@ class Dataset:
         batch_size: int = 32,
         sample_ids: list[str] | None = None,
         show_progress: bool = True,
+        _provider_registry: Any | None = None,
         **provider_kwargs: Any,
     ) -> str:
         """Compute embeddings for samples that don't have them yet.
@@ -562,6 +574,7 @@ class Dataset:
             provider = "embed-anything"
             try:
                 import hyper_models
+
                 if model in hyper_models.list_models():
                     provider = "hyper-models"
             except ImportError:
@@ -579,6 +592,7 @@ class Dataset:
             batch_size=batch_size,
             sample_ids=sample_ids,
             show_progress=show_progress,
+            provider_registry=_provider_registry,
         )
         return space_key
 
@@ -632,11 +646,32 @@ class Dataset:
         """List all layouts in this dataset (returns LayoutInfo objects)."""
         return self._storage.list_layouts()
 
+    def _resolve_similarity_space_key(
+        self,
+        *,
+        space_key: str | None = None,
+        layout_key: str | None = None,
+    ) -> str | None:
+        if layout_key is None:
+            return space_key
+
+        layout = next(
+            (item for item in self.list_layouts() if item.layout_key == layout_key),
+            None,
+        )
+        if layout is None:
+            raise ValueError(f"Layout not found: {layout_key}")
+        if space_key is not None and space_key != layout.space_key:
+            raise ValueError("space_key does not match the requested layout_key")
+        return layout.space_key
+
     def find_similar(
         self,
         sample_id: str,
         k: int = 10,
         space_key: str | None = None,
+        *,
+        layout_key: str | None = None,
     ) -> list[tuple[Sample, float]]:
         """Find k most similar samples to a given sample.
 
@@ -644,17 +679,24 @@ class Dataset:
             sample_id: ID of the query sample.
             k: Number of neighbors to return.
             space_key: Embedding space to search in. If None, uses first available.
+            layout_key: Visualization layout whose embedding space should be searched.
 
         Returns:
             List of (sample, distance) tuples, sorted by distance ascending.
         """
-        return self._storage.find_similar(sample_id, k, space_key)
+        resolved_space_key = self._resolve_similarity_space_key(
+            space_key=space_key,
+            layout_key=layout_key,
+        )
+        return self._storage.find_similar(sample_id, k, resolved_space_key)
 
     def find_similar_by_vector(
         self,
         vector: list[float],
         k: int = 10,
         space_key: str | None = None,
+        *,
+        layout_key: str | None = None,
     ) -> list[tuple[Sample, float]]:
         """Find k most similar samples to a given vector.
 
@@ -662,11 +704,16 @@ class Dataset:
             vector: Query vector.
             k: Number of neighbors to return.
             space_key: Embedding space to search in. If None, uses first available.
+            layout_key: Visualization layout whose embedding space should be searched.
 
         Returns:
             List of (sample, distance) tuples, sorted by distance ascending.
         """
-        return self._storage.find_similar_by_vector(vector, k, space_key)
+        resolved_space_key = self._resolve_similarity_space_key(
+            space_key=space_key,
+            layout_key=layout_key,
+        )
+        return self._storage.find_similar_by_vector(vector, k, resolved_space_key)
 
     def set_coords(
         self,
@@ -794,7 +841,6 @@ class Dataset:
             return [], [], np.empty((0, layout_dimension), dtype=np.float32)
 
         return ids, labels, np.asarray(coords, dtype=np.float32)
-
 
     def get_lasso_candidates_aabb(
         self,

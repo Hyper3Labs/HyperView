@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.2 - 2026-06-08
+
+### Features
+- Add runtime-managed panel update, resize, move, focus, close, and show controls through the CLI, API, Python UI controller, and panel SDK.
+- Add built-in samples panels to the runtime panel contract, including ranked sample views backed by explicit similarity queries.
+- Add public custom provider registration helpers for CLI and Python workflows.
+- Add batch sample ingestion and thumbnail URL handling for larger image datasets.
+
+### Fixes
+- Keep explicit similarity queries separate from workspace selection so refreshing the UI no longer selects the first sample in the sample grid.
+- Update the workspace layout code to use `dockview-react` directly and simplify panel state synchronization.
+- Raise the LanceDB dependency floor and adjust vector index/upsert handling for the current LanceDB API.
+
+### Documentation
+- Refresh the packaged HyperView agent skill for provider registration, samples panels, durable panel layout controls, and panel-module guidance.
+- Update release citation metadata.
+
+## 0.6.1 - 2026-06-04
+
+### Fixes
+- Bump the `hyper-models` dependency requirement for current Hyper3-CLIP provider compatibility.
+
 ## 0.6.0 - 2026-06-04
 
 ### Features

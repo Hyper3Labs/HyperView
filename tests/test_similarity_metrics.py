@@ -7,9 +7,9 @@ import pytest
 
 from hyperview.core.sample import Sample
 from hyperview.storage.config import StorageConfig
+from hyperview.storage.geometry import resolve_geometry
 from hyperview.storage.lancedb_backend import LanceDBBackend
 from hyperview.storage.metrics import (
-    curvature_for_space,
     hyperboloid_dot_query,
     infer_hyperboloid_curvature,
     pairwise_embedding_distances,
@@ -70,7 +70,7 @@ def test_lancedb_backend_uses_exact_hyperboloid_distance(tmp_path: Path) -> None
     backend.ensure_space(
         model_id="hyper-model",
         dim=3,
-        config={"provider": "test", "geometry": "hyperboloid", "curvature": 1.0},
+        config={"provider": "test", "geometry": "hyperboloid", "params": {"curvature": 1.0}},
         space_key=space_key,
     )
     backend.add_embeddings(space_key, ids, vectors)
@@ -122,7 +122,7 @@ def test_lancedb_backend_infers_missing_hyperboloid_curvature(tmp_path: Path) ->
     assert results[1][1] == pytest.approx(far_distance, abs=1e-6)
 
 
-def test_curvature_for_space_reads_geometry_params() -> None:
+def test_resolve_geometry_reads_geometry_params() -> None:
     space = SpaceInfo(
         space_key="nested",
         model_id="test",
@@ -137,11 +137,11 @@ def test_curvature_for_space_reads_geometry_params() -> None:
         },
     )
 
-    assert curvature_for_space(space) == pytest.approx(0.1)
+    assert resolve_geometry(space).require_float("curvature") == pytest.approx(0.1)
 
 
 @pytest.mark.parametrize("curvature", [0.0, -1.0, float("nan"), float("inf"), None])
-def test_curvature_for_space_rejects_invalid_values(curvature: object) -> None:
+def test_resolve_geometry_rejects_invalid_curvature_values(curvature: object) -> None:
     space = SpaceInfo(
         space_key="bad",
         model_id="model",
@@ -149,8 +149,8 @@ def test_curvature_for_space_rejects_invalid_values(curvature: object) -> None:
         count=0,
         created_at=0,
         updated_at=0,
-        config={"geometry": "hyperboloid", "curvature": curvature},
+        config={"geometry": "hyperboloid", "params": {"curvature": curvature}},
     )
 
     with pytest.raises(ValueError, match="curvature"):
-        curvature_for_space(space)
+        resolve_geometry(space).require_float("curvature")

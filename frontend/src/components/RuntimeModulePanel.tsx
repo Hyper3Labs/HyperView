@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, type ComponentType } from "react";
-import type { IDockviewPanelProps } from "dockview";
+import type { IDockviewPanelProps } from "dockview-react";
 import { AlertTriangle, Puzzle } from "lucide-react";
 
 import { backendUrl } from "@/lib/api";

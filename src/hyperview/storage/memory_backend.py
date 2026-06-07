@@ -32,7 +32,7 @@ class MemoryBackend(StorageBackend):
         self._layouts: dict[str, dict[str, np.ndarray]] = {}
 
     def add_sample(self, sample: Sample) -> None:
-        self._samples[sample.id] = sample
+        self.add_samples_batch([sample])
 
     def add_samples_batch(self, samples: list[Sample]) -> None:
         for sample in samples:

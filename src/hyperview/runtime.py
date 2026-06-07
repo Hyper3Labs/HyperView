@@ -9,7 +9,7 @@ import json
 import threading
 import time
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
@@ -23,11 +23,22 @@ from hyperview.extensions import (
     unload_extension_modules,
 )
 from hyperview.storage.config import StorageConfig
+from hyperview.storage.schema import parse_layout_dimension
 from hyperview.tools import RunContext, ToolRegistry
 
 
 def _now_ts() -> int:
     return int(time.time())
+
+
+def _positive_int_or_none(value: int | None) -> int | None:
+    if value is None:
+        return None
+    parsed = int(value)
+    return parsed if parsed > 0 else None
+
+
+_UNSET = object()
 
 
 def get_runtime_config_dir() -> Path:
@@ -45,22 +56,24 @@ def get_workspace_registry_path() -> Path:
     return get_runtime_config_dir() / "workspaces.json"
 
 
-def _import_from_path(import_path: str) -> Any:
+def _parse_import_path(import_path: str) -> tuple[str, str]:
     if ":" not in import_path:
-        raise ValueError(
-            "import_path must use the form '<module>:<object>', "
-            f"got '{import_path}'"
-        )
+        raise ValueError(f"import_path must use the form '<module>:<object>', got '{import_path}'")
 
     module_name, object_name = import_path.split(":", 1)
+    if not module_name or not object_name:
+        raise ValueError(f"import_path must use the form '<module>:<object>', got '{import_path}'")
+    return module_name, object_name
+
+
+def _import_from_path(import_path: str) -> Any:
+    module_name, object_name = _parse_import_path(import_path)
     module = importlib.import_module(module_name)
 
     try:
         return getattr(module, object_name)
     except AttributeError as exc:
-        raise ValueError(
-            f"Object '{object_name}' not found in module '{module_name}'"
-        ) from exc
+        raise ValueError(f"Object '{object_name}' not found in module '{module_name}'") from exc
 
 
 @dataclass
@@ -110,7 +123,8 @@ class ProviderRegistry:
     def _save(self) -> None:
         payload = {
             "providers": [
-                provider.to_dict() for provider in sorted(self._providers.values(), key=lambda item: item.alias)
+                provider.to_dict()
+                for provider in sorted(self._providers.values(), key=lambda item: item.alias)
             ]
         }
         self.path.write_text(json.dumps(payload, indent=2, sort_keys=True))
@@ -138,7 +152,7 @@ class ProviderRegistry:
         if existing is not None and not overwrite:
             raise ValueError(f"Provider alias already registered: {alias}")
 
-        _import_from_path(import_path)
+        _parse_import_path(import_path)
 
         registration = ProviderRegistration(
             alias=alias,
@@ -195,7 +209,8 @@ class CustomPanelSpec:
     id: str
     title: str
     module_file: str | None = None
-    kind: Literal["module", "scatter"] = "module"
+    kind: Literal["module", "scatter", "builtin"] = "module"
+    builtin_panel: Literal["samples"] | None = None
     extension: str | None = None
     extension_panel: str | None = None
     position: Literal["center", "right", "bottom"] = "right"
@@ -204,13 +219,26 @@ class CustomPanelSpec:
     layout_dimension: int | None = None
     reference_panel_id: str | None = None
     direction: Literal["right", "left", "above", "below", "within"] | None = None
+    width: int | None = None
+    height: int | None = None
+    min_width: int | None = None
+    min_height: int | None = None
+    max_width: int | None = None
+    max_height: int | None = None
+    visible: bool = True
     props: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CustomPanelSpec:
         kind = str(data.get("kind") or "module")
-        if kind not in {"module", "scatter"}:
+        if kind not in {"module", "scatter", "builtin"}:
             kind = "module"
+
+        builtin_panel = data.get("builtin_panel")
+        if builtin_panel is not None:
+            builtin_panel = str(builtin_panel)
+            if builtin_panel != "samples":
+                builtin_panel = None
 
         position = str(data.get("position") or "right")
         if position not in {"center", "right", "bottom"}:
@@ -229,11 +257,22 @@ class CustomPanelSpec:
             except (TypeError, ValueError):
                 layout_dimension = None
 
+        def positive_int(key: str) -> int | None:
+            value = data.get(key)
+            if value is None:
+                return None
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError):
+                return None
+            return parsed if parsed > 0 else None
+
         return cls(
             id=str(data["id"]),
             title=str(data["title"]),
             module_file=data.get("module_file"),
             kind=kind,  # type: ignore[arg-type]
+            builtin_panel=builtin_panel,  # type: ignore[arg-type]
             extension=data.get("extension"),
             extension_panel=data.get("extension_panel"),
             position=position,  # type: ignore[arg-type]
@@ -242,6 +281,13 @@ class CustomPanelSpec:
             layout_dimension=layout_dimension,
             reference_panel_id=data.get("reference_panel_id"),
             direction=direction,  # type: ignore[arg-type]
+            width=positive_int("width"),
+            height=positive_int("height"),
+            min_width=positive_int("min_width"),
+            min_height=positive_int("min_height"),
+            max_width=positive_int("max_width"),
+            max_height=positive_int("max_height"),
+            visible=bool(data.get("visible", True)),
             props=dict(data.get("props") or {}),
         )
 
@@ -252,6 +298,20 @@ class CustomPanelSpec:
         if not self.module_file:
             return None
         return Path(self.module_file).expanduser().resolve()
+
+
+def _ensure_unique_panel_ids(panels: list[CustomPanelSpec]) -> None:
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for panel in panels:
+        if panel.id in seen and panel.id not in duplicates:
+            duplicates.append(panel.id)
+        seen.add(panel.id)
+    if duplicates:
+        duplicate_list = ", ".join(repr(panel_id) for panel_id in duplicates)
+        raise ValueError(
+            f"Custom panel ids must be unique. Duplicate panel id(s): {duplicate_list}."
+        )
 
 
 @dataclass
@@ -332,6 +392,8 @@ class WorkspaceUiState:
     selected_ids: list[str] = field(default_factory=list)
     similarity_query: SimilarityQueryState | None = None
     custom_panels: list[CustomPanelSpec] = field(default_factory=list)
+    has_explicit_view: bool = False
+    active_panel_id: str | None = None
     layout_views: dict[str, LayoutViewState] = field(default_factory=dict)
     view_revision: int = 0
 
@@ -340,7 +402,7 @@ class WorkspaceUiState:
         custom_panels: list[CustomPanelSpec] = []
         for entry in list(data.get("custom_panels") or []):
             panel = CustomPanelSpec.from_dict(entry)
-            if panel.kind == "scatter" or panel.module_file:
+            if panel.kind in {"scatter", "builtin"} or panel.module_file:
                 custom_panels.append(panel)
 
         layout_views: dict[str, LayoutViewState] = {}
@@ -350,11 +412,18 @@ class WorkspaceUiState:
                 if isinstance(layout_key, str) and isinstance(view_data, dict):
                     layout_views[layout_key] = LayoutViewState.from_dict(view_data)
 
+        similarity_query = SimilarityQueryState.from_dict(data.get("similarity_query") or {})
+        selected_ids = list(data.get("selected_ids") or [])
+        if similarity_query is not None:
+            selected_ids = []
+
         return cls(
             active_layout_key=data.get("active_layout_key"),
-            selected_ids=list(data.get("selected_ids") or []),
-            similarity_query=SimilarityQueryState.from_dict(data.get("similarity_query") or {}),
+            selected_ids=selected_ids,
+            similarity_query=similarity_query,
             custom_panels=custom_panels,
+            has_explicit_view=bool(data.get("has_explicit_view", False)),
+            active_panel_id=data.get("active_panel_id"),
             layout_views=layout_views,
             view_revision=int(data.get("view_revision") or 0),
         )
@@ -364,14 +433,13 @@ class WorkspaceUiState:
             "active_layout_key": self.active_layout_key,
             "selected_ids": list(self.selected_ids),
             "similarity_query": (
-                self.similarity_query.to_dict()
-                if self.similarity_query is not None
-                else None
+                self.similarity_query.to_dict() if self.similarity_query is not None else None
             ),
             "custom_panels": [panel.to_dict() for panel in self.custom_panels],
+            "has_explicit_view": self.has_explicit_view,
+            "active_panel_id": self.active_panel_id,
             "layout_views": {
-                layout_key: view.to_dict()
-                for layout_key, view in sorted(self.layout_views.items())
+                layout_key: view.to_dict() for layout_key, view in sorted(self.layout_views.items())
             },
             "view_revision": self.view_revision,
         }
@@ -692,7 +760,9 @@ class HyperViewRuntime:
             raise ValueError(f"Unknown workspace: {resolved_workspace_id}")
         return workspace
 
-    def get_dataset(self, workspace_id: str | None = None, dataset_name: str | None = None) -> Dataset:
+    def get_dataset(
+        self, workspace_id: str | None = None, dataset_name: str | None = None
+    ) -> Dataset:
         workspace = self.get_workspace(workspace_id)
         resolved_dataset_name = dataset_name or workspace.dataset_name
         if not resolved_dataset_name:
@@ -735,6 +805,8 @@ class HyperViewRuntime:
         with self._lock:
             workspace = self.get_workspace(workspace_id)
             workspace.ui.similarity_query = query
+            if query is not None:
+                workspace.ui.selected_ids = []
             self.workspace_registry.update_workspace(workspace)
             self._bump_version()
             return workspace
@@ -761,15 +833,6 @@ class HyperViewRuntime:
                 else list(workspace.ui.selected_ids)
             )
 
-            if (
-                set_similarity_query
-                and similarity_query is not None
-                and similarity_query.anchor_sample_id not in next_selected_ids
-            ):
-                raise ValueError(
-                    "similarity_query anchor_sample_id must be included in selected_ids"
-                )
-
             if set_active_layout and workspace.ui.active_layout_key != active_layout_key:
                 workspace.ui.active_layout_key = active_layout_key
                 changed = True
@@ -786,11 +849,11 @@ class HyperViewRuntime:
                     workspace.ui.similarity_query = None
                     changed = True
 
-            if (
-                set_similarity_query
-                and workspace.ui.similarity_query != similarity_query
-            ):
+            if set_similarity_query and workspace.ui.similarity_query != similarity_query:
                 workspace.ui.similarity_query = similarity_query
+                changed = True
+            if set_similarity_query and similarity_query is not None and workspace.ui.selected_ids:
+                workspace.ui.selected_ids = []
                 changed = True
 
             if changed:
@@ -864,15 +927,334 @@ class HyperViewRuntime:
             # runtime snapshots that can overwrite in-progress selection state.
             return workspace
 
+    def build_custom_panel(
+        self,
+        workspace_id: str,
+        *,
+        panel_id: str,
+        kind: Literal["extension", "scatter", "module", "builtin"],
+        title: str | None = None,
+        builtin_panel: Literal["samples"] | None = None,
+        extension: str | None = None,
+        extension_panel: str | None = None,
+        layout_key: str | None = None,
+        position: str = "right",
+        reference_panel_id: str | None = None,
+        direction: str | None = None,
+        width: int | None = None,
+        height: int | None = None,
+        min_width: int | None = None,
+        min_height: int | None = None,
+        max_width: int | None = None,
+        max_height: int | None = None,
+        visible: bool = True,
+        props: dict[str, Any] | None = None,
+        geometry: str | None = None,
+        layout_dimension: int | None = None,
+        require_resolved_layout: bool = True,
+    ) -> CustomPanelSpec:
+        """Resolve a transport-level panel request into a runtime panel spec."""
+
+        if position not in {"center", "right", "bottom"}:
+            raise ValueError("position must be one of center, right, bottom")
+        if direction is not None and direction not in {
+            "right",
+            "left",
+            "above",
+            "below",
+            "within",
+        }:
+            raise ValueError("direction must be one of right, left, above, below, within")
+
+        if kind == "module":
+            raise ValueError(
+                "Direct module panels are no longer a public API. "
+                "Package custom panel modules as extensions and add them with kind='extension'."
+            )
+
+        if kind == "builtin":
+            if builtin_panel != "samples":
+                raise ValueError("builtin_panel must be 'samples'")
+            return CustomPanelSpec(
+                id=panel_id,
+                title=title or "Samples",
+                kind="builtin",
+                builtin_panel="samples",
+                position=position,  # type: ignore[arg-type]
+                reference_panel_id=reference_panel_id,
+                direction=direction,  # type: ignore[arg-type]
+                width=_positive_int_or_none(width),
+                height=_positive_int_or_none(height),
+                min_width=_positive_int_or_none(min_width),
+                min_height=_positive_int_or_none(min_height),
+                max_width=_positive_int_or_none(max_width),
+                max_height=_positive_int_or_none(max_height),
+                visible=visible,
+                props=dict(props or {}),
+            )
+
+        if kind == "extension":
+            if not extension:
+                raise ValueError("extension is required for extension panels")
+            if not extension_panel:
+                raise ValueError("extension_panel is required for extension panels")
+            installation = self.get_extension(extension)
+            if installation is None:
+                raise LookupError(f"Extension not found: {extension}")
+            manifest_panel = next(
+                (panel for panel in installation.manifest.panels if panel.id == extension_panel),
+                None,
+            )
+            if manifest_panel is None:
+                raise LookupError(f"Extension panel not found: {extension}/{extension_panel}")
+            module_file = resolve_panel_source(
+                installation.manifest.folder,
+                manifest_panel.file,
+            )
+            return CustomPanelSpec(
+                id=panel_id,
+                title=title or manifest_panel.title,
+                kind="module",
+                extension=extension,
+                extension_panel=extension_panel,
+                module_file=str(module_file),
+                position=position,  # type: ignore[arg-type]
+                reference_panel_id=reference_panel_id,
+                direction=direction,  # type: ignore[arg-type]
+                width=_positive_int_or_none(width),
+                height=_positive_int_or_none(height),
+                min_width=_positive_int_or_none(min_width),
+                min_height=_positive_int_or_none(min_height),
+                max_width=_positive_int_or_none(max_width),
+                max_height=_positive_int_or_none(max_height),
+                visible=visible,
+                props=dict(props or {}),
+            )
+
+        if kind == "scatter":
+            if not layout_key:
+                raise ValueError("layout_key is required for scatter panels")
+            if geometry is None or layout_dimension is None:
+                try:
+                    dataset = self.get_dataset(workspace_id)
+                except ValueError:
+                    if require_resolved_layout:
+                        raise
+                    dataset = None
+                layout_info = None
+                if dataset is not None:
+                    layout_info = next(
+                        (
+                            layout
+                            for layout in dataset.list_layouts()
+                            if layout.layout_key == layout_key
+                        ),
+                        None,
+                    )
+                if layout_info is None:
+                    if require_resolved_layout:
+                        raise LookupError(f"Layout not found: {layout_key}")
+                else:
+                    geometry = geometry or layout_info.geometry
+                    layout_dimension = (
+                        layout_dimension
+                        if layout_dimension is not None
+                        else parse_layout_dimension(layout_info.layout_key)
+                    )
+            if not title:
+                raise ValueError("title is required for scatter panels")
+            return CustomPanelSpec(
+                id=panel_id,
+                title=title,
+                kind="scatter",
+                position=position,  # type: ignore[arg-type]
+                layout_key=layout_key,
+                geometry=geometry,
+                layout_dimension=layout_dimension,
+                reference_panel_id=reference_panel_id,
+                direction=direction,  # type: ignore[arg-type]
+                width=_positive_int_or_none(width),
+                height=_positive_int_or_none(height),
+                min_width=_positive_int_or_none(min_width),
+                min_height=_positive_int_or_none(min_height),
+                max_width=_positive_int_or_none(max_width),
+                max_height=_positive_int_or_none(max_height),
+                visible=visible,
+                props=dict(props or {}),
+            )
+
+        raise ValueError(f"Unsupported panel kind: {kind}")
+
+    def add_runtime_panel(
+        self,
+        workspace_id: str,
+        *,
+        panel_id: str,
+        kind: Literal["extension", "scatter", "module", "builtin"],
+        title: str | None = None,
+        builtin_panel: Literal["samples"] | None = None,
+        extension: str | None = None,
+        extension_panel: str | None = None,
+        layout_key: str | None = None,
+        position: str = "right",
+        reference_panel_id: str | None = None,
+        direction: str | None = None,
+        width: int | None = None,
+        height: int | None = None,
+        min_width: int | None = None,
+        min_height: int | None = None,
+        max_width: int | None = None,
+        max_height: int | None = None,
+        visible: bool = True,
+        props: dict[str, Any] | None = None,
+        geometry: str | None = None,
+        layout_dimension: int | None = None,
+        require_resolved_layout: bool = True,
+    ) -> WorkspaceState:
+        panel = self.build_custom_panel(
+            workspace_id,
+            panel_id=panel_id,
+            kind=kind,
+            title=title,
+            builtin_panel=builtin_panel,
+            extension=extension,
+            extension_panel=extension_panel,
+            layout_key=layout_key,
+            position=position,
+            reference_panel_id=reference_panel_id,
+            direction=direction,
+            width=width,
+            height=height,
+            min_width=min_width,
+            min_height=min_height,
+            max_width=max_width,
+            max_height=max_height,
+            visible=visible,
+            props=props,
+            geometry=geometry,
+            layout_dimension=layout_dimension,
+            require_resolved_layout=require_resolved_layout,
+        )
+        return self.add_custom_panel(workspace_id, panel)
+
     def add_custom_panel(self, workspace_id: str, panel: CustomPanelSpec) -> WorkspaceState:
         with self._lock:
             workspace = self.get_workspace(workspace_id)
-            panels = [existing for existing in workspace.ui.custom_panels if existing.id != panel.id]
+            panels = [
+                existing for existing in workspace.ui.custom_panels if existing.id != panel.id
+            ]
             panels.append(panel)
             workspace.ui.custom_panels = panels
             workspace.ui.view_revision += 1
             self.workspace_registry.update_workspace(workspace)
             self._bump_version()
+            return workspace
+
+    def update_custom_panel(
+        self,
+        workspace_id: str,
+        panel_id: str,
+        *,
+        title: str | None = None,
+        position: Literal["center", "right", "bottom"] | None = None,
+        reference_panel_id: str | None | object = _UNSET,
+        direction: Literal["right", "left", "above", "below", "within"] | None | object = _UNSET,
+        width: int | None | object = _UNSET,
+        height: int | None | object = _UNSET,
+        min_width: int | None | object = _UNSET,
+        min_height: int | None | object = _UNSET,
+        max_width: int | None | object = _UNSET,
+        max_height: int | None | object = _UNSET,
+        visible: bool | None = None,
+        active: bool | None = None,
+        props: dict[str, Any] | None = None,
+    ) -> WorkspaceState:
+        with self._lock:
+            workspace = self.get_workspace(workspace_id)
+            next_panels: list[CustomPanelSpec] = []
+            found = False
+            changed = False
+
+            for panel in workspace.ui.custom_panels:
+                if panel.id != panel_id:
+                    next_panels.append(panel)
+                    continue
+
+                found = True
+                next_panel = panel
+                if title is not None and title != panel.title:
+                    next_panel = replace(next_panel, title=title)
+                    changed = True
+                if position is not None:
+                    if position not in {"center", "right", "bottom"}:
+                        raise ValueError("position must be one of center, right, bottom")
+                    if position != panel.position:
+                        next_panel = replace(next_panel, position=position)
+                        changed = True
+                if reference_panel_id is not _UNSET:
+                    next_reference_panel_id = (
+                        None if reference_panel_id is None else str(reference_panel_id)
+                    )
+                    if next_reference_panel_id != panel.reference_panel_id:
+                        next_panel = replace(
+                            next_panel,
+                            reference_panel_id=next_reference_panel_id,
+                        )
+                        changed = True
+                if direction is not _UNSET:
+                    if direction is not None and direction not in {
+                        "right",
+                        "left",
+                        "above",
+                        "below",
+                        "within",
+                    }:
+                        raise ValueError("direction must be one of right, left, above, below, within")
+                    next_direction = direction if direction is None else str(direction)
+                    if next_direction != panel.direction:
+                        next_panel = replace(next_panel, direction=next_direction)
+                        changed = True
+                for field_name, value in {
+                    "width": width,
+                    "height": height,
+                    "min_width": min_width,
+                    "min_height": min_height,
+                    "max_width": max_width,
+                    "max_height": max_height,
+                }.items():
+                    if value is _UNSET:
+                        continue
+                    parsed_value = None if value is None else _positive_int_or_none(value)  # type: ignore[arg-type]
+                    if getattr(panel, field_name) != parsed_value:
+                        next_panel = replace(next_panel, **{field_name: parsed_value})
+                        changed = True
+                if visible is not None and visible != panel.visible:
+                    next_panel = replace(next_panel, visible=visible)
+                    changed = True
+                if props is not None and props != panel.props:
+                    next_panel = replace(next_panel, props=dict(props))
+                    changed = True
+                next_panels.append(next_panel)
+
+            if not found:
+                raise KeyError(f"Panel not found: {panel_id}")
+
+            if active is True and workspace.ui.active_panel_id != panel_id:
+                workspace.ui.active_panel_id = panel_id
+                changed = True
+            elif active is False and workspace.ui.active_panel_id == panel_id:
+                workspace.ui.active_panel_id = None
+                changed = True
+
+            if visible is False and workspace.ui.active_panel_id == panel_id:
+                workspace.ui.active_panel_id = None
+                changed = True
+
+            if changed:
+                workspace.ui.custom_panels = next_panels
+                workspace.ui.view_revision += 1
+                self.workspace_registry.update_workspace(workspace)
+                self._bump_version()
             return workspace
 
     def replace_custom_panels(
@@ -881,10 +1263,30 @@ class HyperViewRuntime:
         panels: list[CustomPanelSpec],
         *,
         bump_view_revision: bool = True,
+        has_explicit_view: bool | None = None,
+        active_panel_id: str | None = None,
     ) -> WorkspaceState:
         with self._lock:
             workspace = self.get_workspace(workspace_id)
-            workspace.ui.custom_panels = list(panels)
+            next_panels = list(panels)
+            _ensure_unique_panel_ids(next_panels)
+            next_has_explicit_view = (
+                workspace.ui.has_explicit_view if has_explicit_view is None else has_explicit_view
+            )
+            next_active_panel_id = active_panel_id
+            if next_active_panel_id is not None and not any(
+                panel.id == next_active_panel_id for panel in next_panels
+            ):
+                raise ValueError(f"Active panel is not in the view: {next_active_panel_id}")
+
+            if [panel.to_dict() for panel in workspace.ui.custom_panels] == [
+                panel.to_dict() for panel in next_panels
+            ] and workspace.ui.has_explicit_view == next_has_explicit_view and workspace.ui.active_panel_id == next_active_panel_id:
+                return workspace
+
+            workspace.ui.custom_panels = next_panels
+            workspace.ui.has_explicit_view = next_has_explicit_view
+            workspace.ui.active_panel_id = next_active_panel_id
             if bump_view_revision:
                 workspace.ui.view_revision += 1
             self.workspace_registry.update_workspace(workspace)
@@ -897,6 +1299,8 @@ class HyperViewRuntime:
             workspace.ui.custom_panels = [
                 panel for panel in workspace.ui.custom_panels if panel.id != panel_id
             ]
+            if workspace.ui.active_panel_id == panel_id:
+                workspace.ui.active_panel_id = None
             workspace.ui.view_revision += 1
             self.workspace_registry.update_workspace(workspace)
             self._bump_version()
@@ -946,7 +1350,9 @@ class HyperViewRuntime:
         params: dict[str, Any],
         target: Any,
     ) -> JobState:
-        job = self.register_job(kind=kind, workspace_id=workspace_id, dataset_name=dataset_name, params=params)
+        job = self.register_job(
+            kind=kind, workspace_id=workspace_id, dataset_name=dataset_name, params=params
+        )
 
         def runner() -> None:
             with self._lock:
@@ -1002,6 +1408,7 @@ class HyperViewRuntime:
                 provider=provider,
                 checkpoint=checkpoint,
                 show_progress=True,
+                _provider_registry=self.provider_registry,
                 **provider_kwargs,
             )
 
@@ -1317,6 +1724,8 @@ class HyperViewRuntime:
                             }
                             for panel in workspace.ui.custom_panels
                         ],
+                        "has_explicit_view": workspace.ui.has_explicit_view,
+                        "active_panel_id": workspace.ui.active_panel_id,
                         "view_revision": workspace.ui.view_revision,
                     },
                 },

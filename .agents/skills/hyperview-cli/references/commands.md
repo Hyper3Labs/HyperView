@@ -95,11 +95,27 @@ hyperview status --json
 
 ## Providers, Embeddings, and Layouts
 
-Register a custom provider:
+Use built-in providers directly when possible. Hyper3-CLIP is available through
+the `hyper-models` provider:
+
+```python
+dataset.compute_embeddings(model="hyper3-clip-v0.5", provider="hyper-models")
+```
+
+Register a custom provider only when the model is not available through a
+built-in provider:
 
 ```bash
 hyperview provider register my-provider \
   --import-path my_pkg.provider:MyProvider
+```
+
+The same registration is available from Python:
+
+```python
+import hyperview as hv
+
+hv.register_provider("my-provider", "my_pkg.provider:MyProvider", overwrite=True)
 ```
 
 Compute checkpoint-backed embeddings and a layout:
@@ -144,7 +160,7 @@ hyperview figure export figures/embedding-sphere.png \
 
 If `--layout` is omitted, HyperView uses the active 3D layout when one is set, otherwise the first available 3D layout. Use `--layout active` when you specifically want the live UI's active layout and want the command to fail if none is active.
 
-The export path is pure Python and does not require Playwright, browser bundling, Node, or a running frontend. It supports 3D layouts only; 2D layouts are rejected with a validation message.
+The export path does not require opening the UI. It supports 3D layouts only; 2D layouts are rejected with a validation message.
 
 Paper defaults are tuned for academic figures:
 
@@ -220,6 +236,20 @@ hyperview ui panel add \
   --extension label-histogram \
   --extension-panel label-histogram \
   --position right \
+  --width 340 \
+  --min-width 280 \
+```
+
+Add the built-in samples panel through the same runtime panel API:
+
+```bash
+hyperview ui panel add \
+  --workspace research \
+  --panel-id samples \
+  --kind builtin \
+  --builtin-panel samples \
+  --props-json '{"mode":"browse"}' \
+  --position right
 ```
 
 Add two runtime scatter panels bound to explicit layouts, side by side:
@@ -244,8 +274,7 @@ hyperview ui panel add \
   --direction right
 ```
 
-Python launch scripts can encode the same composition without calling runtime
-internals:
+Python launch scripts can encode the same composition:
 
 ```python
 view = hv.ui.View(
@@ -253,11 +282,50 @@ view = hv.ui.View(
         hv.ui.Scatter("uncha-poincare", title="UNCHA", layout_key=uncha_layout),
         hv.ui.Scatter("hycoclip-poincare", title="HyCoCLIP", layout_key=hycoclip_layout),
     ),
-    hv.ui.ExtensionPanel("notes", extension="notes", panel="notes", position="right"),
+    hv.ui.ExtensionPanel(
+        "notes",
+        extension="notes",
+        panel="notes",
+        position="right",
+        layout=hv.ui.PanelLayout(width=340, min_width=280),
+    ),
+    active_panel="notes",
 )
 session = hv.launch(dataset, block=False)
 session.ui.add_extension(".hyperview/extensions/notes")
 session.ui.apply_view(view)
+```
+
+Update an existing runtime panel title or props without changing its identity:
+
+```bash
+hyperview ui panel update \
+  --workspace research \
+  --panel-id samples \
+  --title "Ranked Samples" \
+  --props-json '{"mode":"ranked","rank":{"anchorSampleId":"<sample-id>","layoutKey":"<layout-key>","k":18}}' \
+  --json
+```
+
+Resize, move, focus, hide, or show a runtime panel through durable view state:
+
+```bash
+hyperview ui panel resize \
+  --workspace research \
+  --panel-id notes \
+  --width 380 \
+  --min-width 300
+
+hyperview ui panel move \
+  --workspace research \
+  --panel-id notes \
+  --position right \
+  --reference-panel-id samples \
+  --direction right
+
+hyperview ui panel focus --workspace research --panel-id notes
+hyperview ui panel close --workspace research --panel-id notes
+hyperview ui panel show --workspace research --panel-id notes
 ```
 
 Remove a runtime panel by id:
@@ -286,7 +354,7 @@ hyperview ui similarity clear --workspace research
 
 ## Extensions and Tools
 
-Create backend-plus-frontend extensions under `.hyperview/extensions/<name>/` so they can be versioned with the project and auto-registered on `hyperview serve`. For a server that is already running, install one explicitly:
+Create extensions under `.hyperview/extensions/<name>/` so they can be versioned with the project and auto-registered on `hyperview serve`. For a server that is already running, install one explicitly:
 
 ```bash
 hyperview extension add .hyperview/extensions/selection-profile \

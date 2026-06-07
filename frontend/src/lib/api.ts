@@ -15,6 +15,7 @@ const API_BASE =
   (process.env.NODE_ENV === "development" ? "http://127.0.0.1:6262" : "");
 const MISSING_LABEL_SENTINEL = "undefined";
 const RUNTIME_CLIENT_ID = `hv-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`;
+const SAMPLE_BATCH_SIZE = 1000;
 
 export function apiUrl(path: string): string {
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
@@ -125,12 +126,20 @@ export async function addRuntimePanel(args: {
   panelId: string;
   title?: string | null;
   kind?: RuntimePanelKind | "extension";
+  builtinPanel?: string | null;
   extension?: string | null;
   extensionPanel?: string | null;
   layoutKey?: string | null;
   position?: RuntimePanelPosition;
   referencePanelId?: string | null;
   direction?: RuntimePanelDirection | null;
+  width?: number | null;
+  height?: number | null;
+  minWidth?: number | null;
+  minHeight?: number | null;
+  maxWidth?: number | null;
+  maxHeight?: number | null;
+  visible?: boolean;
   props?: Record<string, unknown> | null;
 }): Promise<RuntimeSnapshot> {
   const res = await fetch(apiUrl("/control/ui/panels"), {
@@ -143,12 +152,20 @@ export async function addRuntimePanel(args: {
       panel_id: args.panelId,
       title: args.title,
       kind: args.kind ?? "extension",
+      builtin_panel: args.builtinPanel ?? null,
       extension: args.extension ?? null,
       extension_panel: args.extensionPanel ?? null,
       layout_key: args.layoutKey ?? null,
       position: args.position ?? "right",
       reference_panel_id: args.referencePanelId ?? null,
       direction: args.direction ?? null,
+      width: args.width ?? null,
+      height: args.height ?? null,
+      min_width: args.minWidth ?? null,
+      min_height: args.minHeight ?? null,
+      max_width: args.maxWidth ?? null,
+      max_height: args.maxHeight ?? null,
+      visible: args.visible ?? true,
       props: args.props ?? null,
     }),
   });
@@ -182,12 +199,14 @@ export async function fetchSamples(
   offset: number = 0,
   limit: number = 100,
   label?: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  includeThumbnails: boolean = false
 ): Promise<SamplesResponse> {
   const apiLabel = toApiLabel(label);
   const params = new URLSearchParams({
     offset: offset.toString(),
     limit: limit.toString(),
+    include_thumbnails: String(includeThumbnails),
   });
   if (apiLabel !== null) {
     params.set("label", apiLabel);
@@ -213,19 +232,40 @@ export async function fetchEmbeddings(layoutKey?: string): Promise<EmbeddingsDat
   return res.json();
 }
 
-export async function fetchSamplesBatch(sampleIds: string[]): Promise<Sample[]> {
-  const res = await fetch(apiUrl("/samples/batch"), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ sample_ids: sampleIds }),
-  });
-  if (!res.ok) {
-    await throwApiError(res, "Failed to fetch samples batch");
+export async function fetchSamplesBatch(
+  sampleIds: string[],
+  args: {
+    includeThumbnails?: boolean;
+    workspaceId?: string | null;
+  } = {}
+): Promise<Sample[]> {
+  if (sampleIds.length === 0) return [];
+
+  const samples: Sample[] = [];
+  for (let offset = 0; offset < sampleIds.length; offset += SAMPLE_BATCH_SIZE) {
+    const batchIds = sampleIds.slice(offset, offset + SAMPLE_BATCH_SIZE);
+    const params = new URLSearchParams();
+    if (args.workspaceId) {
+      params.set("workspace_id", args.workspaceId);
+    }
+    const query = params.toString();
+    const res = await fetch(`${apiUrl("/samples/batch")}${query ? `?${query}` : ""}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        sample_ids: batchIds,
+        include_thumbnails: args.includeThumbnails ?? false,
+      }),
+    });
+    if (!res.ok) {
+      await throwApiError(res, "Failed to fetch samples batch");
+    }
+    const data = await res.json();
+    samples.push(...data.samples);
   }
-  const data = await res.json();
-  return data.samples;
+  return samples;
 }
 
 export async function fetchSimilarSamples(
@@ -328,7 +368,7 @@ export async function fetchLassoSelection(args: {
       label_filter: toApiLabel(args.labelFilter),
       offset: args.offset ?? 0,
       limit: args.limit ?? 100,
-      include_thumbnails: args.includeThumbnails ?? true,
+      include_thumbnails: args.includeThumbnails ?? false,
     }),
     signal: args.signal,
   });

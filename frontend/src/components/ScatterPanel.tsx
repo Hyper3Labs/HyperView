@@ -329,6 +329,13 @@ export function ScatterPanel({
     ? (layoutViews[resolvedLayoutKey]?.camera_3d ?? null)
     : null;
 
+  const setSelectedIdsFromScatter = useCallback(
+    (ids: Set<string>, source?: "scatter" | "grid") => {
+      setSelectedIds(ids, source, source === "scatter" ? resolvedLayoutKey : null);
+    },
+    [resolvedLayoutKey, setSelectedIds]
+  );
+
   const handleView3DChange = useCallback(
     (view: NonNullable<typeof savedView3d>) => {
       if (!activeWorkspaceId || !resolvedLayoutKey) return;
@@ -419,7 +426,7 @@ export function ScatterPanel({
     selectedIds,
     highlightedIds,
     hoveredId,
-    setSelectedIds,
+    setSelectedIds: setSelectedIdsFromScatter,
     beginLassoSelection,
     setHoveredId,
     onView3DChange: handleView3DChange,

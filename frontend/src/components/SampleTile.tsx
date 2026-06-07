@@ -33,8 +33,9 @@ export function SampleTile({
 }: SampleTileProps) {
   const mediaSrc = useMemo(() => {
     if (sample.thumbnail) return `data:image/jpeg;base64,${sample.thumbnail}`;
+    if (sample.thumbnail_url) return backendUrl(sample.thumbnail_url);
     return backendUrl(sample.media_url);
-  }, [sample.media_url, sample.thumbnail]);
+  }, [sample.media_url, sample.thumbnail, sample.thumbnail_url]);
   const [imageFailed, setImageFailed] = useState(false);
   const showImage = Boolean(mediaSrc) && !imageFailed;
 

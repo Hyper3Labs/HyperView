@@ -10,6 +10,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from importlib.util import find_spec
 from pathlib import Path
+from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 from uuid import uuid4
@@ -18,10 +19,10 @@ import uvicorn
 
 import hyperview.ui as ui_module
 from hyperview.core.dataset import Dataset
-from hyperview.runtime import HyperViewRuntime
+from hyperview.runtime import HyperViewRuntime, ProviderRegistry
 from hyperview.server.app import create_app, set_runtime
 
-__all__ = ["Dataset", "launch", "Session"]
+__all__ = ["Dataset", "launch", "Session", "register_provider", "unregister_provider"]
 
 
 @dataclass(frozen=True)
@@ -70,6 +71,37 @@ def _resolve_default_launch_layout(dataset: Dataset) -> str:
     if any(space.geometry == "hypersphere" for space in spaces):
         return "spherical:3d"
     return "poincare:2d"
+
+
+def register_provider(
+    alias: str,
+    import_path: str,
+    *,
+    description: str | None = None,
+    defaults: dict[str, Any] | None = None,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """Register a custom Python embedding provider.
+
+    Built-in providers such as ``embed-anything`` and ``hyper-models`` do not
+    need registration. Use this only for project-local providers that are not
+    already available through HyperView's provider catalog.
+    """
+
+    registration = ProviderRegistry().register_python(
+        alias,
+        import_path,
+        description=description,
+        defaults=defaults,
+        overwrite=overwrite,
+    )
+    return registration.to_dict()
+
+
+def unregister_provider(alias: str) -> bool:
+    """Remove a custom Python embedding provider registration."""
+
+    return ProviderRegistry().unregister(alias)
 
 
 class Session:
@@ -295,13 +327,17 @@ class SessionUiController:
         direction: ui_module.PanelDirection | None = None,
         geometry: str | None = None,
         layout_dimension: int | None = None,
+        layout: ui_module.PanelLayout | None = None,
         props: dict[str, object] | None = None,
     ) -> None:
         """Add a scatter panel pinned to an explicit layout."""
 
-        panel = ui_module.Scatter(
-            id=panel_id,
+        runtime = self._runtime()
+        runtime.add_runtime_panel(
+            workspace_id,
+            panel_id=panel_id,
             title=title,
+            kind="scatter",
             layout_key=layout_key,
             position=position,
             reference_panel_id=reference_panel_id,
@@ -309,12 +345,118 @@ class SessionUiController:
             geometry=geometry,
             layout_dimension=layout_dimension,
             props=dict(props or {}),
+            **(layout.to_runtime_kwargs() if layout is not None else {}),
+            require_resolved_layout=False,
         )
-        runtime = self._runtime()
-        runtime.add_custom_panel(
+
+    def update_panel(
+        self,
+        panel_id: str,
+        *,
+        workspace_id: str = "default",
+        title: str | None = None,
+        position: ui_module.PanelPosition | None = None,
+        reference_panel_id: str | None = None,
+        direction: ui_module.PanelDirection | None = None,
+        layout: ui_module.PanelLayout | None = None,
+        visible: bool | None = None,
+        active: bool | None = None,
+        props: dict[str, object] | None = None,
+    ) -> None:
+        """Update a runtime panel's durable view/layout state."""
+
+        layout_kwargs = (
+            {
+                key: value
+                for key, value in layout.to_runtime_kwargs().items()
+                if value is not None
+            }
+            if layout is not None
+            else {}
+        )
+        if visible is not None:
+            layout_kwargs["visible"] = visible
+        placement_kwargs: dict[str, object | None] = {}
+        if position is not None or reference_panel_id is not None:
+            placement_kwargs["reference_panel_id"] = reference_panel_id
+        if position is not None or direction is not None:
+            placement_kwargs["direction"] = direction
+        self._runtime().update_custom_panel(
             workspace_id,
-            ui_module.compile_view(ui_module.View(panel, clear_existing=False), runtime=runtime)[0],
+            panel_id,
+            title=title,
+            position=position,
+            active=active,
+            props=dict(props) if props is not None else None,
+            **placement_kwargs,
+            **layout_kwargs,
         )
+
+    def resize_panel(
+        self,
+        panel_id: str,
+        *,
+        workspace_id: str = "default",
+        width: int | None = None,
+        height: int | None = None,
+        min_width: int | None = None,
+        min_height: int | None = None,
+        max_width: int | None = None,
+        max_height: int | None = None,
+    ) -> None:
+        """Set durable panel dimensions and constraints."""
+
+        layout_kwargs = {
+            key: value
+            for key, value in {
+                "width": width,
+                "height": height,
+                "min_width": min_width,
+                "min_height": min_height,
+                "max_width": max_width,
+                "max_height": max_height,
+            }.items()
+            if value is not None
+        }
+        self._runtime().update_custom_panel(
+            workspace_id,
+            panel_id,
+            **layout_kwargs,
+        )
+
+    def move_panel(
+        self,
+        panel_id: str,
+        *,
+        workspace_id: str = "default",
+        position: ui_module.PanelPosition,
+        reference_panel_id: str | None = None,
+        direction: ui_module.PanelDirection | None = None,
+    ) -> None:
+        """Move a panel in the durable workspace view."""
+
+        self._runtime().update_custom_panel(
+            workspace_id,
+            panel_id,
+            position=position,
+            reference_panel_id=reference_panel_id,
+            direction=direction,
+        )
+
+    def focus_panel(self, panel_id: str, *, workspace_id: str = "default") -> None:
+        """Set the active panel for the workspace view."""
+
+        self._runtime().update_custom_panel(workspace_id, panel_id, active=True)
+
+    def close_panel(self, panel_id: str, *, workspace_id: str = "default") -> None:
+        """Hide a panel without deleting it from the workspace view."""
+
+        self._runtime().update_custom_panel(workspace_id, panel_id, visible=False)
+
+    def show_panel(self, panel_id: str, *, workspace_id: str = "default") -> None:
+        """Show a panel that was hidden in the workspace view."""
+
+        self._runtime().update_custom_panel(workspace_id, panel_id, visible=True)
 
     def remove_panel(self, panel_id: str, *, workspace_id: str = "default") -> None:
         self._runtime().remove_custom_panel(workspace_id, panel_id)
@@ -349,7 +491,7 @@ class SessionUiController:
         k: int = 18,
         source: str = "python",
     ) -> None:
-        """Set the workspace's active similarity query and select its anchor."""
+        """Set the workspace's active similarity query."""
 
         runtime = self._runtime()
         query = runtime.resolve_similarity_query(
@@ -360,7 +502,6 @@ class SessionUiController:
             k=k,
             source=source,
         )
-        runtime.set_selection(workspace_id, [sample_id])
         runtime.set_similarity_query(workspace_id, query)
 
     def clear_similarity(self, *, workspace_id: str = "default") -> None:

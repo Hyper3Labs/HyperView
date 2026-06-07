@@ -1,6 +1,7 @@
 """FastAPI application for HyperView."""
 
 import asyncio
+import io
 import json
 import os
 from pathlib import Path
@@ -20,9 +21,7 @@ from hyperview.core.selection import (
     points_in_polygon,
     select_ids_for_3d_lasso,
 )
-from hyperview.extensions import resolve_panel_source
 from hyperview.runtime import (
-    CustomPanelSpec,
     HyperViewRuntime,
     LayoutViewState,
 )
@@ -36,12 +35,16 @@ _PASSTHROUGH_JS_SUFFIXES = {".js", ".mjs"}
 # Global runtime reference (set by launch()/serve)
 _current_runtime: HyperViewRuntime | None = None
 _current_session_id: str | None = None
+MAX_SAMPLE_PAGE_SIZE = 500
+MAX_SAMPLE_BATCH_SIZE = 1000
+DEFAULT_THUMBNAIL_SIZE = 128
 
 
 class SelectionRequest(BaseModel):
     """Request model for selection sync."""
 
     sample_ids: list[str]
+    include_thumbnails: bool = False
 
 
 class LassoSelectionRequest(BaseModel):
@@ -59,7 +62,7 @@ class LassoSelectionRequest(BaseModel):
     label_filter: str | None = None
     offset: int = 0
     limit: int = 100
-    include_thumbnails: bool = True
+    include_thumbnails: bool = False
 
 
 class ProviderRegisterRequest(BaseModel):
@@ -132,7 +135,8 @@ class UiPanelRequest(BaseModel):
     workspace_id: str
     panel_id: str
     title: str | None = None
-    kind: Literal["extension", "scatter", "module"] = "extension"
+    kind: Literal["extension", "scatter", "module", "builtin"] = "extension"
+    builtin_panel: Literal["samples"] | None = None
     extension: str | None = None
     extension_panel: str | None = None
     module_file: str | None = None
@@ -140,12 +144,37 @@ class UiPanelRequest(BaseModel):
     position: str = "right"
     reference_panel_id: str | None = None
     direction: str | None = None
+    width: int | None = None
+    height: int | None = None
+    min_width: int | None = None
+    min_height: int | None = None
+    max_width: int | None = None
+    max_height: int | None = None
+    visible: bool = True
     props: dict[str, Any] | None = None
 
 
 class UiPanelRemoveRequest(BaseModel):
     workspace_id: str
     panel_id: str
+
+
+class UiPanelUpdateRequest(BaseModel):
+    workspace_id: str
+    panel_id: str
+    title: str | None = None
+    position: Literal["center", "right", "bottom"] | None = None
+    reference_panel_id: str | None = None
+    direction: Literal["right", "left", "above", "below", "within"] | None = None
+    width: int | None = None
+    height: int | None = None
+    min_width: int | None = None
+    min_height: int | None = None
+    max_width: int | None = None
+    max_height: int | None = None
+    visible: bool | None = None
+    active: bool | None = None
+    props: dict[str, Any] | None = None
 
 
 class SamplesQueryRequest(BaseModel):
@@ -155,7 +184,7 @@ class SamplesQueryRequest(BaseModel):
     metadata: dict[str, Any] | None = None
     offset: int = 0
     limit: int = 100
-    include_thumbnails: bool = True
+    include_thumbnails: bool = False
 
 
 class SamplesSelectionQueryRequest(BaseModel):
@@ -226,6 +255,7 @@ class SampleResponse(BaseModel):
     label: str | None
     thumbnail: str | None
     media_url: str | None = None
+    thumbnail_url: str | None = None
     metadata: dict
     width: int | None = None
     height: int | None = None
@@ -291,16 +321,51 @@ class SimilaritySearchResponse(BaseModel):
     results: list[SimilarSampleResponse]
 
 
-def serialize_sample_for_response(sample: Any, include_thumbnail: bool = True) -> dict[str, Any]:
-    payload = sample.to_api_dict(include_thumbnail=False)
-    payload["thumbnail"] = None
-    payload["media_url"] = f"/api/samples/{sample.id}/content"
+def serialize_sample_for_response(
+    sample: Any,
+    include_thumbnail: bool = False,
+    *,
+    ensure_dimensions: bool = False,
+) -> dict[str, Any]:
+    thumbnail = None
     if include_thumbnail:
         try:
-            payload["thumbnail"] = sample.get_thumbnail_base64()
+            thumbnail = sample.get_thumbnail_base64()
         except Exception:
-            payload["thumbnail"] = None
+            thumbnail = None
+
+    payload = sample.to_api_dict(
+        include_thumbnail=False,
+        ensure_dimensions=ensure_dimensions,
+    )
+    payload["thumbnail"] = thumbnail
+    payload["media_url"] = f"/api/samples/{sample.id}/content"
+    payload["thumbnail_url"] = f"/api/samples/{sample.id}/thumbnail"
     return payload
+
+
+def _resolve_sample_media_path(sample: Any) -> Path:
+    file_path = Path(sample.filepath).expanduser().resolve()
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Sample media not found: {sample.filepath}")
+    return file_path
+
+
+def _media_cache_headers(file_path: Path, *, variant: str) -> dict[str, str]:
+    stat = file_path.stat()
+    etag = f'W/"{variant}-{stat.st_mtime_ns}-{stat.st_size}"'
+    return {
+        "Cache-Control": "public, max-age=3600",
+        "ETag": etag,
+    }
+
+
+def _validate_page(offset: int, limit: int, *, max_limit: int = MAX_SAMPLE_PAGE_SIZE) -> tuple[int, int]:
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0")
+    if limit < 1 or limit > max_limit:
+        raise HTTPException(status_code=400, detail=f"limit must be between 1 and {max_limit}")
+    return offset, limit
 
 
 def _metadata_value(metadata: dict[str, Any], path: str) -> Any:
@@ -647,7 +712,6 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        runtime_dep.set_selection(request.workspace_id, [request.sample_id])
         workspace = runtime_dep.set_similarity_query(request.workspace_id, query)
         return {"workspace": workspace.to_dict()}
 
@@ -714,88 +778,68 @@ def create_app(
         request: UiPanelRequest,
         runtime_dep: HyperViewRuntime = Depends(get_runtime),
     ):
-        if request.position not in {"center", "right", "bottom"}:
-            raise HTTPException(status_code=400, detail="position must be one of center, right, bottom")
-        if request.direction is not None and request.direction not in {"right", "left", "above", "below", "within"}:
-            raise HTTPException(status_code=400, detail="direction must be one of right, left, above, below, within")
-
-        module_file: Path | None = None
-        layout_key: str | None = None
-        geometry: str | None = None
-        layout_dimension: int | None = None
-
-        title = request.title
-
-        if request.kind == "module":
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Direct module panels are no longer a public API. "
-                    "Package custom panel modules as extensions and add them with kind='extension'."
-                ),
+        try:
+            workspace = runtime_dep.add_runtime_panel(
+                request.workspace_id,
+                panel_id=request.panel_id,
+                title=request.title,
+                kind=request.kind,
+                builtin_panel=request.builtin_panel,
+                extension=request.extension,
+                extension_panel=request.extension_panel,
+                layout_key=request.layout_key,
+                position=request.position,
+                reference_panel_id=request.reference_panel_id,
+                direction=request.direction,
+                width=request.width,
+                height=request.height,
+                min_width=request.min_width,
+                min_height=request.min_height,
+                max_width=request.max_width,
+                max_height=request.max_height,
+                visible=request.visible,
+                props=request.props,
             )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"workspace": workspace.to_dict()}
 
-        if request.kind == "extension":
-            if not request.extension:
-                raise HTTPException(status_code=400, detail="extension is required for extension panels")
-            if not request.extension_panel:
-                raise HTTPException(status_code=400, detail="extension_panel is required for extension panels")
-            installation = runtime_dep.get_extension(request.extension)
-            if installation is None:
-                raise HTTPException(status_code=404, detail=f"Extension not found: {request.extension}")
-            manifest_panel = next(
-                (
-                    panel
-                    for panel in installation.manifest.panels
-                    if panel.id == request.extension_panel
-                ),
-                None,
+    @app.patch("/api/control/ui/panels")
+    async def update_ui_panel_endpoint(
+        request: UiPanelUpdateRequest,
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+    ):
+        fields = request.model_fields_set
+        patch: dict[str, Any] = {}
+        for field_name in (
+            "title",
+            "position",
+            "reference_panel_id",
+            "direction",
+            "width",
+            "height",
+            "min_width",
+            "min_height",
+            "max_width",
+            "max_height",
+            "visible",
+            "active",
+            "props",
+        ):
+            if field_name in fields:
+                patch[field_name] = getattr(request, field_name)
+        try:
+            workspace = runtime_dep.update_custom_panel(
+                request.workspace_id,
+                request.panel_id,
+                **patch,
             )
-            if manifest_panel is None:
-                raise HTTPException(
-                    status_code=404,
-                    detail=(
-                        f"Extension panel not found: "
-                        f"{request.extension}/{request.extension_panel}"
-                    ),
-                )
-            module_file = resolve_panel_source(
-                installation.manifest.folder,
-                manifest_panel.file,
-            )
-            title = title or manifest_panel.title
-        else:
-            if not request.layout_key:
-                raise HTTPException(status_code=400, detail="layout_key is required for scatter panels")
-            dataset = runtime_dep.get_dataset(request.workspace_id)
-            layout_info = next(
-                (layout for layout in dataset.list_layouts() if layout.layout_key == request.layout_key),
-                None,
-            )
-            if layout_info is None:
-                raise HTTPException(status_code=404, detail=f"Layout not found: {request.layout_key}")
-            layout_key = layout_info.layout_key
-            geometry = layout_info.geometry
-            layout_dimension = parse_layout_dimension(layout_info.layout_key)
-            if not title:
-                raise HTTPException(status_code=400, detail="title is required for scatter panels")
-
-        panel = CustomPanelSpec(
-            id=request.panel_id,
-            title=title or request.panel_id,
-            kind="module" if request.kind == "extension" else "scatter",
-            extension=request.extension if request.kind == "extension" else None,
-            extension_panel=request.extension_panel if request.kind == "extension" else None,
-            module_file=str(module_file) if module_file is not None else None,
-            position=request.position,  # type: ignore[arg-type]
-            layout_key=layout_key,
-            geometry=geometry,
-            layout_dimension=layout_dimension,
-            reference_panel_id=request.reference_panel_id,
-            direction=request.direction,  # type: ignore[arg-type]
-            props=dict(request.props or {}),
-        )
-        workspace = runtime_dep.add_custom_panel(request.workspace_id, panel)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"workspace": workspace.to_dict()}
 
     @app.delete("/api/control/ui/panels")
@@ -889,10 +933,11 @@ def create_app(
     async def get_samples(
         ds: Dataset = Depends(get_dataset),
         offset: int = Query(0, ge=0),
-        limit: int = Query(100, ge=1),
+        limit: int = Query(100, ge=1, le=MAX_SAMPLE_PAGE_SIZE),
         label: str | None = None,
+        include_thumbnails: bool = Query(False),
     ):
-        """Get paginated samples with thumbnails."""
+        """Get paginated sample metadata."""
         samples, total = ds.get_samples_paginated(
             offset=offset, limit=limit, label=label
         )
@@ -901,15 +946,28 @@ def create_app(
             "total": total,
             "offset": offset,
             "limit": limit,
-            "samples": [serialize_sample_for_response(s, include_thumbnail=True) for s in samples],
+            "samples": [
+                serialize_sample_for_response(s, include_thumbnail=include_thumbnails)
+                for s in samples
+            ],
         }
 
     @app.get("/api/samples/{sample_id}", response_model=SampleResponse)
-    async def get_sample(sample_id: str, ds: Dataset = Depends(get_dataset)):
+    async def get_sample(
+        sample_id: str,
+        ds: Dataset = Depends(get_dataset),
+        include_thumbnails: bool = Query(False),
+    ):
         """Get a single sample by ID."""
         try:
             sample = ds[sample_id]
-            return SampleResponse(**serialize_sample_for_response(sample, include_thumbnail=True))
+            return SampleResponse(
+                **serialize_sample_for_response(
+                    sample,
+                    include_thumbnail=include_thumbnails,
+                    ensure_dimensions=True,
+                )
+            )
         except KeyError:
             raise HTTPException(status_code=404, detail=f"Sample not found: {sample_id}")
 
@@ -921,18 +979,52 @@ def create_app(
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=f"Sample not found: {sample_id}") from exc
 
-        file_path = Path(sample.filepath).expanduser().resolve()
-        if not file_path.exists() or not file_path.is_file():
-            raise HTTPException(status_code=404, detail=f"Sample media not found: {sample.filepath}")
+        file_path = _resolve_sample_media_path(sample)
 
-        return FileResponse(file_path)
+        return FileResponse(file_path, headers=_media_cache_headers(file_path, variant="content"))
+
+    @app.get("/api/samples/{sample_id}/thumbnail")
+    async def get_sample_thumbnail(
+        sample_id: str,
+        ds: Dataset = Depends(get_dataset),
+        size: int = Query(DEFAULT_THUMBNAIL_SIZE, ge=16, le=512),
+    ):
+        """Serve a generated thumbnail for a sample."""
+        try:
+            sample = ds[sample_id]
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Sample not found: {sample_id}") from exc
+
+        file_path = _resolve_sample_media_path(sample)
+        try:
+            thumb = sample.get_thumbnail((size, size))
+            if thumb.mode in ("RGBA", "P"):
+                thumb = thumb.convert("RGB")
+            buffer = io.BytesIO()
+            thumb.save(buffer, format="JPEG", quality=85)
+        except Exception as exc:
+            raise HTTPException(status_code=404, detail=f"Sample thumbnail not available: {exc}") from exc
+
+        headers = _media_cache_headers(file_path, variant=f"thumbnail-{size}")
+        return Response(content=buffer.getvalue(), media_type="image/jpeg", headers=headers)
 
     @app.post("/api/samples/batch")
     async def get_samples_batch(request: SelectionRequest, ds: Dataset = Depends(get_dataset)):
         """Get multiple samples by their IDs."""
+        if len(request.sample_ids) > MAX_SAMPLE_BATCH_SIZE:
+            raise HTTPException(
+                status_code=400,
+                detail=f"sample_ids may contain at most {MAX_SAMPLE_BATCH_SIZE} ids",
+            )
         samples = ds.get_samples_by_ids(request.sample_ids)
         return {
-            "samples": [serialize_sample_for_response(s, include_thumbnail=True) for s in samples]
+            "samples": [
+                serialize_sample_for_response(
+                    s,
+                    include_thumbnail=request.include_thumbnails,
+                )
+                for s in samples
+            ]
         }
 
     @app.post("/api/samples/query")
@@ -945,8 +1037,7 @@ def create_app(
             ds = runtime_dep.get_dataset(workspace_id=request.workspace_id)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        offset = max(0, request.offset)
-        limit = max(1, request.limit)
+        offset, limit = _validate_page(request.offset, request.limit)
         matches = _query_samples(ds, request)
         page = matches[offset : offset + limit]
         return {
@@ -1209,7 +1300,7 @@ def create_app(
         k: int = Query(10, ge=1, le=100),
         space_key: str | None = None,
         layout_key: str | None = None,
-        include_thumbnails: bool = True,
+        include_thumbnails: bool = Query(False),
     ):
         """Return k nearest neighbors for a given sample."""
         resolved_space_key = space_key

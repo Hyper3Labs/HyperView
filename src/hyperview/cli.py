@@ -62,11 +62,21 @@ def _parse_provider_args(values: list[str] | None) -> dict[str, Any]:
     parsed: dict[str, Any] = {}
     for value in values or []:
         if "=" not in value:
-            raise ValueError(
-                f"Provider args must use the form key=value, got '{value}'"
-            )
+            raise ValueError(f"Provider args must use the form key=value, got '{value}'")
         key, raw_value = value.split("=", 1)
         parsed[key] = _parse_scalar(raw_value)
+    return parsed
+
+
+def _parse_json_object(value: str | None, *, label: str) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{label} must be valid JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{label} must be a JSON object")
     return parsed
 
 
@@ -108,6 +118,26 @@ def _add_json_flag(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--json", action="store_true")
 
 
+def _add_panel_layout_flags(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--width", type=int, help="Preferred panel width in pixels.")
+    parser.add_argument("--height", type=int, help="Preferred panel height in pixels.")
+    parser.add_argument("--min-width", type=int, help="Minimum panel width in pixels.")
+    parser.add_argument("--min-height", type=int, help="Minimum panel height in pixels.")
+    parser.add_argument("--max-width", type=int, help="Maximum panel width in pixels.")
+    parser.add_argument("--max-height", type=int, help="Maximum panel height in pixels.")
+
+
+def _panel_layout_payload(args: argparse.Namespace) -> dict[str, int]:
+    payload: dict[str, int] = {}
+    for attr in ("width", "height", "min_width", "min_height", "max_width", "max_height"):
+        value = getattr(args, attr, None)
+        if value is not None:
+            if value <= 0:
+                raise ValueError(f"--{attr.replace('_', '-')} must be a positive integer")
+            payload[attr] = value
+    return payload
+
+
 def _add_dataset_source_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--hf-dataset")
     parser.add_argument("--split", default=None)
@@ -124,7 +154,9 @@ def _add_dataset_source_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--hf-shuffle-buffer-size", type=int, default=1000)
 
 
-def _validate_dataset_source_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+def _validate_dataset_source_args(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
     if args.hf_dataset and args.images_dir:
         parser.error("Use either --hf-dataset or --images-dir, not both.")
     if args.hf_dataset:
@@ -231,7 +263,9 @@ def _build_control_parser() -> argparse.ArgumentParser:
     _add_json_flag(workspace_delete)
 
     embeddings_parser = subparsers.add_parser("embeddings")
-    embeddings_subparsers = embeddings_parser.add_subparsers(dest="embeddings_command", required=True)
+    embeddings_subparsers = embeddings_parser.add_subparsers(
+        dest="embeddings_command", required=True
+    )
     embeddings_compute = embeddings_subparsers.add_parser("compute")
     _add_server_flags(embeddings_compute)
     embeddings_compute.add_argument("--workspace", required=True)
@@ -286,7 +320,9 @@ def _build_control_parser() -> argparse.ArgumentParser:
     figure_export.add_argument("--theme", choices=["dark", "light"], default="light")
     figure_export.add_argument("--background")
     figure_export.add_argument("--point-radius", type=float, default=4.0)
-    figure_export.add_argument("--guide-style", choices=["paper", "rings", "outline", "none"], default="paper")
+    figure_export.add_argument(
+        "--guide-style", choices=["paper", "rings", "outline", "none"], default="paper"
+    )
     figure_export.add_argument("--guide-alpha", type=int)
     figure_export.add_argument("--legend", choices=["auto", "on", "off", "direct"], default="auto")
     figure_export.add_argument("--title")
@@ -298,7 +334,9 @@ def _build_control_parser() -> argparse.ArgumentParser:
     ui_parser = subparsers.add_parser("ui")
     ui_subparsers = ui_parser.add_subparsers(dest="ui_command", required=True)
     ui_workspace = ui_subparsers.add_parser("workspace")
-    ui_workspace_subparsers = ui_workspace.add_subparsers(dest="ui_workspace_command", required=True)
+    ui_workspace_subparsers = ui_workspace.add_subparsers(
+        dest="ui_workspace_command", required=True
+    )
     ui_workspace_set = ui_workspace_subparsers.add_parser("set")
     _add_server_flags(ui_workspace_set)
     ui_workspace_set.add_argument("workspace_id")
@@ -313,7 +351,9 @@ def _build_control_parser() -> argparse.ArgumentParser:
     _add_json_flag(ui_layout_set)
 
     ui_selection = ui_subparsers.add_parser("selection")
-    ui_selection_subparsers = ui_selection.add_subparsers(dest="ui_selection_command", required=True)
+    ui_selection_subparsers = ui_selection.add_subparsers(
+        dest="ui_selection_command", required=True
+    )
     ui_selection_set = ui_selection_subparsers.add_parser("set")
     _add_server_flags(ui_selection_set)
     ui_selection_set.add_argument("--workspace", required=True)
@@ -325,7 +365,9 @@ def _build_control_parser() -> argparse.ArgumentParser:
     _add_json_flag(ui_selection_clear)
 
     ui_similarity = ui_subparsers.add_parser("similarity")
-    ui_similarity_subparsers = ui_similarity.add_subparsers(dest="ui_similarity_command", required=True)
+    ui_similarity_subparsers = ui_similarity.add_subparsers(
+        dest="ui_similarity_command", required=True
+    )
     ui_similarity_set = ui_similarity_subparsers.add_parser("set")
     _add_server_flags(ui_similarity_set)
     ui_similarity_set.add_argument("--workspace", required=True)
@@ -346,14 +388,75 @@ def _build_control_parser() -> argparse.ArgumentParser:
     ui_panel_add.add_argument("--workspace", required=True)
     ui_panel_add.add_argument("--panel-id", required=True)
     ui_panel_add.add_argument("--title")
-    ui_panel_add.add_argument("--kind", choices=["auto", "extension", "scatter"], default="auto")
+    ui_panel_add.add_argument(
+        "--kind", choices=["auto", "extension", "scatter", "builtin"], default="auto"
+    )
+    ui_panel_add.add_argument("--builtin-panel", choices=["samples"])
     ui_panel_add.add_argument("--extension")
     ui_panel_add.add_argument("--extension-panel")
     ui_panel_add.add_argument("--layout-key")
     ui_panel_add.add_argument("--position", choices=["center", "right", "bottom"], default="right")
     ui_panel_add.add_argument("--reference-panel-id")
     ui_panel_add.add_argument("--direction", choices=["right", "left", "above", "below", "within"])
+    _add_panel_layout_flags(ui_panel_add)
+    ui_panel_add.add_argument("--hidden", action="store_true", help="Add the panel hidden.")
+    ui_panel_add.add_argument(
+        "--props-json",
+        help="JSON object stored as runtime panel props.",
+    )
     _add_json_flag(ui_panel_add)
+
+    ui_panel_update = ui_panel_subparsers.add_parser("update")
+    _add_server_flags(ui_panel_update)
+    ui_panel_update.add_argument("--workspace", required=True)
+    ui_panel_update.add_argument("--panel-id", required=True)
+    ui_panel_update.add_argument("--title")
+    ui_panel_update.add_argument("--position", choices=["center", "right", "bottom"])
+    ui_panel_update.add_argument("--reference-panel-id")
+    ui_panel_update.add_argument("--direction", choices=["right", "left", "above", "below", "within"])
+    _add_panel_layout_flags(ui_panel_update)
+    visibility = ui_panel_update.add_mutually_exclusive_group()
+    visibility.add_argument("--visible", action="store_true")
+    visibility.add_argument("--hidden", action="store_true")
+    ui_panel_update.add_argument(
+        "--props-json",
+        help="JSON object replacing runtime panel props.",
+    )
+    _add_json_flag(ui_panel_update)
+
+    ui_panel_resize = ui_panel_subparsers.add_parser("resize")
+    _add_server_flags(ui_panel_resize)
+    ui_panel_resize.add_argument("--workspace", required=True)
+    ui_panel_resize.add_argument("--panel-id", required=True)
+    _add_panel_layout_flags(ui_panel_resize)
+    _add_json_flag(ui_panel_resize)
+
+    ui_panel_move = ui_panel_subparsers.add_parser("move")
+    _add_server_flags(ui_panel_move)
+    ui_panel_move.add_argument("--workspace", required=True)
+    ui_panel_move.add_argument("--panel-id", required=True)
+    ui_panel_move.add_argument("--position", choices=["center", "right", "bottom"], required=True)
+    ui_panel_move.add_argument("--reference-panel-id")
+    ui_panel_move.add_argument("--direction", choices=["right", "left", "above", "below", "within"])
+    _add_json_flag(ui_panel_move)
+
+    ui_panel_focus = ui_panel_subparsers.add_parser("focus")
+    _add_server_flags(ui_panel_focus)
+    ui_panel_focus.add_argument("--workspace", required=True)
+    ui_panel_focus.add_argument("--panel-id", required=True)
+    _add_json_flag(ui_panel_focus)
+
+    ui_panel_close = ui_panel_subparsers.add_parser("close")
+    _add_server_flags(ui_panel_close)
+    ui_panel_close.add_argument("--workspace", required=True)
+    ui_panel_close.add_argument("--panel-id", required=True)
+    _add_json_flag(ui_panel_close)
+
+    ui_panel_show = ui_panel_subparsers.add_parser("show")
+    _add_server_flags(ui_panel_show)
+    ui_panel_show.add_argument("--workspace", required=True)
+    ui_panel_show.add_argument("--panel-id", required=True)
+    _add_json_flag(ui_panel_show)
 
     ui_panel_remove = ui_panel_subparsers.add_parser("remove")
     _add_server_flags(ui_panel_remove)
@@ -443,6 +546,7 @@ def _run_server_command(args: argparse.Namespace) -> None:
 
     # Auto-discover extensions from the nearest .hyperview/extensions/.
     from hyperview.extensions import discover_local_extensions
+
     for folder in discover_local_extensions():
         try:
             installation = runtime.install_extension(workspace_id, folder)
@@ -518,7 +622,9 @@ def _run_provider_command(args: argparse.Namespace) -> None:
         _print_output({"provider": payload}, as_json=args.json)
         return
     if args.provider_command == "list":
-        _print_output({"providers": [provider.to_dict() for provider in registry.list()]}, as_json=args.json)
+        _print_output(
+            {"providers": [provider.to_dict() for provider in registry.list()]}, as_json=args.json
+        )
         return
     if args.provider_command == "inspect":
         registration = registry.get(args.alias)
@@ -695,7 +801,9 @@ def _run_figure_command(args: argparse.Namespace) -> None:
         guide_alpha=args.guide_alpha,
         legend=args.legend,
         title=args.title,
-        selected_ids=set(workspace.ui.selected_ids) if args.show_selection and not args.ignore_selection else set(),
+        selected_ids=set(workspace.ui.selected_ids)
+        if args.show_selection and not args.ignore_selection
+        else set(),
     )
     try:
         result = render_layout_figure(
@@ -712,7 +820,9 @@ def _run_figure_command(args: argparse.Namespace) -> None:
     if args.json:
         _print_output(payload, as_json=True)
         return
-    print(f"Wrote {result.output_path} ({result.width}x{result.height}, {result.num_points} points)")
+    print(
+        f"Wrote {result.output_path} ({result.width}x{result.height}, {result.num_points} points)"
+    )
 
 
 def _run_ui_command(args: argparse.Namespace) -> None:
@@ -771,7 +881,12 @@ def _run_ui_command(args: argparse.Namespace) -> None:
     if args.ui_command == "panel" and args.ui_panel_command == "add":
         panel_kind = args.kind
         if panel_kind == "auto":
-            panel_kind = "scatter" if args.layout_key else "extension"
+            if args.builtin_panel:
+                panel_kind = "builtin"
+            else:
+                panel_kind = "scatter" if args.layout_key else "extension"
+        if panel_kind == "builtin" and args.builtin_panel != "samples":
+            raise RuntimeError("Built-in panels require --builtin-panel samples")
         if panel_kind == "extension" and (not args.extension or not args.extension_panel):
             raise RuntimeError(
                 "Extension panels require --extension and --extension-panel. "
@@ -779,6 +894,8 @@ def _run_ui_command(args: argparse.Namespace) -> None:
             )
         if panel_kind == "scatter" and not args.title:
             raise RuntimeError("Scatter panels require --title")
+        props = _parse_json_object(args.props_json, label="--props-json")
+        layout_payload = _panel_layout_payload(args)
         payload = _http_send_json(
             f"{base_url}/api/control/ui/panels",
             {
@@ -786,13 +903,123 @@ def _run_ui_command(args: argparse.Namespace) -> None:
                 "panel_id": args.panel_id,
                 "title": args.title,
                 "kind": panel_kind,
+                "builtin_panel": args.builtin_panel,
                 "extension": args.extension,
                 "extension_panel": args.extension_panel,
                 "layout_key": args.layout_key,
                 "position": args.position,
                 "reference_panel_id": args.reference_panel_id,
                 "direction": args.direction,
+                **layout_payload,
+                "visible": not args.hidden,
+                "props": props,
             },
+        )
+        _print_output(payload, as_json=args.json)
+        return
+    if args.ui_command == "panel" and args.ui_panel_command == "update":
+        layout_payload = _panel_layout_payload(args)
+        visible = True if args.visible else False if args.hidden else None
+        if (
+            args.title is None
+            and args.props_json is None
+            and args.position is None
+            and args.reference_panel_id is None
+            and args.direction is None
+            and not layout_payload
+            and visible is None
+        ):
+            raise RuntimeError("Panel update requires at least one field to update")
+        props = _parse_json_object(args.props_json, label="--props-json")
+        update_payload: dict[str, object | None] = {
+            "workspace_id": args.workspace,
+            "panel_id": args.panel_id,
+        }
+        if args.title is not None:
+            update_payload["title"] = args.title
+        if args.position is not None:
+            update_payload["position"] = args.position
+            update_payload["reference_panel_id"] = args.reference_panel_id
+            update_payload["direction"] = args.direction
+        elif args.reference_panel_id is not None:
+            update_payload["reference_panel_id"] = args.reference_panel_id
+        elif args.direction is not None:
+            update_payload["direction"] = args.direction
+        update_payload.update(layout_payload)
+        if visible is not None:
+            update_payload["visible"] = visible
+        if props is not None:
+            update_payload["props"] = props
+        payload = _http_send_json(
+            f"{base_url}/api/control/ui/panels",
+            update_payload,
+            method="PATCH",
+        )
+        _print_output(payload, as_json=args.json)
+        return
+    if args.ui_command == "panel" and args.ui_panel_command == "resize":
+        layout_payload = _panel_layout_payload(args)
+        if not layout_payload:
+            raise RuntimeError("Panel resize requires at least one size or constraint flag")
+        payload = _http_send_json(
+            f"{base_url}/api/control/ui/panels",
+            {
+                "workspace_id": args.workspace,
+                "panel_id": args.panel_id,
+                **layout_payload,
+            },
+            method="PATCH",
+        )
+        _print_output(payload, as_json=args.json)
+        return
+    if args.ui_command == "panel" and args.ui_panel_command == "move":
+        payload = _http_send_json(
+            f"{base_url}/api/control/ui/panels",
+            {
+                "workspace_id": args.workspace,
+                "panel_id": args.panel_id,
+                "position": args.position,
+                "reference_panel_id": args.reference_panel_id,
+                "direction": args.direction,
+            },
+            method="PATCH",
+        )
+        _print_output(payload, as_json=args.json)
+        return
+    if args.ui_command == "panel" and args.ui_panel_command == "focus":
+        payload = _http_send_json(
+            f"{base_url}/api/control/ui/panels",
+            {
+                "workspace_id": args.workspace,
+                "panel_id": args.panel_id,
+                "active": True,
+                "visible": True,
+            },
+            method="PATCH",
+        )
+        _print_output(payload, as_json=args.json)
+        return
+    if args.ui_command == "panel" and args.ui_panel_command == "close":
+        payload = _http_send_json(
+            f"{base_url}/api/control/ui/panels",
+            {
+                "workspace_id": args.workspace,
+                "panel_id": args.panel_id,
+                "visible": False,
+            },
+            method="PATCH",
+        )
+        _print_output(payload, as_json=args.json)
+        return
+    if args.ui_command == "panel" and args.ui_panel_command == "show":
+        payload = _http_send_json(
+            f"{base_url}/api/control/ui/panels",
+            {
+                "workspace_id": args.workspace,
+                "panel_id": args.panel_id,
+                "visible": True,
+            },
+            method="PATCH",
         )
         _print_output(payload, as_json=args.json)
         return

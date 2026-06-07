@@ -10,7 +10,7 @@ import time
 from typing import Any
 
 from hyperview.storage.backend import StorageBackend
-from hyperview.storage.geometry import apply_inferred_geometry_params
+from hyperview.storage.geometry import apply_inferred_geometry_params, resolve_geometry
 from hyperview.storage.schema import make_layout_key, normalize_layout_dimension
 
 
@@ -31,6 +31,7 @@ def compute_embeddings(
     batch_size: int = 32,
     sample_ids: list[str] | None = None,
     show_progress: bool = True,
+    provider_registry: Any | None = None,
 ) -> tuple[str, int, int]:
     """Compute embeddings for samples that don't have them yet.
 
@@ -41,6 +42,8 @@ def compute_embeddings(
         sample_ids: Optional subset of sample IDs to ensure embeddings for.
             If omitted, embeddings are ensured for the full dataset.
         show_progress: Whether to show progress bar.
+        provider_registry: Optional runtime provider registry to resolve
+            control-plane registered providers.
 
     Returns:
         Tuple of (space_key, num_computed, num_skipped).
@@ -49,10 +52,6 @@ def compute_embeddings(
         ValueError: If no samples exist, requested sample IDs are missing,
             or the provider cannot be resolved.
     """
-    from hyperview.embeddings.engine import get_engine
-
-    engine = get_engine()
-
     if sample_ids is None:
         target_samples = storage.get_all_samples()
         if not target_samples:
@@ -64,11 +63,12 @@ def compute_embeddings(
         requested_sample_ids = list(dict.fromkeys(sample_ids))
         target_samples = storage.get_samples_by_ids(requested_sample_ids)
         found_sample_ids = {sample.id for sample in target_samples}
-        missing_sample_ids = [sample_id for sample_id in requested_sample_ids if sample_id not in found_sample_ids]
+        missing_sample_ids = [
+            sample_id for sample_id in requested_sample_ids if sample_id not in found_sample_ids
+        ]
         if missing_sample_ids:
             raise ValueError(
-                "Requested sample_ids were not found in storage: "
-                f"{missing_sample_ids[:5]}"
+                f"Requested sample_ids were not found in storage: {missing_sample_ids[:5]}"
             )
 
     # Generate space key before computing (deterministic from spec)
@@ -81,7 +81,9 @@ def compute_embeddings(
         missing_ids = storage.get_missing_embedding_ids(space_key)
     else:
         embedded_ids = storage.get_embedded_ids(space_key)
-        missing_ids = [sample_id for sample_id in target_sample_ids if sample_id not in embedded_ids]
+        missing_ids = [
+            sample_id for sample_id in target_sample_ids if sample_id not in embedded_ids
+        ]
 
     num_skipped = len(target_sample_ids) - len(missing_ids)
 
@@ -99,6 +101,9 @@ def compute_embeddings(
     if show_progress and num_skipped > 0:
         print(f"Skipped {num_skipped} samples with existing embeddings")
 
+    from hyperview.embeddings.engine import get_engine
+
+    engine = get_engine(provider_registry=provider_registry)
     embeddings = engine.embed_images(
         samples=samples_to_embed,
         spec=spec,
@@ -153,12 +158,8 @@ def compute_layout(
     Raises:
         ValueError: If no embedding spaces, space not found, or insufficient samples.
     """
-    from hyperview.embeddings.projection import ProjectionEngine
-
     if method not in ("umap", "pca"):
-        raise ValueError(
-            f"Invalid method: {method}. Supported methods: 'umap', 'pca'."
-        )
+        raise ValueError(f"Invalid method: {method}. Supported methods: 'umap', 'pca'.")
     layout_dimension = normalize_layout_dimension(layout_dimension)
 
     if geometry not in ("euclidean", "poincare", "spherical"):
@@ -187,12 +188,13 @@ def compute_layout(
     if space is None:
         raise ValueError(f"Space not found: {space_key}")
 
-    input_geometry = space.geometry
-    curvature = (space.config or {}).get("curvature")
-
     ids, vectors = storage.get_embeddings(space_key)
     if len(ids) == 0:
         raise ValueError(f"No embeddings in space '{space_key}'. Call compute_embeddings() first.")
+
+    input_geometry = space.geometry
+    resolved_geometry = resolve_geometry(space, vectors)
+    curvature = resolved_geometry.params.get("curvature")
 
     min_samples = 3 if method == "umap" else 2
     if len(ids) < min_samples:
@@ -233,8 +235,7 @@ def compute_layout(
 
     if show_progress:
         print(
-            f"Computing {geometry} {method} layout "
-            f"({layout_dimension}D) for {len(ids)} samples..."
+            f"Computing {geometry} {method} layout ({layout_dimension}D) for {len(ids)} samples..."
         )
 
     storage.ensure_layout(
@@ -244,6 +245,8 @@ def compute_layout(
         geometry=geometry,
         params=layout_params,
     )
+
+    from hyperview.embeddings.projection import ProjectionEngine
 
     engine = ProjectionEngine()
     started_at = time.perf_counter()
