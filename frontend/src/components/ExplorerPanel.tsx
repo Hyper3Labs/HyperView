@@ -8,6 +8,7 @@ import { Search, Tag } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FALLBACK_LABEL_COLOR, MISSING_LABEL_COLOR, normalizeLabel } from "@/lib/labelColors";
 import { useLabelLegend } from "./useLabelLegend";
+import { setLabelFilterCollection } from "@/lib/api";
 
 interface ExplorerPanelProps {
   className?: string;
@@ -20,6 +21,8 @@ export function ExplorerPanel({ className }: ExplorerPanelProps) {
     activeLayoutKey,
     labelFilter,
     setLabelFilter,
+    activeWorkspaceId,
+    applyRuntimeSnapshot,
   } = useStore();
   const [labelSearch, setLabelSearch] = React.useState("");
   const [isSearchOpen, setIsSearchOpen] = React.useState(false);
@@ -54,6 +57,24 @@ export function ExplorerPanel({ className }: ExplorerPanelProps) {
       setLabelSearch("");
     }
   };
+
+  const applyLabelFilter = React.useCallback(
+    (nextLabel: string | null) => {
+      setLabelFilter(nextLabel);
+      if (!activeWorkspaceId) return;
+
+      void setLabelFilterCollection({
+        workspaceId: activeWorkspaceId,
+        value: nextLabel,
+        clear: nextLabel === null,
+      })
+        .then(applyRuntimeSnapshot)
+        .catch((err) => {
+          console.error("Failed to persist label filter:", err);
+        });
+    },
+    [activeWorkspaceId, applyRuntimeSnapshot, setLabelFilter]
+  );
 
   return (
     <Panel className={cn("h-full flex flex-col", className)}>
@@ -105,7 +126,7 @@ export function ExplorerPanel({ className }: ExplorerPanelProps) {
                 <button
                   key={label}
                   type="button"
-                  onClick={() => setLabelFilter(isActive ? null : normalized)}
+                  onClick={() => applyLabelFilter(isActive ? null : normalized)}
                   className={cn(
                     "flex items-center gap-2 w-full h-6 px-2 text-[12px] leading-[16px] text-left text-muted-foreground hover:text-foreground",
                     "hover:bg-muted/40 transition-colors",

@@ -33,6 +33,7 @@ import {
   addBuiltInCenterPanel,
   CENTER_PANEL_COMPONENTS,
   getBuiltInCenterPanelDefinition,
+  getBuiltInCenterPanelDefinitionForPanelType,
   getBuiltInCenterPanelIdForLayout,
   getScatterTabComponent,
   CENTER_PANEL_TAB_COMPONENTS,
@@ -51,6 +52,7 @@ import { Button } from "./ui/button";
 import { DockviewContext, useDockviewContext } from "./DockviewContext";
 import { ExplorerPanel } from "./ExplorerPanel";
 import { HyperViewLogo } from "./icons";
+import { RuntimeBuiltInPanel } from "./RuntimeBuiltInPanel";
 import { RuntimeModulePanel } from "./RuntimeModulePanel";
 
 const LAYOUT_STORAGE_KEY = "hyperview:dockview-layout:v10";
@@ -335,15 +337,40 @@ function isClosableDockPanel(panelId: string) {
 
 function getExpectedRuntimePanelComponent(panel: RuntimePanel) {
   if (panel.kind === "scatter") return "scatter";
-  if (panel.kind === "builtin" && panel.builtin_panel === "samples") {
-    return getBuiltInCenterPanelDefinition(PANEL.GRID)?.component ?? null;
-  }
+  if (panel.kind === "builtin") return "runtimeBuiltInPanel";
   return "runtimeModulePanel";
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function getSamplesRankFromPanelState(panel: RuntimePanel) {
+  const retrieval = panel.state?.retrieval;
+  if (!isRecord(retrieval)) return null;
+  const anchorSampleId = retrieval.anchor_sample_id;
+  const queryText = retrieval.query_text;
+  const hasAnchor = typeof anchorSampleId === "string" && anchorSampleId.length > 0;
+  const hasText = typeof queryText === "string" && queryText.length > 0;
+  if (!hasAnchor && !hasText) return null;
+  const layoutKey = retrieval.layout_key;
+  const spaceKey = retrieval.space_key;
+  const k = retrieval.k;
+  const source = retrieval.source;
+  return {
+    anchorSampleId: hasAnchor ? anchorSampleId : undefined,
+    queryText: hasText ? queryText : undefined,
+    layoutKey: typeof layoutKey === "string" ? layoutKey : undefined,
+    spaceKey: typeof spaceKey === "string" ? spaceKey : undefined,
+    k: typeof k === "number" ? k : undefined,
+    source: typeof source === "string" ? source : undefined,
+  };
+}
+
 function getRuntimeSamplesPanelParams(panel: RuntimePanel) {
-  const mode = panel.props?.mode;
-  const rank = panel.props?.rank;
+  const stateMode = panel.state?.mode;
+  const mode = stateMode === "retrieval" ? "ranked" : panel.props?.mode;
+  const rank = getSamplesRankFromPanelState(panel) ?? panel.props?.rank;
   return {
     panelId: panel.id,
     runtimePlacementKey: getRuntimePanelPlacementKey(panel),
@@ -353,6 +380,24 @@ function getRuntimeSamplesPanelParams(panel: RuntimePanel) {
         : undefined,
     rank: rank && typeof rank === "object" && !Array.isArray(rank) ? rank : undefined,
   };
+}
+
+function getRuntimeBuiltInPanelParams(panel: RuntimePanel) {
+  const baseParams = {
+    ...(panel.props ?? {}),
+    panelId: panel.id,
+    builtinPanelType: panel.builtin_panel ?? panel.panel_type,
+    runtimePlacementKey: getRuntimePanelPlacementKey(panel),
+  };
+
+  if (panel.builtin_panel === "samples" || panel.panel_type === "samples") {
+    return {
+      ...baseParams,
+      ...getRuntimeSamplesPanelParams(panel),
+    };
+  }
+
+  return baseParams;
 }
 
 function DockviewPanelActions(props: IDockviewHeaderActionsProps) {
@@ -538,6 +583,7 @@ const Watermark = React.memo(function Watermark(_props: IWatermarkPanelProps) {
 const COMPONENTS = {
   ...CENTER_PANEL_COMPONENTS,
   explorer: ExplorerDockPanel,
+  runtimeBuiltInPanel: RuntimeBuiltInPanel,
   runtimeModulePanel: RuntimeModulePanel,
 };
 
@@ -798,7 +844,9 @@ export function DockviewWorkspace() {
         const existingPlacementKey = (existingPanel.api.getParameters() as {
           runtimePlacementKey?: string;
         }).runtimePlacementKey;
-        if (!expectedComponent || currentComponent !== expectedComponent || existingPlacementKey !== placementKey) {
+        const placementChanged =
+          existingPlacementKey !== undefined && existingPlacementKey !== placementKey;
+        if (!expectedComponent || currentComponent !== expectedComponent || placementChanged) {
           runtimeSyncClosedPanels.current.add(panel.id);
           existingPanel.api.close();
           existingPanel = undefined;
@@ -813,8 +861,8 @@ export function DockviewWorkspace() {
               pinnedLayout: true,
               runtimePlacementKey: placementKey,
             });
-          } else if (panel.kind === "builtin" && panel.builtin_panel === "samples") {
-            existingPanel.api.updateParameters(getRuntimeSamplesPanelParams(panel));
+          } else if (panel.kind === "builtin") {
+            existingPanel.api.updateParameters(getRuntimeBuiltInPanelParams(panel));
           } else {
             existingPanel.api.updateParameters({
               panelId: panel.id,
@@ -849,13 +897,13 @@ export function DockviewWorkspace() {
         continue;
       }
 
-      if (panel.kind === "builtin" && panel.builtin_panel === "samples") {
-        const samplesParams = getRuntimeSamplesPanelParams(panel);
-        const samplesDefinition = getBuiltInCenterPanelDefinition(PANEL.GRID);
-        if (!samplesDefinition) continue;
+      if (panel.kind === "builtin") {
+        const panelType = panel.builtin_panel ?? panel.panel_type;
+        const definition = getBuiltInCenterPanelDefinitionForPanelType(panelType);
+        if (!definition) continue;
         const layout = getRuntimePanelAddLayout(panel);
 
-        const options = samplesDefinition.buildAddPanelOptions({
+        const options = definition.buildAddPanelOptions({
           api,
           datasetInfo,
           position: getRuntimePanelPosition(api, panel.position, panel),
@@ -864,10 +912,11 @@ export function DockviewWorkspace() {
         api.addPanel({
           ...options,
           id: runtimePanelId,
+          component: "runtimeBuiltInPanel",
           title: panel.title,
           params: {
             ...(options.params ?? {}),
-            ...samplesParams,
+            ...getRuntimeBuiltInPanelParams(panel),
           },
           ...layout,
         });

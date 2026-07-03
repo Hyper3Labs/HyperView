@@ -50,6 +50,8 @@ def create_sample_schema() -> pa.Schema:
             pa.field("id", pa.utf8(), nullable=False),
             pa.field("filepath", pa.utf8(), nullable=False),
             pa.field("label", pa.utf8(), nullable=True),
+            pa.field("text", pa.utf8(), nullable=True),
+            pa.field("modality", pa.utf8(), nullable=False),
             pa.field("metadata_json", pa.utf8(), nullable=True),
             pa.field("thumbnail_base64", pa.utf8(), nullable=True),
         ]
@@ -290,6 +292,8 @@ def sample_to_dict(sample: Sample) -> dict[str, Any]:
         "id": sample.id,
         "filepath": sample.filepath,
         "label": sample.label,
+        "text": sample.text,
+        "modality": sample.modality,
         "metadata_json": json.dumps(sample.metadata) if sample.metadata else None,
         "thumbnail_base64": sample.thumbnail_base64,
     }
@@ -304,6 +308,8 @@ def dict_to_sample(row: dict[str, Any]) -> Sample:
         id=row["id"],
         filepath=row["filepath"],
         label=row.get("label"),
+        text=row.get("text"),
+        modality=str(row.get("modality") or "image"),
         metadata=metadata,
         thumbnail_base64=row.get("thumbnail_base64"),
     )

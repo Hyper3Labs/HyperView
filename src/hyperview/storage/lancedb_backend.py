@@ -105,9 +105,21 @@ def _ensure_scalar_index(
     )
 
 
+def _ensure_text_search_index(table: lancedb.table.Table) -> None:
+    if "text" not in table.schema.names:
+        return
+    for index in table.list_indices():
+        if "text" in list(getattr(index, "columns", []) or []):
+            return
+    table.create_fts_index("text", replace=False)
+
+
 def _ensure_samples_indices(table: lancedb.table.Table) -> None:
     _ensure_scalar_index(table, "id")
     _ensure_scalar_index(table, "label", index_type="BITMAP")
+    if "modality" in table.schema.names:
+        _ensure_scalar_index(table, "modality", index_type="BITMAP")
+    _ensure_text_search_index(table)
 
 
 def _ensure_layout_indices(table: lancedb.table.Table, *, layout_dimension: int) -> None:
@@ -187,11 +199,21 @@ class LanceDBBackend(StorageBackend):
         offset: int = 0,
         limit: int = 100,
         label: str | None = None,
+        missing_label: bool = False,
     ) -> tuple[list[Sample], int]:
         if self._samples_table is None:
             return [], 0
 
-        if label:
+        if missing_label:
+            total = self._samples_table.count_rows("label IS NULL")
+            results = (
+                self._samples_table.search()
+                .where("label IS NULL")
+                .offset(offset)
+                .limit(limit)
+                .to_list()
+            )
+        elif label:
             total = self._samples_table.count_rows(_eq_sql("label", label))
             results = (
                 self._samples_table.search()
@@ -624,6 +646,7 @@ class LanceDBBackend(StorageBackend):
         y_min: float,
         y_max: float,
         label_filter: str | None = None,
+        missing_label_filter: bool = False,
     ) -> tuple[list[str], np.ndarray]:
         layout_dimension = parse_layout_dimension(layout_key)
         if layout_dimension != 2:
@@ -650,7 +673,7 @@ class LanceDBBackend(StorageBackend):
         )
         rows = table.search().select(["id", "x", "y"]).where(where).to_list()
 
-        if label_filter is not None and rows:
+        if (label_filter is not None or missing_label_filter) and rows:
             if self._samples_table is None:
                 return [], np.empty((0, 2), dtype=np.float32)
 
@@ -660,7 +683,8 @@ class LanceDBBackend(StorageBackend):
                 chunk = candidate_ids[i : i + 1000]
                 if not chunk:
                     continue
-                where = f"{_in_sql('id', chunk)} AND {_eq_sql('label', label_filter)}"
+                label_where = "label IS NULL" if missing_label_filter else _eq_sql("label", label_filter)
+                where = f"{_in_sql('id', chunk)} AND {label_where}"
                 for r in self._samples_table.search().select(["id"]).where(where).to_list():
                     matching_ids.add(r["id"])
 

@@ -265,21 +265,24 @@ def test_cli_panel_add_posts_extension_panel_instance(
     output = json.loads(capsys.readouterr().out)
     assert output["workspace"]["id"] == "default"
     assert recorded["method"] == "POST"
-    assert recorded["url"] == "http://127.0.0.1:6262/api/control/ui/panels"
+    assert recorded["url"] == "http://127.0.0.1:6262/api/control/commands/run"
     assert recorded["payload"] == {
-        "workspace_id": "default",
-        "panel_id": "agent-panel",
-        "title": None,
-        "kind": "extension",
-        "builtin_panel": None,
-        "extension": "agent-tools",
-        "extension_panel": "agent-panel",
-        "layout_key": None,
-        "position": "right",
-        "reference_panel_id": None,
-        "direction": None,
-        "visible": True,
-        "props": None,
+        "command": "ui.panel.add",
+        "target": {"workspace_id": "default"},
+        "args": {
+            "panel_id": "agent-panel",
+            "title": None,
+            "kind": "extension",
+            "builtin_panel": None,
+            "extension": "agent-tools",
+            "extension_panel": "agent-panel",
+            "layout_key": None,
+            "position": "right",
+            "reference_panel_id": None,
+            "direction": None,
+            "visible": True,
+            "props": None,
+        },
     }
 
 
@@ -322,21 +325,24 @@ def test_cli_panel_add_posts_scatter_panel_layout_binding(monkeypatch, capsys) -
     output = json.loads(capsys.readouterr().out)
     assert output["workspace"]["id"] == "default"
     assert recorded["method"] == "POST"
-    assert recorded["url"] == "http://127.0.0.1:6262/api/control/ui/panels"
+    assert recorded["url"] == "http://127.0.0.1:6262/api/control/commands/run"
     assert recorded["payload"] == {
-        "workspace_id": "default",
-        "panel_id": "uncha-poincare",
-        "title": "UNCHA",
-        "kind": "scatter",
-        "builtin_panel": None,
-        "extension": None,
-        "extension_panel": None,
-        "layout_key": "uncha__poincare_umap__2d",
-        "position": "center",
-        "reference_panel_id": "hycoclip-poincare",
-        "direction": "right",
-        "visible": True,
-        "props": None,
+        "command": "ui.panel.add",
+        "target": {"workspace_id": "default"},
+        "args": {
+            "panel_id": "uncha-poincare",
+            "title": "UNCHA",
+            "kind": "scatter",
+            "builtin_panel": None,
+            "extension": None,
+            "extension_panel": None,
+            "layout_key": "uncha__poincare_umap__2d",
+            "position": "center",
+            "reference_panel_id": "hycoclip-poincare",
+            "direction": "right",
+            "visible": True,
+            "props": None,
+        },
     }
 
 
@@ -373,22 +379,50 @@ def test_cli_panel_add_posts_builtin_samples_panel(monkeypatch, capsys) -> None:
     output = json.loads(capsys.readouterr().out)
     assert output["workspace"]["id"] == "default"
     assert recorded["method"] == "POST"
-    assert recorded["url"] == "http://127.0.0.1:6262/api/control/ui/panels"
+    assert recorded["url"] == "http://127.0.0.1:6262/api/control/commands/run"
     assert recorded["payload"] == {
-        "workspace_id": "default",
-        "panel_id": "samples",
-        "title": None,
-        "kind": "builtin",
-        "builtin_panel": "samples",
-        "extension": None,
-        "extension_panel": None,
-        "layout_key": None,
-        "position": "right",
-        "reference_panel_id": None,
-        "direction": None,
-        "visible": True,
-        "props": None,
+        "command": "ui.panel.add",
+        "target": {"workspace_id": "default"},
+        "args": {
+            "panel_id": "samples",
+            "title": None,
+            "kind": "builtin",
+            "builtin_panel": "samples",
+            "extension": None,
+            "extension_panel": None,
+            "layout_key": None,
+            "position": "right",
+            "reference_panel_id": None,
+            "direction": None,
+            "visible": True,
+            "props": None,
+        },
     }
+
+
+def test_cli_panel_definitions_lists_runtime_panel_contracts(monkeypatch, capsys) -> None:
+    recorded: dict[str, str] = {}
+
+    def fake_get(url: str) -> dict[str, object]:
+        recorded["url"] = url
+        return {
+            "panel_definitions": [
+                {
+                    "panel_type": "samples",
+                    "label": "Samples",
+                    "title": "Samples",
+                    "source": "builtin",
+                }
+            ]
+        }
+
+    monkeypatch.setattr("hyperview.cli._http_get_json", fake_get)
+
+    main(["ui", "panel", "definitions", "--json"])
+
+    output = json.loads(capsys.readouterr().out)
+    assert recorded["url"] == "http://127.0.0.1:6262/api/panel-definitions"
+    assert output["panel_definitions"][0]["panel_type"] == "samples"
 
 
 def test_cli_panel_update_posts_runtime_panel_props(monkeypatch, capsys) -> None:
@@ -419,16 +453,18 @@ def test_cli_panel_update_posts_runtime_panel_props(monkeypatch, capsys) -> None
 
     output = json.loads(capsys.readouterr().out)
     assert output["workspace"]["id"] == "default"
-    assert recorded["method"] == "PATCH"
-    assert recorded["url"] == "http://127.0.0.1:6262/api/control/ui/panels"
+    assert recorded["method"] == "POST"
+    assert recorded["url"] == "http://127.0.0.1:6262/api/control/commands/run"
     assert recorded["payload"] == {
-        "workspace_id": "default",
-        "panel_id": "ranked-clip",
-        "props": {
-            "mode": "ranked",
-            "rank": {
-                "anchorSampleId": "sample-1",
-                "k": 24,
+        "command": "ui.panel.update",
+        "target": {"workspace_id": "default", "panel_id": "ranked-clip"},
+        "args": {
+            "props": {
+                "mode": "ranked",
+                "rank": {
+                    "anchorSampleId": "sample-1",
+                    "k": 24,
+                },
             },
         },
     }
@@ -439,7 +475,7 @@ def test_cli_panel_layout_commands_patch_runtime_panel_state(monkeypatch, capsys
 
     def fake_send(url: str, payload: dict[str, object], method: str = "POST") -> dict[str, object]:
         recorded.append({"url": url, "payload": payload, "method": method})
-        return {"workspace": {"id": "default"}}
+        return {"ok": True, "workspace": {"id": "default"}}
 
     monkeypatch.setattr("hyperview.cli._http_send_json", fake_send)
 
@@ -501,93 +537,427 @@ def test_cli_panel_layout_commands_patch_runtime_panel_state(monkeypatch, capsys
             "--json",
         ]
     )
+    main(
+        [
+            "ui",
+            "panel",
+            "show",
+            "--workspace",
+            "default",
+            "--panel-id",
+            "readout",
+            "--json",
+        ]
+    )
 
     _ = capsys.readouterr()
-    assert [entry["method"] for entry in recorded] == ["PATCH", "PATCH", "PATCH", "PATCH"]
+    assert [entry["method"] for entry in recorded] == ["POST", "POST", "POST", "POST", "POST"]
+    assert {entry["url"] for entry in recorded} == {
+        "http://127.0.0.1:6262/api/control/commands/run"
+    }
     assert recorded[0]["payload"] == {
-        "workspace_id": "default",
-        "panel_id": "readout",
-        "width": 360,
-        "min_width": 280,
+        "command": "ui.panel.resize",
+        "target": {"workspace_id": "default", "panel_id": "readout"},
+        "args": {"width": 360, "min_width": 280},
     }
     assert recorded[1]["payload"] == {
-        "workspace_id": "default",
-        "panel_id": "readout",
-        "position": "right",
-        "reference_panel_id": "samples",
-        "direction": "right",
+        "command": "ui.panel.move",
+        "target": {"workspace_id": "default", "panel_id": "readout"},
+        "args": {
+            "position": "right",
+            "reference_panel_id": "samples",
+            "direction": "right",
+        },
     }
     assert recorded[2]["payload"] == {
-        "workspace_id": "default",
-        "panel_id": "readout",
-        "active": True,
-        "visible": True,
+        "command": "ui.panel.focus",
+        "target": {"workspace_id": "default", "panel_id": "readout"},
+        "args": {},
     }
     assert recorded[3]["payload"] == {
-        "workspace_id": "default",
-        "panel_id": "readout",
-        "visible": False,
+        "command": "ui.panel.close",
+        "target": {"workspace_id": "default", "panel_id": "readout"},
+        "args": {},
+    }
+    assert recorded[4]["payload"] == {
+        "command": "ui.panel.show",
+        "target": {"workspace_id": "default", "panel_id": "readout"},
+        "args": {},
     }
 
 
-def test_cli_similarity_commands_post_explicit_neighbor_context(monkeypatch, capsys) -> None:
+def test_cli_generic_command_runner_posts_command_envelope(monkeypatch, capsys) -> None:
+    recorded: dict[str, object] = {}
+
+    def fake_send(url: str, payload: dict[str, object], method: str = "POST") -> dict[str, object]:
+        recorded["url"] = url
+        recorded["payload"] = payload
+        recorded["method"] = method
+        return {
+            "ok": True,
+            "command": "ui.panel.resize",
+            "workspace": {"id": "default"},
+            "revision": 2,
+        }
+
+    monkeypatch.setattr("hyperview.cli._http_send_json", fake_send)
+
+    main(
+        [
+            "commands",
+            "run",
+            "ui.panel.resize",
+            "--target",
+            "workspace_id=default",
+            "--target",
+            "panel_id=readout",
+            "--arg",
+            "width=360",
+            "--arg",
+            "min_width=null",
+            "--json",
+        ]
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["ok"] is True
+    assert recorded["method"] == "POST"
+    assert recorded["url"] == "http://127.0.0.1:6262/api/control/commands/run"
+    assert recorded["payload"] == {
+        "command": "ui.panel.resize",
+        "target": {"workspace_id": "default", "panel_id": "readout"},
+        "args": {"width": 360, "min_width": None},
+    }
+
+
+def test_cli_generic_command_runner_prints_error_envelope(monkeypatch, capsys) -> None:
+    def fake_send(url: str, payload: dict[str, object], method: str = "POST") -> dict[str, object]:
+        return {
+            "ok": False,
+            "command": "ui.panel.resize",
+            "error": {
+                "code": "not_found",
+                "message": "Panel not found: missing",
+            },
+        }
+
+    monkeypatch.setattr("hyperview.cli._http_send_json", fake_send)
+
+    main(
+        [
+            "commands",
+            "run",
+            "ui.panel.resize",
+            "--target",
+            "workspace_id=default",
+            "--target",
+            "panel_id=missing",
+            "--arg",
+            "width=360",
+            "--json",
+        ]
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert output == {
+        "ok": False,
+        "command": "ui.panel.resize",
+        "error": {
+            "code": "not_found",
+            "message": "Panel not found: missing",
+        },
+    }
+
+
+def test_cli_panel_state_and_samples_retrieval_commands_post_command_envelopes(
+    monkeypatch,
+    capsys,
+) -> None:
     recorded: list[dict[str, object]] = []
 
     def fake_send(url: str, payload: dict[str, object], method: str = "POST") -> dict[str, object]:
         recorded.append({"url": url, "payload": payload, "method": method})
-        return {"workspace": {"id": "default"}}
+        return {
+            "ok": True,
+            "command": payload["command"],
+            "result": {"panel_id": "samples", "state_revision": 1},
+            "workspace": {"id": "default"},
+        }
 
     monkeypatch.setattr("hyperview.cli._http_send_json", fake_send)
 
     main(
         [
             "ui",
-            "similarity",
-            "set",
+            "panel",
+            "state",
+            "get",
+            "--workspace",
+            "default",
+            "--panel-id",
+            "samples",
+            "--json",
+        ]
+    )
+    panel_state_get = json.loads(capsys.readouterr().out)
+    assert panel_state_get["command"] == "ui.panel.state.get"
+
+    main(
+        [
+            "ui",
+            "panel",
+            "state",
+            "patch",
+            "--workspace",
+            "default",
+            "--panel-id",
+            "samples",
+            "--state-json",
+            '{"settings":{"density":"compact"}}',
+            "--expected-revision",
+            "0",
+            "--replace",
+            "--json",
+        ]
+    )
+    panel_state_patch = json.loads(capsys.readouterr().out)
+    assert panel_state_patch["command"] == "ui.panel.state.patch"
+
+    main(
+        [
+            "ui",
+            "samples",
+            "retrieval",
+            "set-anchor",
             "--workspace",
             "default",
             "--sample-id",
             "sample-2",
-            "--layout-key",
-            "clip__pca__2d",
+            "--space-key",
+            "clip",
             "--k",
             "12",
             "--json",
         ]
     )
-    set_output = json.loads(capsys.readouterr().out)
-    assert set_output["workspace"]["id"] == "default"
+    retrieval_set = json.loads(capsys.readouterr().out)
+    assert retrieval_set["workspace"]["id"] == "default"
 
     main(
         [
             "ui",
-            "similarity",
+            "samples",
+            "retrieval",
+            "set-k",
+            "--workspace",
+            "default",
+            "--k",
+            "24",
+            "--json",
+        ]
+    )
+    retrieval_k = json.loads(capsys.readouterr().out)
+    assert retrieval_k["workspace"]["id"] == "default"
+
+    main(
+        [
+            "ui",
+            "samples",
+            "retrieval",
             "clear",
             "--workspace",
             "default",
             "--json",
         ]
     )
-    clear_output = json.loads(capsys.readouterr().out)
-    assert clear_output["workspace"]["id"] == "default"
+    retrieval_clear = json.loads(capsys.readouterr().out)
+    assert retrieval_clear["workspace"]["id"] == "default"
+
+    assert [entry["method"] for entry in recorded] == ["POST", "POST", "POST", "POST", "POST"]
+    assert {entry["url"] for entry in recorded} == {
+        "http://127.0.0.1:6262/api/control/commands/run"
+    }
+    assert recorded[0]["payload"] == {
+        "command": "ui.panel.state.get",
+        "target": {"workspace_id": "default", "panel_id": "samples"},
+        "args": {},
+    }
+    assert recorded[1]["payload"] == {
+        "command": "ui.panel.state.patch",
+        "target": {"workspace_id": "default", "panel_id": "samples"},
+        "args": {
+            "state": {"settings": {"density": "compact"}},
+            "replace_state": True,
+            "expected_revision": 0,
+        },
+    }
+    assert recorded[2]["payload"] == {
+        "command": "samples.retrieval.set-anchor",
+        "target": {"workspace_id": "default"},
+        "args": {
+            "sample_id": "sample-2",
+            "layout_key": None,
+            "space_key": "clip",
+            "k": 12,
+            "source": "cli",
+        },
+    }
+    assert recorded[3]["payload"] == {
+        "command": "samples.retrieval.set-k",
+        "target": {"workspace_id": "default"},
+        "args": {"k": 24},
+    }
+    assert recorded[4]["payload"] == {
+        "command": "samples.retrieval.clear",
+        "target": {"workspace_id": "default"},
+        "args": {},
+    }
+
+
+def test_cli_panel_state_patch_prints_error_envelope(monkeypatch, capsys) -> None:
+    def fake_send(url: str, payload: dict[str, object], method: str = "POST") -> dict[str, object]:
+        return {
+            "ok": False,
+            "command": payload["command"],
+            "error": {
+                "code": "conflict",
+                "message": "panel state revision conflict: expected 1, got 2",
+            },
+        }
+
+    monkeypatch.setattr("hyperview.cli._http_send_json", fake_send)
+
+    main(
+        [
+            "ui",
+            "panel",
+            "state",
+            "patch",
+            "--workspace",
+            "default",
+            "--panel-id",
+            "samples",
+            "--state-json",
+            '{"settings":{"density":"loose"}}',
+            "--expected-revision",
+            "1",
+            "--json",
+        ]
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert output == {
+        "ok": False,
+        "command": "ui.panel.state.patch",
+        "error": {
+            "code": "conflict",
+            "message": "panel state revision conflict: expected 1, got 2",
+        },
+    }
+
+
+def test_cli_panel_collection_shortcuts_post_command_envelopes(monkeypatch, capsys) -> None:
+    recorded: list[dict[str, object]] = []
+
+    def fake_send(url: str, payload: dict[str, object], method: str = "POST") -> dict[str, object]:
+        recorded.append({"url": url, "payload": payload, "method": method})
+        return {
+            "ok": True,
+            "command": payload["command"],
+            "result": {"collection_id": "collection-1"},
+            "workspace": {"id": "default"},
+        }
+
+    monkeypatch.setattr("hyperview.cli._http_send_json", fake_send)
+
+    main(
+        [
+            "panel",
+            "samples",
+            "show-neighbors",
+            "--workspace",
+            "default",
+            "--sample-id",
+            "sample-2",
+            "--space-key",
+            "clip",
+            "--k",
+            "12",
+            "--json",
+        ]
+    )
+    neighbors_output = json.loads(capsys.readouterr().out)
+    assert neighbors_output["result"]["collection_id"] == "collection-1"
+
+    main(
+        [
+            "panel",
+            "labels",
+            "filter",
+            "--workspace",
+            "default",
+            "--value",
+            "cat",
+            "--json",
+        ]
+    )
+    filter_output = json.loads(capsys.readouterr().out)
+    assert filter_output["result"]["collection_id"] == "collection-1"
+
+    main(
+        [
+            "panel",
+            "labels",
+            "filter",
+            "--workspace",
+            "default",
+            "--clear",
+            "--json",
+        ]
+    )
+    _ = capsys.readouterr()
 
     assert recorded == [
         {
-            "url": "http://127.0.0.1:6262/api/control/ui/similarity",
+            "url": "http://127.0.0.1:6262/api/control/commands/run",
             "payload": {
-                "workspace_id": "default",
-                "sample_id": "sample-2",
-                "layout_key": "clip__pca__2d",
-                "space_key": None,
-                "k": 12,
-                "source": "cli",
+                "command": "panel.samples.show-neighbors",
+                "target": {"workspace_id": "default"},
+                "args": {
+                    "sample_id": "sample-2",
+                    "layout_key": None,
+                    "space_key": "clip",
+                    "k": 12,
+                    "source": "cli",
+                },
             },
             "method": "POST",
         },
         {
-            "url": "http://127.0.0.1:6262/api/control/ui/similarity",
-            "payload": {"workspace_id": "default"},
-            "method": "DELETE",
+            "url": "http://127.0.0.1:6262/api/control/commands/run",
+            "payload": {
+                "command": "panel.labels.filter",
+                "target": {"workspace_id": "default"},
+                "args": {
+                    "field": "label",
+                    "source": "cli",
+                    "value": "cat",
+                },
+            },
+            "method": "POST",
+        },
+        {
+            "url": "http://127.0.0.1:6262/api/control/commands/run",
+            "payload": {
+                "command": "panel.labels.filter",
+                "target": {"workspace_id": "default"},
+                "args": {
+                    "field": "label",
+                    "source": "cli",
+                    "clear": True,
+                },
+            },
+            "method": "POST",
         },
     ]
 

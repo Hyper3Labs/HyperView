@@ -60,6 +60,17 @@ hyperview dataset create cifar10_demo \
   --label-key label
 ```
 
+Create a multimodal dataset with captions:
+
+```bash
+hyperview dataset create coco_captions_demo \
+  --hf-dataset HuggingFaceM4/COCO \
+  --split train \
+  --image-key image \
+  --text-key sentences \
+  --samples 500
+```
+
 Create a persisted dataset from a local image directory:
 
 ```bash
@@ -224,7 +235,9 @@ hyperview ui selection set --workspace research --ids sample-1,sample-8
 
 `--layout-key` must be an existing layout (use the `layout_key` returned by `/api/embeddings`). When the chosen layout is Euclidean 3D, HyperView opens or focuses the Euclidean 3D scatter panel.
 
-Add a custom panel through an extension:
+Add a custom panel through an extension. Panel add/update/remove and panel
+layout controls share HyperView's public control command path; prefer these CLI
+commands or the matching Python `session.ui` helpers in examples.
 
 ```bash
 hyperview extension add .hyperview/extensions/label-histogram \
@@ -328,6 +341,22 @@ hyperview ui panel close --workspace research --panel-id notes
 hyperview ui panel show --workspace research --panel-id notes
 ```
 
+Read or patch durable panel-owned state:
+
+```bash
+hyperview ui panel state get \
+  --workspace research \
+  --panel-id samples \
+  --json
+
+hyperview ui panel state patch \
+  --workspace research \
+  --panel-id samples \
+  --state-json '{"settings":{"density":"compact"}}' \
+  --expected-revision 0 \
+  --json
+```
+
 Remove a runtime panel by id:
 
 ```bash
@@ -336,20 +365,50 @@ hyperview ui panel remove \
   --panel-id hycoclip-poincare
 ```
 
-Pin nearest-neighbor results to a specific embedding layout:
+Pin nearest-neighbor results to the Samples panel state for a specific embedding layout:
 
 ```bash
-hyperview ui similarity set \
+hyperview ui samples retrieval set-anchor \
   --workspace research \
   --sample-id <sample-id> \
   --layout-key <layout-key> \
   --k 18
+
+hyperview ui samples retrieval set-k \
+  --workspace research \
+  --k 36
+
+hyperview ui samples retrieval set-text \
+  --workspace research \
+  --query "a dog playing in the park" \
+  --layout-key <layout-key> \
+  --k 18
 ```
 
-Clear the explicit nearest-neighbor context:
+Clear the explicit Samples retrieval context:
 
 ```bash
-hyperview ui similarity clear --workspace research
+hyperview ui samples retrieval clear --workspace research
+```
+
+Use `hyperview ui samples retrieval ...` for new nearest-neighbor workflows.
+
+Use panel collection shortcuts when the desired outcome is a Samples panel collection:
+
+```bash
+hyperview panel samples show-neighbors \
+  --workspace research \
+  --sample-id <sample-id> \
+  --space-key <space-key> \
+  --k 18 \
+  --json
+
+hyperview panel labels filter \
+  --workspace research \
+  --value cat \
+  --json
+
+hyperview panel labels filter --workspace research --clear
 ```
 
 ## Extensions and Tools

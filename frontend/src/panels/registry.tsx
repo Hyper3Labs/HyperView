@@ -9,7 +9,12 @@ import type {
 import { Circle, Disc, Globe2 } from "lucide-react";
 
 import { ScatterPanel } from "@/components/ScatterPanel";
-import { defineBuiltInCenterPanel, type BuiltInCenterPanelDefinition, type DockviewPanelPosition } from "@/panels/definitions";
+import {
+  createBuiltInPanelContract,
+  defineBuiltInCenterPanel,
+  type BuiltInCenterPanelDefinition,
+  type DockviewPanelPosition,
+} from "@/panels/definitions";
 import { samplesImageGridBuiltInPanel } from "@/panels/builtins/samplesImageGridPanel";
 import { findLayoutByGeometry, findLayoutByKey, getLayoutDimension } from "@/lib/layouts";
 import type { DatasetInfo, Geometry } from "@/types";
@@ -77,9 +82,24 @@ function createScatterPanelDefinition(args: {
 
   return defineBuiltInCenterPanel<ScatterPanelParams>({
     id,
+    panelType: "scatter",
     component: "scatter",
     title,
     label,
+    contract: createBuiltInPanelContract({
+      panelType: "scatter",
+      label: "Scatter",
+      title: "Embeddings",
+      defaultProps: {
+        geometry,
+        layoutDimension,
+      },
+      defaultLayout: { position: "center" },
+      commands: ["ui.panel.state.get", "ui.panel.state.patch"],
+      queries: ["embeddings", "layouts"],
+      icon: "scatter",
+      category: "embedding",
+    }),
     icon,
     tabComponent,
     Component: ScatterDockPanel,
@@ -158,9 +178,20 @@ const scatterSpherical3DBuiltInPanel = createScatterPanelDefinition({
 
 const fallbackScatterBuiltInPanel = defineBuiltInCenterPanel<ScatterPanelParams>({
   id: PANEL.SCATTER_DEFAULT,
+  panelType: "scatter",
   component: "scatter",
   title: "Embeddings",
   label: "Embeddings",
+  contract: createBuiltInPanelContract({
+    panelType: "scatter",
+    label: "Scatter",
+    title: "Embeddings",
+    defaultLayout: { position: "center" },
+    commands: ["ui.panel.state.get", "ui.panel.state.patch"],
+    queries: ["embeddings", "layouts"],
+    icon: "scatter",
+    category: "embedding",
+  }),
   icon: Circle,
   tabComponent: "embeddingsTab",
   Component: ScatterDockPanel,
@@ -207,6 +238,19 @@ const builtInCenterPanelById = new Map(
   BUILT_IN_CENTER_PANELS.map((panel) => [panel.id, panel])
 );
 
+const builtInCenterPanelByPanelType = new Map(
+  BUILT_IN_CENTER_PANELS.map((panel) => [panel.panelType, panel])
+);
+
+export const BUILT_IN_PANEL_CONTRACTS = Array.from(
+  new Map(
+    BUILT_IN_CENTER_PANELS.map((panel) => [
+      panel.contract.panel_type,
+      panel.contract,
+    ])
+  ).values()
+);
+
 export const CENTER_PANEL_DEFS = BUILT_IN_CENTER_PANELS.filter(
   (panel) => panel.visibleInViewMenu !== false
 ).map((panel) => ({
@@ -230,6 +274,11 @@ export const CENTER_PANEL_TAB_COMPONENTS = Object.fromEntries(
 
 export function getBuiltInCenterPanelDefinition(panelId: string) {
   return builtInCenterPanelById.get(panelId) ?? null;
+}
+
+export function getBuiltInCenterPanelDefinitionForPanelType(panelType: string | null | undefined) {
+  if (!panelType) return null;
+  return builtInCenterPanelByPanelType.get(panelType) ?? null;
 }
 
 export function getBuiltInCenterPanelIdForLayout(args: {

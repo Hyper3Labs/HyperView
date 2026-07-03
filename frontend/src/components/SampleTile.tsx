@@ -81,14 +81,25 @@ export function SampleTile({
         </div>
       )}
 
-      {showLabel && sample.label && (
-        <div className="absolute bottom-0.5 left-0.5 right-0.5">
-          <span
-            className="inline-block max-w-full truncate px-1 py-0.5 text-[10px] leading-tight text-white"
-            style={{ backgroundColor: "rgba(0,0,0,0.72)" }}
-          >
-            {sample.label}
-          </span>
+      {showLabel && (sample.label || sample.text) && (
+        <div className="absolute bottom-0.5 left-0.5 right-0.5 space-y-0.5">
+          {sample.label ? (
+            <span
+              className="inline-block max-w-full truncate px-1 py-0.5 text-[10px] leading-tight text-white"
+              style={{ backgroundColor: "rgba(0,0,0,0.72)" }}
+            >
+              {sample.label}
+            </span>
+          ) : null}
+          {sample.text ? (
+            <span
+              className="block max-w-full truncate px-1 py-0.5 text-[10px] leading-tight text-white"
+              style={{ backgroundColor: "rgba(0,0,0,0.72)" }}
+              title={sample.text}
+            >
+              {sample.text}
+            </span>
+          ) : null}
         </div>
       )}
 

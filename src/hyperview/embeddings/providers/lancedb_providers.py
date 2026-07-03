@@ -85,6 +85,12 @@ class EmbedAnythingEmbeddings(EmbeddingFunction):
     def compute_query_embeddings(
         self, query: Any, *args: Any, **kwargs: Any
     ) -> list[np.ndarray | None]:
+        if isinstance(query, str):
+            model = self._get_computer()._get_model()
+            result = model.embed_query(query)
+            if not result:
+                raise RuntimeError(f"EmbedAnything returned no embedding for text query: {query!r}")
+            return [np.asarray(result[0].embedding, dtype=np.float32)]
         return self.compute_source_embeddings([query], *args, **kwargs)
 
 

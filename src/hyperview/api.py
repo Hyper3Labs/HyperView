@@ -18,6 +18,7 @@ from uuid import uuid4
 import uvicorn
 
 import hyperview.ui as ui_module
+from hyperview.control import CommandEnvelope, ControlService, create_default_command_registry
 from hyperview.core.dataset import Dataset
 from hyperview.runtime import HyperViewRuntime, ProviderRegistry
 from hyperview.server.app import create_app, set_runtime
@@ -127,6 +128,9 @@ class Session:
         self._server: uvicorn.Server | None = None
         self._startup_error: BaseException | None = None
         self.session_id = uuid4().hex
+        self._control_registry = create_default_command_registry()
+        self._control_service: ControlService | None = None
+        self.control = SessionControlController(self)
         self.ui = SessionUiController(self)
 
     @property
@@ -295,6 +299,51 @@ class Session:
         webbrowser.open(self.url)
 
 
+class SessionControlController:
+    """Generic command runner for a HyperView session."""
+
+    def __init__(self, session: Session):
+        self._session = session
+
+    def _service(self) -> ControlService:
+        if not self._session._controls_runtime:
+            raise RuntimeError(
+                "This session is attached to an existing HyperView server. "
+                "session.control can only mutate sessions started by this process; "
+                "use the control-plane CLI/API or launch with reuse_server=False."
+            )
+        if self._session._control_service is None:
+            self._session._control_service = ControlService(
+                self._session.runtime,
+                self._session._control_registry,
+            )
+        return self._session._control_service
+
+    def run(
+        self,
+        command: str,
+        *,
+        target: dict[str, Any] | None = None,
+        args: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Run a backend-owned control command and return the result envelope."""
+
+        result = self._service().run(
+            CommandEnvelope(
+                command=command,
+                target=target or {},
+                args=args or {},
+            )
+        )
+        payload = result.to_dict()
+        if not result.ok:
+            error = result.error
+            if error is None:
+                raise RuntimeError("Command failed")
+            raise RuntimeError(f"{error.code}: {error.message}")
+        return payload
+
+
 class SessionUiController:
     """Public UI control surface for a HyperView session."""
 
@@ -332,21 +381,23 @@ class SessionUiController:
     ) -> None:
         """Add a scatter panel pinned to an explicit layout."""
 
-        runtime = self._runtime()
-        runtime.add_runtime_panel(
-            workspace_id,
-            panel_id=panel_id,
-            title=title,
-            kind="scatter",
-            layout_key=layout_key,
-            position=position,
-            reference_panel_id=reference_panel_id,
-            direction=direction,
-            geometry=geometry,
-            layout_dimension=layout_dimension,
-            props=dict(props or {}),
-            **(layout.to_runtime_kwargs() if layout is not None else {}),
-            require_resolved_layout=False,
+        self._session.control.run(
+            "ui.panel.add",
+            target={"workspace_id": workspace_id},
+            args={
+                "panel_id": panel_id,
+                "title": title,
+                "kind": "scatter",
+                "layout_key": layout_key,
+                "position": position,
+                "reference_panel_id": reference_panel_id,
+                "direction": direction,
+                "geometry": geometry,
+                "layout_dimension": layout_dimension,
+                "props": dict(props or {}),
+                **(layout.to_runtime_kwargs() if layout is not None else {}),
+                "require_resolved_layout": False,
+            },
         )
 
     def update_panel(
@@ -381,15 +432,22 @@ class SessionUiController:
             placement_kwargs["reference_panel_id"] = reference_panel_id
         if position is not None or direction is not None:
             placement_kwargs["direction"] = direction
-        self._runtime().update_custom_panel(
-            workspace_id,
-            panel_id,
-            title=title,
-            position=position,
-            active=active,
-            props=dict(props) if props is not None else None,
+        update_args: dict[str, object | None] = {
             **placement_kwargs,
             **layout_kwargs,
+        }
+        if title is not None:
+            update_args["title"] = title
+        if position is not None:
+            update_args["position"] = position
+        if active is not None:
+            update_args["active"] = active
+        if props is not None:
+            update_args["props"] = dict(props)
+        self._session.control.run(
+            "ui.panel.update",
+            target={"workspace_id": workspace_id, "panel_id": panel_id},
+            args=update_args,
         )
 
     def resize_panel(
@@ -418,10 +476,10 @@ class SessionUiController:
             }.items()
             if value is not None
         }
-        self._runtime().update_custom_panel(
-            workspace_id,
-            panel_id,
-            **layout_kwargs,
+        self._session.control.run(
+            "ui.panel.resize",
+            target={"workspace_id": workspace_id, "panel_id": panel_id},
+            args=layout_kwargs,
         )
 
     def move_panel(
@@ -435,31 +493,81 @@ class SessionUiController:
     ) -> None:
         """Move a panel in the durable workspace view."""
 
-        self._runtime().update_custom_panel(
-            workspace_id,
-            panel_id,
-            position=position,
-            reference_panel_id=reference_panel_id,
-            direction=direction,
+        self._session.control.run(
+            "ui.panel.move",
+            target={"workspace_id": workspace_id, "panel_id": panel_id},
+            args={
+                "position": position,
+                "reference_panel_id": reference_panel_id,
+                "direction": direction,
+            },
         )
 
     def focus_panel(self, panel_id: str, *, workspace_id: str = "default") -> None:
         """Set the active panel for the workspace view."""
 
-        self._runtime().update_custom_panel(workspace_id, panel_id, active=True)
+        self._session.control.run(
+            "ui.panel.focus",
+            target={"workspace_id": workspace_id, "panel_id": panel_id},
+        )
 
     def close_panel(self, panel_id: str, *, workspace_id: str = "default") -> None:
         """Hide a panel without deleting it from the workspace view."""
 
-        self._runtime().update_custom_panel(workspace_id, panel_id, visible=False)
+        self._session.control.run(
+            "ui.panel.close",
+            target={"workspace_id": workspace_id, "panel_id": panel_id},
+        )
 
     def show_panel(self, panel_id: str, *, workspace_id: str = "default") -> None:
         """Show a panel that was hidden in the workspace view."""
 
-        self._runtime().update_custom_panel(workspace_id, panel_id, visible=True)
+        self._session.control.run(
+            "ui.panel.show",
+            target={"workspace_id": workspace_id, "panel_id": panel_id},
+        )
+
+    def get_panel_state(
+        self,
+        panel_id: str,
+        *,
+        workspace_id: str = "default",
+    ) -> dict[str, object]:
+        """Return durable runtime-managed state for a panel."""
+
+        payload = self._session.control.run(
+            "ui.panel.state.get",
+            target={"workspace_id": workspace_id, "panel_id": panel_id},
+        )
+        return dict(payload.get("result") or {})
+
+    def patch_panel_state(
+        self,
+        panel_id: str,
+        state: dict[str, object],
+        *,
+        workspace_id: str = "default",
+        replace_state: bool = False,
+        expected_revision: int | None = None,
+    ) -> dict[str, object]:
+        """Patch durable runtime-managed panel state."""
+
+        payload = self._session.control.run(
+            "ui.panel.state.patch",
+            target={"workspace_id": workspace_id, "panel_id": panel_id},
+            args={
+                "state": dict(state),
+                "replace_state": replace_state,
+                "expected_revision": expected_revision,
+            },
+        )
+        return dict(payload.get("result") or {})
 
     def remove_panel(self, panel_id: str, *, workspace_id: str = "default") -> None:
-        self._runtime().remove_custom_panel(workspace_id, panel_id)
+        self._session.control.run(
+            "ui.panel.remove",
+            target={"workspace_id": workspace_id, "panel_id": panel_id},
+        )
 
     def set_active_layout(
         self,
@@ -491,23 +599,93 @@ class SessionUiController:
         k: int = 18,
         source: str = "python",
     ) -> None:
-        """Set the workspace's active similarity query."""
+        """Show nearest-neighbor results in the Samples panel."""
 
-        runtime = self._runtime()
-        query = runtime.resolve_similarity_query(
-            workspace_id,
+        self.set_samples_retrieval(
             sample_id,
+            workspace_id=workspace_id,
             layout_key=layout_key,
             space_key=space_key,
             k=k,
             source=source,
         )
-        runtime.set_similarity_query(workspace_id, query)
 
-    def clear_similarity(self, *, workspace_id: str = "default") -> None:
-        """Clear the workspace's active similarity query."""
+    def set_samples_retrieval(
+        self,
+        sample_id: str,
+        *,
+        workspace_id: str = "default",
+        layout_key: str | None = None,
+        space_key: str | None = None,
+        k: int = 18,
+        source: str = "python",
+    ) -> None:
+        """Set Samples panel retrieval state."""
 
-        self._runtime().set_similarity_query(workspace_id, None)
+        self._session.control.run(
+            "samples.retrieval.set-anchor",
+            target={"workspace_id": workspace_id},
+            args={
+                "sample_id": sample_id,
+                "layout_key": layout_key,
+                "space_key": space_key,
+                "k": k,
+                "source": source,
+            },
+        )
+
+    def set_samples_retrieval_k(
+        self,
+        k: int,
+        *,
+        workspace_id: str = "default",
+    ) -> None:
+        """Update the active Samples retrieval result count."""
+
+        self._session.control.run(
+            "samples.retrieval.set-k",
+            target={"workspace_id": workspace_id},
+            args={"k": k},
+        )
+
+    def clear_samples_retrieval(self, *, workspace_id: str = "default") -> None:
+        """Clear Samples panel retrieval state."""
+
+        self._session.control.run(
+            "samples.retrieval.clear",
+            target={"workspace_id": workspace_id},
+        )
+
+    def query_by_text(
+        self,
+        query_text: str,
+        *,
+        workspace_id: str = "default",
+        layout_key: str | None = None,
+        space_key: str | None = None,
+        k: int = 18,
+        source: str = "python",
+    ) -> list[tuple[Any, float]]:
+        """Run a text query against the workspace dataset and show results in the Samples panel."""
+
+        self._session.control.run(
+            "samples.retrieval.set-text-query",
+            target={"workspace_id": workspace_id},
+            args={
+                "query_text": query_text,
+                "layout_key": layout_key,
+                "space_key": space_key,
+                "k": k,
+                "source": source,
+            },
+        )
+        dataset = self._runtime().get_dataset(workspace_id=workspace_id)
+        return dataset.find_similar_by_text(
+            query_text,
+            k=k,
+            space_key=space_key,
+            layout_key=layout_key,
+        )
 
     def add_extension(
         self,
@@ -528,6 +706,14 @@ class SessionUiController:
             Path(folder),
             add_panels=add_panels,
         )
+
+    def list_panel_definitions(self) -> list[dict[str, Any]]:
+        """Return built-in and installed extension panel definitions."""
+
+        return [
+            definition.to_dict()
+            for definition in self._runtime().list_panel_definitions()
+        ]
 
 
 def launch(

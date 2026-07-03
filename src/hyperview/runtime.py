@@ -22,6 +22,11 @@ from hyperview.extensions import (
     resolve_panel_source,
     unload_extension_modules,
 )
+from hyperview.panel_definitions import (
+    BUILTIN_PANEL_DEFINITIONS,
+    PanelDefinition,
+    merge_default_props,
+)
 from hyperview.storage.config import StorageConfig
 from hyperview.storage.schema import parse_layout_dimension
 from hyperview.tools import RunContext, ToolRegistry
@@ -31,14 +36,99 @@ def _now_ts() -> int:
     return int(time.time())
 
 
-def _positive_int_or_none(value: int | None) -> int | None:
+def _positive_int_or_none(value: Any) -> int | None:
     if value is None:
         return None
     parsed = int(value)
     return parsed if parsed > 0 else None
 
 
+def _str_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _panel_layout_fields(
+    default_layout: dict[str, Any] | None,
+    *,
+    position: str | None,
+    reference_panel_id: str | None,
+    direction: str | None,
+    width: int | None,
+    height: int | None,
+    min_width: int | None,
+    min_height: int | None,
+    max_width: int | None,
+    max_height: int | None,
+    fallback_position: str = "right",
+) -> dict[str, Any]:
+    layout = dict(default_layout or {})
+    resolved_position = str(position or layout.get("position") or fallback_position)
+    if resolved_position not in {"center", "right", "bottom"}:
+        raise ValueError("position must be one of center, right, bottom")
+    resolved_direction = direction or _str_or_none(layout.get("direction"))
+    if resolved_direction is not None and resolved_direction not in {
+        "right",
+        "left",
+        "above",
+        "below",
+        "within",
+    }:
+        raise ValueError("direction must be one of right, left, above, below, within")
+
+    def dimension(arg_value: int | None, layout_key: str) -> int | None:
+        return _positive_int_or_none(
+            arg_value if arg_value is not None else layout.get(layout_key)
+        )
+
+    return {
+        "position": resolved_position,
+        "reference_panel_id": reference_panel_id
+        if reference_panel_id is not None
+        else _str_or_none(layout.get("reference_panel_id")),
+        "direction": resolved_direction,
+        "width": dimension(width, "width"),
+        "height": dimension(height, "height"),
+        "min_width": dimension(min_width, "min_width"),
+        "min_height": dimension(min_height, "min_height"),
+        "max_width": dimension(max_width, "max_width"),
+        "max_height": dimension(max_height, "max_height"),
+    }
+
+
 _UNSET = object()
+SAMPLES_PANEL_STATE_ID = "samples"
+SAMPLES_PANEL_STATE_ALIASES = {SAMPLES_PANEL_STATE_ID, "grid"}
+RESERVED_PANEL_STATE_IDS = {SAMPLES_PANEL_STATE_ID}
+
+
+def _stable_collection_id(kind: str, query: dict[str, Any]) -> str:
+    payload = json.dumps(query, sort_keys=True, separators=(",", ":"), default=str)
+    digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
+    return f"{kind}:{digest}"
+
+
+def _json_object_copy(value: dict[str, Any]) -> dict[str, Any]:
+    """Return a JSON-safe copy and reject non-serializable state early."""
+
+    return json.loads(json.dumps(value))
+
+
+def _json_merge_patch(current: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    """Apply RFC 7396-style merge patch semantics to panel state."""
+
+    result = _json_object_copy(current)
+    for key, value in patch.items():
+        if value is None:
+            result.pop(key, None)
+            continue
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _json_merge_patch(result[key], value)
+            continue
+        result[key] = json.loads(json.dumps(value))
+    return result
 
 
 def get_runtime_config_dir() -> Path:
@@ -210,7 +300,9 @@ class CustomPanelSpec:
     title: str
     module_file: str | None = None
     kind: Literal["module", "scatter", "builtin"] = "module"
-    builtin_panel: Literal["samples"] | None = None
+    panel_type: str | None = None
+    source: str | None = None
+    builtin_panel: str | None = None
     extension: str | None = None
     extension_panel: str | None = None
     position: Literal["center", "right", "bottom"] = "right"
@@ -236,9 +328,7 @@ class CustomPanelSpec:
 
         builtin_panel = data.get("builtin_panel")
         if builtin_panel is not None:
-            builtin_panel = str(builtin_panel)
-            if builtin_panel != "samples":
-                builtin_panel = None
+            builtin_panel = str(builtin_panel).strip() or None
 
         position = str(data.get("position") or "right")
         if position not in {"center", "right", "bottom"}:
@@ -272,6 +362,8 @@ class CustomPanelSpec:
             title=str(data["title"]),
             module_file=data.get("module_file"),
             kind=kind,  # type: ignore[arg-type]
+            panel_type=data.get("panel_type"),
+            source=data.get("source"),
             builtin_panel=builtin_panel,  # type: ignore[arg-type]
             extension=data.get("extension"),
             extension_panel=data.get("extension_panel"),
@@ -292,7 +384,44 @@ class CustomPanelSpec:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        payload["panel_type"] = self.resolved_panel_type()
+        payload["source"] = self.resolved_source()
+        payload["layout"] = self.layout_dict()
+        return payload
+
+    def resolved_panel_type(self) -> str:
+        if self.panel_type:
+            return self.panel_type
+        if self.kind == "builtin":
+            return self.builtin_panel or "builtin"
+        if self.kind == "scatter":
+            return "scatter"
+        if self.extension and self.extension_panel:
+            return f"{self.extension}.{self.extension_panel}"
+        return "module"
+
+    def resolved_source(self) -> str:
+        if self.source:
+            return self.source
+        if self.kind in {"builtin", "scatter"}:
+            return "builtin"
+        if self.extension:
+            return "extension"
+        return "module"
+
+    def layout_dict(self) -> dict[str, Any]:
+        return {
+            "position": self.position,
+            "reference_panel_id": self.reference_panel_id,
+            "direction": self.direction,
+            "width": self.width,
+            "height": self.height,
+            "min_width": self.min_width,
+            "min_height": self.min_height,
+            "max_width": self.max_width,
+            "max_height": self.max_height,
+        }
 
     def resolved_module_file(self) -> Path | None:
         if not self.module_file:
@@ -353,7 +482,8 @@ class LayoutViewState:
 
 @dataclass
 class SimilarityQueryState:
-    anchor_sample_id: str
+    anchor_sample_id: str | None = None
+    query_text: str | None = None
     layout_key: str | None = None
     space_key: str | None = None
     k: int = 18
@@ -361,8 +491,9 @@ class SimilarityQueryState:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SimilarityQueryState | None:
-        anchor_sample_id = str(data.get("anchor_sample_id") or "").strip()
-        if not anchor_sample_id:
+        anchor_sample_id = str(data.get("anchor_sample_id") or "").strip() or None
+        query_text = str(data.get("query_text") or "").strip() or None
+        if not anchor_sample_id and not query_text:
             return None
         try:
             k = int(data.get("k") or 18)
@@ -370,6 +501,7 @@ class SimilarityQueryState:
             k = 18
         return cls(
             anchor_sample_id=anchor_sample_id,
+            query_text=query_text,
             layout_key=data.get("layout_key"),
             space_key=data.get("space_key"),
             k=max(1, min(k, 100)),
@@ -377,13 +509,198 @@ class SimilarityQueryState:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "anchor_sample_id": self.anchor_sample_id,
+        payload: dict[str, Any] = {
             "layout_key": self.layout_key,
             "space_key": self.space_key,
             "k": self.k,
             "source": self.source,
         }
+        if self.anchor_sample_id:
+            payload["anchor_sample_id"] = self.anchor_sample_id
+        if self.query_text:
+            payload["query_text"] = self.query_text
+        return payload
+
+
+@dataclass
+class EntityRef:
+    dataset_id: str
+    entity_set_id: str
+    entity_id: str
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> EntityRef:
+        return cls(
+            dataset_id=str(data.get("datasetId") or data.get("dataset_id") or ""),
+            entity_set_id=str(data.get("entitySetId") or data.get("entity_set_id") or "samples"),
+            entity_id=str(data.get("entityId") or data.get("entity_id") or ""),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "datasetId": self.dataset_id,
+            "entitySetId": self.entity_set_id,
+            "entityId": self.entity_id,
+        }
+
+
+@dataclass
+class CollectionState:
+    id: str
+    dataset_id: str
+    entity_set_id: str = "samples"
+    kind: Literal[
+        "all",
+        "filter",
+        "selection",
+        "neighbors",
+        "lasso",
+        "search",
+        "tool_result",
+        "extension",
+    ] = "all"
+    query: dict[str, Any] = field(default_factory=dict)
+    scores: dict[str, float] | None = None
+    created_at: int = field(default_factory=_now_ts)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> CollectionState:
+        kind = str(data.get("kind") or "all")
+        if kind not in {
+            "all",
+            "filter",
+            "selection",
+            "neighbors",
+            "lasso",
+            "search",
+            "tool_result",
+            "extension",
+        }:
+            kind = "extension"
+
+        scores: dict[str, float] | None = None
+        raw_scores = data.get("scores")
+        if isinstance(raw_scores, dict):
+            scores = {}
+            for key, value in raw_scores.items():
+                try:
+                    scores[str(key)] = float(value)
+                except (TypeError, ValueError):
+                    continue
+
+        return cls(
+            id=str(data["id"]),
+            dataset_id=str(data.get("dataset_id") or data.get("datasetId") or ""),
+            entity_set_id=str(data.get("entity_set_id") or data.get("entitySetId") or "samples"),
+            kind=kind,  # type: ignore[arg-type]
+            query=dict(data.get("query") or {}),
+            scores=scores,
+            created_at=int(data.get("created_at") or data.get("createdAt") or _now_ts()),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "dataset_id": self.dataset_id,
+            "entity_set_id": self.entity_set_id,
+            "kind": self.kind,
+            "query": _json_object_copy(self.query),
+            "scores": dict(self.scores) if self.scores is not None else None,
+            "created_at": self.created_at,
+        }
+
+
+@dataclass
+class PanelStateEntry:
+    state: dict[str, Any] = field(default_factory=dict)
+    state_revision: int = 0
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> PanelStateEntry:
+        raw_state = data.get("state") if isinstance(data, dict) else None
+        state = raw_state if isinstance(raw_state, dict) else {}
+        try:
+            state_revision = int(data.get("state_revision") or 0)
+        except (TypeError, ValueError):
+            state_revision = 0
+        return cls(
+            state=_json_object_copy(state),
+            state_revision=max(0, state_revision),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "state": _json_object_copy(self.state),
+            "state_revision": self.state_revision,
+        }
+
+
+def _samples_collection_state(collection: CollectionState) -> dict[str, Any]:
+    return {
+        "collection_id": collection.id,
+        "collection": collection.to_dict(),
+    }
+
+
+def _samples_filter_state(collection: CollectionState) -> dict[str, Any]:
+    return {
+        "mode": "collection",
+        "retrieval": None,
+        **_samples_collection_state(collection),
+    }
+
+
+def _samples_retrieval_state(
+    query: SimilarityQueryState,
+    collection: CollectionState | None = None,
+) -> dict[str, Any]:
+    state: dict[str, Any] = {
+        "mode": "retrieval",
+        "retrieval": query.to_dict(),
+    }
+    if collection is not None:
+        state.update(_samples_collection_state(collection))
+    return state
+
+
+def _clear_samples_collection_state_patch() -> dict[str, Any]:
+    return {
+        "collection_id": None,
+        "collection": None,
+    }
+
+
+def _samples_panel_collection_kind(state: dict[str, Any]) -> str | None:
+    collection = state.get("collection")
+    if not isinstance(collection, dict):
+        return None
+    kind = collection.get("kind")
+    return kind if isinstance(kind, str) else None
+
+
+def _samples_panel_retrieval_query(
+    panels: dict[str, PanelStateEntry],
+) -> SimilarityQueryState | None:
+    state_entry = panels.get(SAMPLES_PANEL_STATE_ID)
+    retrieval = state_entry.state.get("retrieval") if state_entry is not None else None
+    if not isinstance(retrieval, dict):
+        return None
+    return SimilarityQueryState.from_dict(retrieval)
+
+
+def _custom_panel_instance_payload(
+    panel: CustomPanelSpec,
+    panel_states: dict[str, PanelStateEntry],
+    *,
+    data: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = {
+        **panel.to_dict(),
+        **panel_states.get(panel.id, PanelStateEntry()).to_dict(),
+    }
+    if data is not None:
+        payload["data"] = data
+    return payload
 
 
 @dataclass
@@ -392,6 +709,7 @@ class WorkspaceUiState:
     selected_ids: list[str] = field(default_factory=list)
     similarity_query: SimilarityQueryState | None = None
     custom_panels: list[CustomPanelSpec] = field(default_factory=list)
+    panels: dict[str, PanelStateEntry] = field(default_factory=dict)
     has_explicit_view: bool = False
     active_panel_id: str | None = None
     layout_views: dict[str, LayoutViewState] = field(default_factory=dict)
@@ -412,9 +730,34 @@ class WorkspaceUiState:
                 if isinstance(layout_key, str) and isinstance(view_data, dict):
                     layout_views[layout_key] = LayoutViewState.from_dict(view_data)
 
-        similarity_query = SimilarityQueryState.from_dict(data.get("similarity_query") or {})
+        panels: dict[str, PanelStateEntry] = {}
+        raw_panels = data.get("panels") or {}
+        if isinstance(raw_panels, dict):
+            for panel_id, panel_data in raw_panels.items():
+                if isinstance(panel_id, str) and isinstance(panel_data, dict):
+                    panels[panel_id] = PanelStateEntry.from_dict(panel_data)
+
+        for entry in list(data.get("custom_panels") or []):
+            if not isinstance(entry, dict) or "state" not in entry:
+                continue
+            panel_id = str(entry.get("id") or "").strip()
+            if not panel_id or panel_id in panels:
+                continue
+            panels[panel_id] = PanelStateEntry.from_dict(entry)
+
+        legacy_similarity_query = SimilarityQueryState.from_dict(
+            data.get("similarity_query") or {}
+        )
         selected_ids = list(data.get("selected_ids") or [])
-        if similarity_query is not None:
+        similarity_query = _samples_panel_retrieval_query(panels)
+        if similarity_query is None and legacy_similarity_query is not None:
+            similarity_query = legacy_similarity_query
+            selected_ids = []
+            panels.setdefault(
+                SAMPLES_PANEL_STATE_ID,
+                PanelStateEntry(state=_samples_retrieval_state(legacy_similarity_query)),
+            )
+        elif similarity_query is not None:
             selected_ids = []
 
         return cls(
@@ -422,6 +765,7 @@ class WorkspaceUiState:
             selected_ids=selected_ids,
             similarity_query=similarity_query,
             custom_panels=custom_panels,
+            panels=panels,
             has_explicit_view=bool(data.get("has_explicit_view", False)),
             active_panel_id=data.get("active_panel_id"),
             layout_views=layout_views,
@@ -429,13 +773,20 @@ class WorkspaceUiState:
         )
 
     def to_dict(self) -> dict[str, Any]:
+        similarity_query = _samples_panel_retrieval_query(self.panels) or self.similarity_query
         return {
             "active_layout_key": self.active_layout_key,
             "selected_ids": list(self.selected_ids),
             "similarity_query": (
-                self.similarity_query.to_dict() if self.similarity_query is not None else None
+                similarity_query.to_dict() if similarity_query is not None else None
             ),
-            "custom_panels": [panel.to_dict() for panel in self.custom_panels],
+            "custom_panels": [
+                _custom_panel_instance_payload(panel, self.panels)
+                for panel in self.custom_panels
+            ],
+            "panels": {
+                panel_id: state.to_dict() for panel_id, state in sorted(self.panels.items())
+            },
             "has_explicit_view": self.has_explicit_view,
             "active_panel_id": self.active_panel_id,
             "layout_views": {
@@ -449,14 +800,26 @@ class WorkspaceUiState:
 class WorkspaceState:
     id: str
     dataset_name: str | None = None
+    collections: dict[str, CollectionState] = field(default_factory=dict)
     ui: WorkspaceUiState = field(default_factory=WorkspaceUiState)
     created_at: int = field(default_factory=_now_ts)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> WorkspaceState:
+        collections: dict[str, CollectionState] = {}
+        raw_collections = data.get("collections") or []
+        if isinstance(raw_collections, dict):
+            raw_collections = raw_collections.values()
+        for entry in list(raw_collections):
+            if not isinstance(entry, dict) or "id" not in entry:
+                continue
+            collection = CollectionState.from_dict(entry)
+            collections[collection.id] = collection
+
         return cls(
             id=str(data["id"]),
             dataset_name=data.get("dataset_name"),
+            collections=collections,
             ui=WorkspaceUiState.from_dict(data.get("ui") or {}),
             created_at=int(data.get("created_at") or _now_ts()),
         )
@@ -465,6 +828,10 @@ class WorkspaceState:
         return {
             "id": self.id,
             "dataset_name": self.dataset_name,
+            "collections": [
+                collection.to_dict()
+                for collection in sorted(self.collections.values(), key=lambda item: item.id)
+            ],
             "ui": self.ui.to_dict(),
             "created_at": self.created_at,
         }
@@ -607,12 +974,7 @@ class ExtensionInstallation:
             "workspace_id": self.workspace_id,
             "panels": list(self.panel_ids),
             "panel_definitions": [
-                {
-                    "id": panel.id,
-                    "title": panel.title,
-                    "position": panel.position,
-                    "file": panel.file,
-                }
+                panel.to_definition(self.manifest.name).to_dict()
                 for panel in self.manifest.panels
             ],
             "tools": [record.to_dict() for record in self.loaded.tools],
@@ -713,7 +1075,9 @@ class HyperViewRuntime:
                 workspace.ui.active_layout_key = None
                 workspace.ui.selected_ids = []
                 workspace.ui.similarity_query = None
+                workspace.ui.panels = {}
                 workspace.ui.layout_views = {}
+                workspace.collections = {}
                 self.workspace_registry.update_workspace(workspace)
             if activate_workspace:
                 self.workspace_registry.set_active_workspace(workspace_id)
@@ -746,7 +1110,9 @@ class HyperViewRuntime:
                 workspace.ui.active_layout_key = None
                 workspace.ui.selected_ids = []
                 workspace.ui.similarity_query = None
+                workspace.ui.panels = {}
                 workspace.ui.layout_views = {}
+                workspace.collections = {}
                 self.workspace_registry.update_workspace(workspace)
             self._bump_version()
             return workspace
@@ -776,6 +1142,317 @@ class HyperViewRuntime:
         self._dataset_cache[resolved_dataset_name] = dataset
         return dataset
 
+    def _resolve_panel_state_id_locked(self, workspace: WorkspaceState, panel_id: str) -> str:
+        requested_panel_id = panel_id.strip()
+        if not requested_panel_id:
+            raise ValueError("panel_id must be a non-empty string")
+
+        custom_panel_ids = {panel.id for panel in workspace.ui.custom_panels}
+        if requested_panel_id in custom_panel_ids:
+            return requested_panel_id
+        if requested_panel_id in SAMPLES_PANEL_STATE_ALIASES:
+            return SAMPLES_PANEL_STATE_ID
+        raise KeyError(f"Panel not found: {panel_id}")
+
+    def _get_panel_state_entry_locked(
+        self,
+        workspace: WorkspaceState,
+        panel_id: str,
+        *,
+        create: bool = False,
+    ) -> tuple[str, PanelStateEntry]:
+        resolved_panel_id = self._resolve_panel_state_id_locked(workspace, panel_id)
+        entry = workspace.ui.panels.get(resolved_panel_id)
+        if entry is None:
+            if not create:
+                return resolved_panel_id, PanelStateEntry()
+            entry = PanelStateEntry()
+            workspace.ui.panels[resolved_panel_id] = entry
+        return resolved_panel_id, entry
+
+    def _prune_panel_states_locked(self, workspace: WorkspaceState) -> None:
+        retained_panel_ids = {panel.id for panel in workspace.ui.custom_panels}
+        retained_panel_ids.update(RESERVED_PANEL_STATE_IDS)
+        workspace.ui.panels = {
+            panel_id: state
+            for panel_id, state in workspace.ui.panels.items()
+            if panel_id in retained_panel_ids
+        }
+
+    def _seed_default_panel_state_locked(
+        self,
+        workspace: WorkspaceState,
+        panel: CustomPanelSpec,
+    ) -> None:
+        definition = self._definition_for_panel_spec_locked(panel)
+        if (
+            definition is not None
+            and definition.default_state
+            and panel.id not in workspace.ui.panels
+        ):
+            workspace.ui.panels[panel.id] = PanelStateEntry(
+                state=_json_object_copy(definition.default_state)
+            )
+
+    def get_panel_state(
+        self,
+        workspace_id: str,
+        panel_id: str,
+    ) -> dict[str, Any]:
+        with self._lock:
+            workspace = self.get_workspace(workspace_id)
+            resolved_panel_id, entry = self._get_panel_state_entry_locked(
+                workspace,
+                panel_id,
+                create=False,
+            )
+            return {
+                "panel_id": resolved_panel_id,
+                **entry.to_dict(),
+            }
+
+    def patch_panel_state(
+        self,
+        workspace_id: str,
+        panel_id: str,
+        patch: dict[str, Any],
+        *,
+        replace_state: bool = False,
+        expected_revision: int | None = None,
+        source_client_id: str | None = None,
+    ) -> WorkspaceState:
+        if not isinstance(patch, dict):
+            raise ValueError("panel state patch must be a JSON object")
+
+        with self._lock:
+            workspace = self.get_workspace(workspace_id)
+            resolved_panel_id, entry = self._get_panel_state_entry_locked(
+                workspace,
+                panel_id,
+                create=True,
+            )
+            if expected_revision is not None and entry.state_revision != expected_revision:
+                raise ValueError(
+                    "panel state revision conflict: "
+                    f"expected {expected_revision}, got {entry.state_revision}"
+                )
+
+            next_state = (
+                _json_object_copy(patch)
+                if replace_state
+                else _json_merge_patch(entry.state, patch)
+            )
+            if next_state == entry.state:
+                return workspace
+
+            workspace.ui.panels[resolved_panel_id] = PanelStateEntry(
+                state=next_state,
+                state_revision=entry.state_revision + 1,
+            )
+            self.workspace_registry.update_workspace(workspace)
+            self._bump_version(source_client_id=source_client_id)
+            return workspace
+
+    def _workspace_dataset_id_locked(self, workspace: WorkspaceState) -> str:
+        if not workspace.dataset_name:
+            raise ValueError(f"Workspace '{workspace.id}' has no active dataset")
+        return workspace.dataset_name
+
+    def _store_collection_locked(
+        self,
+        workspace: WorkspaceState,
+        collection: CollectionState,
+    ) -> CollectionState:
+        workspace.collections[collection.id] = collection
+        return collection
+
+    def _build_label_filter_collection_locked(
+        self,
+        workspace: WorkspaceState,
+        *,
+        field: str,
+        value: Any,
+        source: str | None = None,
+    ) -> CollectionState:
+        dataset_id = self._workspace_dataset_id_locked(workspace)
+        field = field.strip()
+        if not field:
+            raise ValueError("field must be a non-empty string")
+        query = {
+            "field": field,
+            "op": "eq",
+            "value": value,
+        }
+        if source:
+            query["source"] = source
+        collection = CollectionState(
+            id=_stable_collection_id("filter", query),
+            dataset_id=dataset_id,
+            entity_set_id="samples",
+            kind="filter",
+            query=query,
+        )
+        return self._store_collection_locked(workspace, collection)
+
+    def _build_neighbors_collection_locked(
+        self,
+        workspace: WorkspaceState,
+        query: SimilarityQueryState,
+    ) -> CollectionState:
+        dataset_id = self._workspace_dataset_id_locked(workspace)
+        if query.query_text:
+            collection_query: dict[str, Any] = {
+                "queryText": query.query_text,
+                "indexId": f"space:{query.space_key}" if query.space_key else None,
+                "layoutId": query.layout_key,
+                "spaceKey": query.space_key,
+                "k": query.k,
+            }
+            if query.source:
+                collection_query["source"] = query.source
+            collection = CollectionState(
+                id=_stable_collection_id("search", collection_query),
+                dataset_id=dataset_id,
+                entity_set_id="samples",
+                kind="search",
+                query=collection_query,
+            )
+            return self._store_collection_locked(workspace, collection)
+
+        if not query.anchor_sample_id:
+            raise ValueError("Similarity retrieval requires anchor_sample_id or query_text")
+
+        anchor = EntityRef(
+            dataset_id=dataset_id,
+            entity_set_id="samples",
+            entity_id=query.anchor_sample_id,
+        )
+        collection_query = {
+            "anchor": anchor.to_dict(),
+            "indexId": f"space:{query.space_key}" if query.space_key else None,
+            "layoutId": query.layout_key,
+            "spaceKey": query.space_key,
+            "k": query.k,
+        }
+        if query.source:
+            collection_query["source"] = query.source
+        collection = CollectionState(
+            id=_stable_collection_id("neighbors", collection_query),
+            dataset_id=dataset_id,
+            entity_set_id="samples",
+            kind="neighbors",
+            query=collection_query,
+        )
+        return self._store_collection_locked(workspace, collection)
+
+    def _set_samples_filter_locked(
+        self,
+        workspace: WorkspaceState,
+        collection: CollectionState | None,
+    ) -> bool:
+        resolved_panel_id, entry = self._get_panel_state_entry_locked(
+            workspace,
+            SAMPLES_PANEL_STATE_ID,
+            create=collection is not None,
+        )
+        if collection is None:
+            if (
+                entry.state.get("mode") != "collection"
+                or _samples_panel_collection_kind(entry.state) != "filter"
+            ):
+                return False
+            next_state = _json_merge_patch(
+                entry.state,
+                {
+                    "mode": None,
+                    **_clear_samples_collection_state_patch(),
+                },
+            )
+        else:
+            next_state = _json_merge_patch(entry.state, _samples_filter_state(collection))
+            next_state["collection"] = collection.to_dict()
+            next_state["collection_id"] = collection.id
+
+        if next_state == entry.state:
+            return False
+
+        workspace.ui.panels[resolved_panel_id] = PanelStateEntry(
+            state=next_state,
+            state_revision=entry.state_revision + 1,
+        )
+        return True
+
+    def _set_samples_retrieval_locked(
+        self,
+        workspace: WorkspaceState,
+        query: SimilarityQueryState | None,
+    ) -> bool:
+        resolved_panel_id, entry = self._get_panel_state_entry_locked(
+            workspace,
+            SAMPLES_PANEL_STATE_ID,
+            create=query is not None,
+        )
+        if query is None:
+            should_clear_collection = (
+                entry.state.get("mode") == "retrieval"
+                or _samples_panel_collection_kind(entry.state) in {"neighbors", "search"}
+            )
+            clear_patch: dict[str, Any] = {"retrieval": None}
+            if should_clear_collection:
+                clear_patch.update(_clear_samples_collection_state_patch())
+            next_state = _json_merge_patch(
+                entry.state,
+                clear_patch,
+            )
+            if next_state.get("mode") == "retrieval":
+                next_state.pop("mode", None)
+        else:
+            collection = self._build_neighbors_collection_locked(workspace, query)
+            next_state = _json_object_copy(entry.state)
+            next_state.update(_samples_retrieval_state(query, collection))
+            next_state["collection"] = collection.to_dict()
+            next_state["collection_id"] = collection.id
+
+        if next_state == entry.state:
+            return False
+
+        workspace.ui.panels[resolved_panel_id] = PanelStateEntry(
+            state=next_state,
+            state_revision=entry.state_revision + 1,
+        )
+        return True
+
+    def set_samples_filter(
+        self,
+        workspace_id: str,
+        *,
+        field: str = "label",
+        value: Any,
+        source: str | None = None,
+    ) -> WorkspaceState:
+        with self._lock:
+            workspace = self.get_workspace(workspace_id)
+            collection = self._build_label_filter_collection_locked(
+                workspace,
+                field=field,
+                value=value,
+                source=source,
+            )
+            workspace.ui.selected_ids = []
+            workspace.ui.similarity_query = None
+            self._set_samples_filter_locked(workspace, collection)
+            self.workspace_registry.update_workspace(workspace)
+            self._bump_version()
+            return workspace
+
+    def clear_samples_filter(self, workspace_id: str) -> WorkspaceState:
+        with self._lock:
+            workspace = self.get_workspace(workspace_id)
+            self._set_samples_filter_locked(workspace, None)
+            self.workspace_registry.update_workspace(workspace)
+            self._bump_version()
+            return workspace
+
     def set_active_layout(self, workspace_id: str, layout_key: str | None) -> WorkspaceState:
         with self._lock:
             workspace = self.get_workspace(workspace_id)
@@ -788,28 +1465,47 @@ class HyperViewRuntime:
         with self._lock:
             workspace = self.get_workspace(workspace_id)
             workspace.ui.selected_ids = list(dict.fromkeys(sample_ids))
-            if (
-                workspace.ui.similarity_query is not None
-                and workspace.ui.similarity_query.anchor_sample_id not in workspace.ui.selected_ids
-            ):
-                workspace.ui.similarity_query = None
+            active_retrieval = _samples_panel_retrieval_query(workspace.ui.panels)
+            if active_retrieval is not None and active_retrieval.query_text is None:
+                if active_retrieval.anchor_sample_id not in workspace.ui.selected_ids:
+                    self._set_samples_retrieval_locked(workspace, None)
+                    workspace.ui.similarity_query = None
             self.workspace_registry.update_workspace(workspace)
             self._bump_version()
             return workspace
 
-    def set_similarity_query(
+    def get_samples_retrieval_query(
+        self,
+        workspace_id: str,
+    ) -> SimilarityQueryState | None:
+        with self._lock:
+            workspace = self.get_workspace(workspace_id)
+            return _samples_panel_retrieval_query(workspace.ui.panels) or workspace.ui.similarity_query
+
+    def set_samples_retrieval(
         self,
         workspace_id: str,
         query: SimilarityQueryState | None,
     ) -> WorkspaceState:
         with self._lock:
             workspace = self.get_workspace(workspace_id)
-            workspace.ui.similarity_query = query
+            changed = False
             if query is not None:
-                workspace.ui.selected_ids = []
-            self.workspace_registry.update_workspace(workspace)
-            self._bump_version()
+                if workspace.ui.selected_ids:
+                    workspace.ui.selected_ids = []
+                    changed = True
+            changed = self._set_samples_retrieval_locked(workspace, query) or changed
+            legacy_query = _samples_panel_retrieval_query(workspace.ui.panels)
+            if workspace.ui.similarity_query != legacy_query:
+                workspace.ui.similarity_query = legacy_query
+                changed = True
+            if changed:
+                self.workspace_registry.update_workspace(workspace)
+                self._bump_version()
             return workspace
+
+    def clear_samples_retrieval(self, workspace_id: str) -> WorkspaceState:
+        return self.set_samples_retrieval(workspace_id, None)
 
     def patch_ui_state(
         self,
@@ -819,8 +1515,6 @@ class HyperViewRuntime:
         active_layout_key: str | None = None,
         set_selection: bool = False,
         selected_ids: list[str] | None = None,
-        set_similarity_query: bool = False,
-        similarity_query: SimilarityQueryState | None = None,
         source_client_id: str | None = None,
     ) -> WorkspaceState:
         """Apply multiple UI-state updates under one runtime version bump."""
@@ -841,20 +1535,15 @@ class HyperViewRuntime:
                 if workspace.ui.selected_ids != next_selected_ids:
                     workspace.ui.selected_ids = next_selected_ids
                     changed = True
+                active_retrieval = _samples_panel_retrieval_query(workspace.ui.panels)
                 if (
-                    workspace.ui.similarity_query is not None
-                    and workspace.ui.similarity_query.anchor_sample_id
+                    active_retrieval is not None
+                    and active_retrieval.anchor_sample_id
                     not in workspace.ui.selected_ids
                 ):
+                    self._set_samples_retrieval_locked(workspace, None)
                     workspace.ui.similarity_query = None
                     changed = True
-
-            if set_similarity_query and workspace.ui.similarity_query != similarity_query:
-                workspace.ui.similarity_query = similarity_query
-                changed = True
-            if set_similarity_query and similarity_query is not None and workspace.ui.selected_ids:
-                workspace.ui.selected_ids = []
-                changed = True
 
             if changed:
                 self.workspace_registry.update_workspace(workspace)
@@ -877,8 +1566,69 @@ class HyperViewRuntime:
         except KeyError as exc:
             raise KeyError(f"Sample not found: {sample_id}") from exc
 
+        resolved_layout_key, resolved_space_key = self._resolve_retrieval_context(
+            workspace_id=workspace_id,
+            layout_key=layout_key,
+            space_key=space_key,
+        )
+
+        try:
+            limit = int(k)
+        except (TypeError, ValueError):
+            limit = 18
+
+        return SimilarityQueryState(
+            anchor_sample_id=sample_id,
+            layout_key=resolved_layout_key,
+            space_key=resolved_space_key,
+            k=max(1, min(limit, 100)),
+            source=source,
+        )
+
+    def resolve_text_retrieval_query(
+        self,
+        workspace_id: str,
+        query_text: str,
+        *,
+        layout_key: str | None = None,
+        space_key: str | None = None,
+        k: int = 18,
+        source: str | None = None,
+    ) -> SimilarityQueryState:
+        text = str(query_text or "").strip()
+        if not text:
+            raise ValueError("query_text must be a non-empty string")
+
+        resolved_layout_key, resolved_space_key = self._resolve_retrieval_context(
+            workspace_id=workspace_id,
+            layout_key=layout_key,
+            space_key=space_key,
+        )
+
+        try:
+            limit = int(k)
+        except (TypeError, ValueError):
+            limit = 18
+
+        return SimilarityQueryState(
+            query_text=text,
+            layout_key=resolved_layout_key,
+            space_key=resolved_space_key,
+            k=max(1, min(limit, 100)),
+            source=source,
+        )
+
+    def _resolve_retrieval_context(
+        self,
+        *,
+        workspace_id: str,
+        layout_key: str | None,
+        space_key: str | None,
+    ) -> tuple[str | None, str | None]:
         resolved_space_key = space_key
+        resolved_layout_key = layout_key
         if layout_key is not None:
+            dataset = self.get_dataset(workspace_id=workspace_id)
             layout = next(
                 (item for item in dataset.list_layouts() if item.layout_key == layout_key),
                 None,
@@ -890,25 +1640,34 @@ class HyperViewRuntime:
             resolved_space_key = layout.space_key
 
         if resolved_space_key is not None:
+            dataset = self.get_dataset(workspace_id=workspace_id)
             space = next(
                 (item for item in dataset.list_spaces() if item.space_key == resolved_space_key),
                 None,
             )
             if space is None:
                 raise LookupError(f"Space not found: {resolved_space_key}")
+        else:
+            workspace = self.get_workspace(workspace_id)
+            dataset = self.get_dataset(workspace_id=workspace_id)
+            if workspace.ui.active_layout_key:
+                active_layout = next(
+                    (
+                        item
+                        for item in dataset.list_layouts()
+                        if item.layout_key == workspace.ui.active_layout_key
+                    ),
+                    None,
+                )
+                if active_layout is not None:
+                    resolved_layout_key = active_layout.layout_key
+                    resolved_space_key = active_layout.space_key
+            if resolved_space_key is None:
+                spaces = dataset.list_spaces()
+                if spaces:
+                    resolved_space_key = spaces[0].space_key
 
-        try:
-            limit = int(k)
-        except (TypeError, ValueError):
-            limit = 18
-
-        return SimilarityQueryState(
-            anchor_sample_id=sample_id,
-            layout_key=layout_key,
-            space_key=resolved_space_key,
-            k=max(1, min(limit, 100)),
-            source=source,
-        )
+        return resolved_layout_key, resolved_space_key
 
     def set_layout_view(
         self,
@@ -934,11 +1693,11 @@ class HyperViewRuntime:
         panel_id: str,
         kind: Literal["extension", "scatter", "module", "builtin"],
         title: str | None = None,
-        builtin_panel: Literal["samples"] | None = None,
+        builtin_panel: str | None = None,
         extension: str | None = None,
         extension_panel: str | None = None,
         layout_key: str | None = None,
-        position: str = "right",
+        position: str | None = None,
         reference_panel_id: str | None = None,
         direction: str | None = None,
         width: int | None = None,
@@ -955,17 +1714,6 @@ class HyperViewRuntime:
     ) -> CustomPanelSpec:
         """Resolve a transport-level panel request into a runtime panel spec."""
 
-        if position not in {"center", "right", "bottom"}:
-            raise ValueError("position must be one of center, right, bottom")
-        if direction is not None and direction not in {
-            "right",
-            "left",
-            "above",
-            "below",
-            "within",
-        }:
-            raise ValueError("direction must be one of right, left, above, below, within")
-
         if kind == "module":
             raise ValueError(
                 "Direct module panels are no longer a public API. "
@@ -973,24 +1721,32 @@ class HyperViewRuntime:
             )
 
         if kind == "builtin":
-            if builtin_panel != "samples":
-                raise ValueError("builtin_panel must be 'samples'")
+            builtin_panel_type = str(builtin_panel or "").strip()
+            definition = self.get_panel_definition(builtin_panel_type, source="builtin")
+            if definition is None:
+                raise ValueError(f"Unknown built-in panel type: {builtin_panel_type}")
+            layout = _panel_layout_fields(
+                definition.default_layout,
+                position=position,
+                reference_panel_id=reference_panel_id,
+                direction=direction,
+                width=width,
+                height=height,
+                min_width=min_width,
+                min_height=min_height,
+                max_width=max_width,
+                max_height=max_height,
+            )
             return CustomPanelSpec(
                 id=panel_id,
-                title=title or "Samples",
+                title=title or definition.title or definition.label,
                 kind="builtin",
-                builtin_panel="samples",
-                position=position,  # type: ignore[arg-type]
-                reference_panel_id=reference_panel_id,
-                direction=direction,  # type: ignore[arg-type]
-                width=_positive_int_or_none(width),
-                height=_positive_int_or_none(height),
-                min_width=_positive_int_or_none(min_width),
-                min_height=_positive_int_or_none(min_height),
-                max_width=_positive_int_or_none(max_width),
-                max_height=_positive_int_or_none(max_height),
+                panel_type=definition.panel_type,
+                source=definition.source,
+                builtin_panel=definition.panel_type,
+                **layout,
                 visible=visible,
-                props=dict(props or {}),
+                props=merge_default_props(definition, props),
             )
 
         if kind == "extension":
@@ -1011,24 +1767,31 @@ class HyperViewRuntime:
                 installation.manifest.folder,
                 manifest_panel.file,
             )
+            definition = manifest_panel.to_definition(installation.manifest.name)
+            layout = _panel_layout_fields(
+                definition.default_layout,
+                position=position,
+                reference_panel_id=reference_panel_id,
+                direction=direction,
+                width=width,
+                height=height,
+                min_width=min_width,
+                min_height=min_height,
+                max_width=max_width,
+                max_height=max_height,
+            )
             return CustomPanelSpec(
                 id=panel_id,
-                title=title or manifest_panel.title,
+                title=title or definition.title or definition.label,
                 kind="module",
+                panel_type=definition.panel_type,
+                source=definition.source,
                 extension=extension,
                 extension_panel=extension_panel,
                 module_file=str(module_file),
-                position=position,  # type: ignore[arg-type]
-                reference_panel_id=reference_panel_id,
-                direction=direction,  # type: ignore[arg-type]
-                width=_positive_int_or_none(width),
-                height=_positive_int_or_none(height),
-                min_width=_positive_int_or_none(min_width),
-                min_height=_positive_int_or_none(min_height),
-                max_width=_positive_int_or_none(max_width),
-                max_height=_positive_int_or_none(max_height),
+                **layout,
                 visible=visible,
-                props=dict(props or {}),
+                props=merge_default_props(definition, props),
             )
 
         if kind == "scatter":
@@ -1063,24 +1826,33 @@ class HyperViewRuntime:
                     )
             if not title:
                 raise ValueError("title is required for scatter panels")
+            layout = _panel_layout_fields(
+                None,
+                position=position,
+                reference_panel_id=reference_panel_id,
+                direction=direction,
+                width=width,
+                height=height,
+                min_width=min_width,
+                min_height=min_height,
+                max_width=max_width,
+                max_height=max_height,
+            )
             return CustomPanelSpec(
                 id=panel_id,
                 title=title,
                 kind="scatter",
-                position=position,  # type: ignore[arg-type]
+                panel_type="scatter",
+                source="builtin",
                 layout_key=layout_key,
                 geometry=geometry,
                 layout_dimension=layout_dimension,
-                reference_panel_id=reference_panel_id,
-                direction=direction,  # type: ignore[arg-type]
-                width=_positive_int_or_none(width),
-                height=_positive_int_or_none(height),
-                min_width=_positive_int_or_none(min_width),
-                min_height=_positive_int_or_none(min_height),
-                max_width=_positive_int_or_none(max_width),
-                max_height=_positive_int_or_none(max_height),
+                **layout,
                 visible=visible,
-                props=dict(props or {}),
+                props=merge_default_props(
+                    self.get_panel_definition("scatter", source="builtin"),
+                    props,
+                ),
             )
 
         raise ValueError(f"Unsupported panel kind: {kind}")
@@ -1092,11 +1864,11 @@ class HyperViewRuntime:
         panel_id: str,
         kind: Literal["extension", "scatter", "module", "builtin"],
         title: str | None = None,
-        builtin_panel: Literal["samples"] | None = None,
+        builtin_panel: str | None = None,
         extension: str | None = None,
         extension_panel: str | None = None,
         layout_key: str | None = None,
-        position: str = "right",
+        position: str | None = None,
         reference_panel_id: str | None = None,
         direction: str | None = None,
         width: int | None = None,
@@ -1145,6 +1917,7 @@ class HyperViewRuntime:
             ]
             panels.append(panel)
             workspace.ui.custom_panels = panels
+            self._seed_default_panel_state_locked(workspace, panel)
             workspace.ui.view_revision += 1
             self.workspace_registry.update_workspace(workspace)
             self._bump_version()
@@ -1287,6 +2060,9 @@ class HyperViewRuntime:
             workspace.ui.custom_panels = next_panels
             workspace.ui.has_explicit_view = next_has_explicit_view
             workspace.ui.active_panel_id = next_active_panel_id
+            self._prune_panel_states_locked(workspace)
+            for panel in next_panels:
+                self._seed_default_panel_state_locked(workspace, panel)
             if bump_view_revision:
                 workspace.ui.view_revision += 1
             self.workspace_registry.update_workspace(workspace)
@@ -1299,6 +2075,7 @@ class HyperViewRuntime:
             workspace.ui.custom_panels = [
                 panel for panel in workspace.ui.custom_panels if panel.id != panel_id
             ]
+            workspace.ui.panels.pop(panel_id, None)
             if workspace.ui.active_panel_id == panel_id:
                 workspace.ui.active_panel_id = None
             workspace.ui.view_revision += 1
@@ -1510,6 +2287,82 @@ class HyperViewRuntime:
         with self._lock:
             return self._extensions.get(name)
 
+    def list_panel_definitions(self) -> list[PanelDefinition]:
+        with self._lock:
+            definitions = list(BUILTIN_PANEL_DEFINITIONS)
+            for installation in self._extensions.values():
+                definitions.extend(
+                    panel.to_definition(installation.manifest.name)
+                    for panel in installation.manifest.panels
+                )
+            return sorted(
+                definitions,
+                key=lambda definition: (definition.source, definition.panel_type),
+            )
+
+    def get_panel_definition(
+        self,
+        panel_type: str,
+        *,
+        source: str | None = None,
+        extension: str | None = None,
+    ) -> PanelDefinition | None:
+        with self._lock:
+            return self._get_panel_definition_locked(
+                panel_type,
+                source=source,
+                extension=extension,
+            )
+
+    def _get_panel_definition_locked(
+        self,
+        panel_type: str,
+        *,
+        source: str | None = None,
+        extension: str | None = None,
+    ) -> PanelDefinition | None:
+        definitions = list(BUILTIN_PANEL_DEFINITIONS)
+        for installation in self._extensions.values():
+            definitions.extend(
+                panel.to_definition(installation.manifest.name)
+                for panel in installation.manifest.panels
+            )
+        for definition in definitions:
+            if definition.panel_type != panel_type:
+                continue
+            if source is not None and definition.source != source:
+                continue
+            if extension is not None and definition.extension != extension:
+                continue
+            return definition
+        return None
+
+    def _definition_for_panel_spec_locked(
+        self,
+        panel: CustomPanelSpec,
+    ) -> PanelDefinition | None:
+        if panel.kind in {"builtin", "scatter"}:
+            return self._get_panel_definition_locked(
+                panel.resolved_panel_type(),
+                source="builtin",
+            )
+        if panel.extension and panel.extension_panel:
+            installation = self._extensions.get(panel.extension)
+            if installation is None:
+                return None
+            manifest_panel = next(
+                (
+                    item
+                    for item in installation.manifest.panels
+                    if item.id == panel.extension_panel
+                ),
+                None,
+            )
+            if manifest_panel is None:
+                return None
+            return manifest_panel.to_definition(installation.manifest.name)
+        return None
+
     def install_extension(
         self,
         workspace_id: str,
@@ -1524,14 +2377,30 @@ class HyperViewRuntime:
         prepared_panels: list[CustomPanelSpec] = []
         for panel_entry in manifest.panels:
             panel_file = resolve_panel_source(manifest.folder, panel_entry.file)
+            definition = panel_entry.to_definition(manifest.name)
+            layout = _panel_layout_fields(
+                definition.default_layout,
+                position=None,
+                reference_panel_id=None,
+                direction=None,
+                width=None,
+                height=None,
+                min_width=None,
+                min_height=None,
+                max_width=None,
+                max_height=None,
+            )
             prepared_panels.append(
                 CustomPanelSpec(
                     id=panel_entry.id,
-                    title=panel_entry.title,
+                    title=definition.title or definition.label,
+                    panel_type=definition.panel_type,
+                    source=definition.source,
                     extension=manifest.name,
                     extension_panel=panel_entry.id,
                     module_file=str(panel_file),
-                    position=panel_entry.position,  # type: ignore[arg-type]
+                    **layout,
+                    props=merge_default_props(definition, None),
                 )
             )
 
@@ -1569,6 +2438,11 @@ class HyperViewRuntime:
                     add_panels=add_panels,
                 )
                 self._extensions[manifest.name] = installation
+                if add_panels:
+                    workspace = self.get_workspace(workspace_id)
+                    for panel in prepared_panels:
+                        self._seed_default_panel_state_locked(workspace, panel)
+                    self.workspace_registry.update_workspace(workspace)
                 self._bump_version()
                 return installation
             except Exception:
@@ -1579,6 +2453,8 @@ class HyperViewRuntime:
                         for panel in workspace.ui.custom_panels
                         if panel.id not in installed_panel_ids
                     ]
+                    for panel_id in installed_panel_ids:
+                        workspace.ui.panels.pop(panel_id, None)
                     workspace.ui.view_revision += 1
                     self.workspace_registry.update_workspace(workspace)
 
@@ -1618,6 +2494,8 @@ class HyperViewRuntime:
                 for panel in workspace.ui.custom_panels
                 if panel.id not in installation.panel_ids
             ]
+            for panel_id in installation.panel_ids:
+                workspace.ui.panels.pop(panel_id, None)
             workspace.ui.view_revision += 1
             self.workspace_registry.update_workspace(workspace)
 
@@ -1641,6 +2519,7 @@ class HyperViewRuntime:
         panels = [existing for existing in workspace.ui.custom_panels if existing.id != panel.id]
         panels.append(panel)
         workspace.ui.custom_panels = panels
+        self._seed_default_panel_state_locked(workspace, panel)
         workspace.ui.view_revision += 1
         self.workspace_registry.update_workspace(workspace)
 
@@ -1689,11 +2568,18 @@ class HyperViewRuntime:
         with self._lock:
             self._sync_panel_module_revisions_locked()
             workspace = self.get_workspace(workspace_id)
+            similarity_query = (
+                _samples_panel_retrieval_query(workspace.ui.panels)
+                or workspace.ui.similarity_query
+            )
             return {
                 "runtime_id": self.runtime_id,
                 "version": self.version,
                 "active_workspace_id": self.workspace_registry.active_workspace_id,
                 "extensions": [installation.to_dict() for installation in self.list_extensions()],
+                "panel_definitions": [
+                    definition.to_dict() for definition in self.list_panel_definitions()
+                ],
                 "tools": [record.to_dict() for record in self.tools.list()],
                 "workspaces": [
                     {
@@ -1705,23 +2591,33 @@ class HyperViewRuntime:
                 "workspace": {
                     "id": workspace.id,
                     "dataset_name": workspace.dataset_name,
+                    "collections": [
+                        collection.to_dict()
+                        for collection in sorted(
+                            workspace.collections.values(),
+                            key=lambda item: item.id,
+                        )
+                    ],
                     "ui": {
                         "active_layout_key": workspace.ui.active_layout_key,
                         "selected_ids": list(workspace.ui.selected_ids),
                         "similarity_query": (
-                            workspace.ui.similarity_query.to_dict()
-                            if workspace.ui.similarity_query is not None
-                            else None
+                            similarity_query.to_dict() if similarity_query is not None else None
                         ),
                         "layout_views": {
                             layout_key: view.to_dict()
                             for layout_key, view in sorted(workspace.ui.layout_views.items())
                         },
+                        "panels": {
+                            panel_id: state.to_dict()
+                            for panel_id, state in sorted(workspace.ui.panels.items())
+                        },
                         "custom_panels": [
-                            {
-                                **panel.to_dict(),
-                                "data": self.get_panel_payload(workspace.id, panel),
-                            }
+                            _custom_panel_instance_payload(
+                                panel,
+                                workspace.ui.panels,
+                                data=self.get_panel_payload(workspace.id, panel),
+                            )
                             for panel in workspace.ui.custom_panels
                         ],
                         "has_explicit_view": workspace.ui.has_explicit_view,

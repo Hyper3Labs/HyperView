@@ -3,6 +3,8 @@ export interface Sample {
   filepath: string;
   filename: string;
   label: string | null;
+  text?: string | null;
+  modality?: string | null;
   thumbnail: string | null;
   media_url?: string | null;
   thumbnail_url?: string | null;
@@ -60,7 +62,8 @@ export interface SimilarSample extends Sample {
 }
 
 export interface SimilaritySearchResponse {
-  query_id: string;
+  query_id?: string | null;
+  query_text?: string | null;
   query_sample: Sample | null;
   space_key: string | null;
   metric: string;
@@ -69,15 +72,60 @@ export interface SimilaritySearchResponse {
 }
 
 export interface SimilarityQuery {
-  anchor_sample_id: string;
+  anchor_sample_id?: string | null;
+  query_text?: string | null;
   layout_key: string | null;
   space_key: string | null;
   k: number;
   source: string | null;
 }
 
+export type CollectionKind =
+  | "all"
+  | "filter"
+  | "selection"
+  | "neighbors"
+  | "lasso"
+  | "search"
+  | "tool_result"
+  | "extension";
+
+export interface RuntimeCollection {
+  id: string;
+  dataset_id: string;
+  entity_set_id: string;
+  kind: CollectionKind;
+  query: Record<string, unknown>;
+  scores: Record<string, number> | null;
+  created_at: number;
+}
+
+export interface RuntimePanelStateEntry {
+  state: Record<string, unknown>;
+  state_revision: number;
+}
+
 export interface RuntimePanelData {
   module_src: string | null;
+}
+
+export interface RuntimePanelDefinition {
+  panel_type: string;
+  label: string;
+  title: string;
+  source: string;
+  extension: string | null;
+  default_props: Record<string, unknown>;
+  default_state: Record<string, unknown>;
+  props_schema: Record<string, unknown> | null;
+  state_schema: Record<string, unknown> | null;
+  commands: string[];
+  queries: string[];
+  lifecycle: Record<string, unknown>;
+  default_layout: Record<string, unknown>;
+  allow_multiple: boolean;
+  icon: string | null;
+  category: string | null;
 }
 
 export type RuntimePanelKind = "module" | "scatter" | "builtin";
@@ -86,9 +134,23 @@ export type RuntimePanelPosition = "center" | "right" | "bottom";
 
 export type RuntimePanelDirection = "right" | "left" | "above" | "below" | "within";
 
+export interface RuntimePanelLayout {
+  position: RuntimePanelPosition;
+  reference_panel_id: string | null;
+  direction: RuntimePanelDirection | null;
+  width: number | null;
+  height: number | null;
+  min_width: number | null;
+  min_height: number | null;
+  max_width: number | null;
+  max_height: number | null;
+}
+
 export interface RuntimePanel {
   id: string;
   kind: RuntimePanelKind;
+  panel_type: string;
+  source: string;
   title: string;
   position: RuntimePanelPosition;
   builtin_panel: "samples" | string | null;
@@ -108,6 +170,9 @@ export interface RuntimePanel {
   max_height: number | null;
   visible: boolean;
   props: Record<string, unknown>;
+  state: Record<string, unknown>;
+  state_revision: number;
+  layout: RuntimePanelLayout;
   data: RuntimePanelData;
 }
 
@@ -119,10 +184,12 @@ export interface WorkspaceSummary {
 export interface RuntimeWorkspaceState {
   id: string;
   dataset_name: string | null;
+  collections: RuntimeCollection[];
   ui: {
     active_layout_key: string | null;
     selected_ids: string[];
     similarity_query: SimilarityQuery | null;
+    panels: Record<string, RuntimePanelStateEntry>;
     layout_views: Record<
       string,
       {
@@ -148,6 +215,7 @@ export interface RuntimeSnapshot {
   runtime_id: string;
   version: number;
   active_workspace_id: string | null;
+  panel_definitions: RuntimePanelDefinition[];
   workspaces: WorkspaceSummary[];
   workspace: RuntimeWorkspaceState;
 }

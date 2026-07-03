@@ -36,11 +36,23 @@ try:  # Python 3.11+
 except ImportError:  # pragma: no cover - exercised on Python 3.10
     import tomli as tomllib  # type: ignore[no-redef]
 
+from hyperview.panel_definitions import PanelDefinition
 from hyperview.tools import ToolRecord, drain_pending_tools
 
 EXTENSION_MANIFEST_NAME = "extension.toml"
 DEFAULT_LOCAL_EXTENSIONS_DIR = ".hyperview/extensions"
 VALID_PANEL_POSITIONS = {"center", "right", "bottom"}
+VALID_PANEL_DIRECTIONS = {"right", "left", "above", "below", "within"}
+PANEL_LAYOUT_FIELDS = (
+    "reference_panel_id",
+    "direction",
+    "width",
+    "height",
+    "min_width",
+    "min_height",
+    "max_width",
+    "max_height",
+)
 
 
 @dataclass
@@ -49,6 +61,43 @@ class PanelSpecEntry:
     title: str
     position: str = "right"
     file: str = "panel.jsx"
+    panel_type: str | None = None
+    label: str | None = None
+    default_props: dict[str, object] = field(default_factory=dict)
+    default_state: dict[str, object] = field(default_factory=dict)
+    props_schema: dict[str, object] | None = None
+    state_schema: dict[str, object] | None = None
+    commands: list[str] = field(default_factory=list)
+    queries: list[str] = field(default_factory=list)
+    lifecycle: dict[str, object] = field(default_factory=dict)
+    default_layout: dict[str, object] = field(default_factory=dict)
+    allow_multiple: bool = True
+    icon: str | None = None
+    category: str | None = None
+
+    def resolved_panel_type(self, extension_name: str) -> str:
+        panel_type = (self.panel_type or "").strip()
+        return panel_type or f"{extension_name}.{self.id}"
+
+    def to_definition(self, extension_name: str) -> PanelDefinition:
+        return PanelDefinition(
+            panel_type=self.resolved_panel_type(extension_name),
+            label=self.label or self.title,
+            title=self.title,
+            source="extension",
+            extension=extension_name,
+            default_props=dict(self.default_props),
+            default_state=dict(self.default_state),
+            props_schema=dict(self.props_schema) if self.props_schema is not None else None,
+            state_schema=dict(self.state_schema) if self.state_schema is not None else None,
+            commands=list(self.commands),
+            queries=list(self.queries),
+            lifecycle=dict(self.lifecycle),
+            default_layout=dict(self.default_layout),
+            allow_multiple=self.allow_multiple,
+            icon=self.icon,
+            category=self.category,
+        )
 
 
 @dataclass
@@ -101,6 +150,19 @@ class ExtensionManifest:
                     title=str(entry.get("title") or panel_id),
                     position=position,
                     file=str(entry.get("file") or "panel.jsx"),
+                    panel_type=_optional_str(entry.get("panel_type")),
+                    label=_optional_str(entry.get("label")),
+                    default_props=_dict_or_empty(entry.get("default_props")),
+                    default_state=_dict_or_empty(entry.get("default_state")),
+                    props_schema=_optional_dict(entry.get("props_schema")),
+                    state_schema=_optional_dict(entry.get("state_schema")),
+                    commands=_string_list(entry.get("commands")),
+                    queries=_string_list(entry.get("queries")),
+                    lifecycle=_dict_or_empty(entry.get("lifecycle")),
+                    default_layout=_panel_default_layout(entry, position),
+                    allow_multiple=bool(entry.get("allow_multiple", True)),
+                    icon=_optional_str(entry.get("icon")),
+                    category=_optional_str(entry.get("category")),
                 )
             )
 
@@ -111,6 +173,51 @@ class ExtensionManifest:
             tools=tools,
             panels=panels,
         )
+
+
+def _optional_str(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _dict_or_empty(value: object) -> dict[str, object]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _optional_dict(value: object) -> dict[str, object] | None:
+    return dict(value) if isinstance(value, dict) else None
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item).strip()]
+
+
+def _panel_default_layout(entry: dict[str, object], position: str) -> dict[str, object]:
+    layout = _dict_or_empty(entry.get("default_layout"))
+    layout.setdefault("position", position)
+    for field_name in PANEL_LAYOUT_FIELDS:
+        value = entry.get(field_name)
+        if value is not None:
+            layout[field_name] = value
+    layout_position = str(layout.get("position") or position)
+    if layout_position not in VALID_PANEL_POSITIONS:
+        raise ValueError(
+            f"unsupported panel default_layout position '{layout_position}'"
+        )
+    layout["position"] = layout_position
+    layout_direction = layout.get("direction")
+    if layout_direction is not None:
+        layout_direction = str(layout_direction)
+        if layout_direction not in VALID_PANEL_DIRECTIONS:
+            raise ValueError(
+                f"unsupported panel default_layout direction '{layout_direction}'"
+            )
+        layout["direction"] = layout_direction
+    return layout
 
 
 @dataclass

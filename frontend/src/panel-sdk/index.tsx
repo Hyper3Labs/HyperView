@@ -12,7 +12,13 @@ import {
   PanelToolbarMenu,
   type PanelToolbarItem,
 } from "@/components/PanelToolbar";
-import { apiUrl, fetchSamplesBatch, getRuntimeClientId } from "@/lib/api";
+import {
+  apiUrl,
+  fetchSamplesBatch,
+  getRuntimeClientId,
+  runControlCommand,
+  setLabelFilterCollection,
+} from "@/lib/api";
 import { getLayoutDimension } from "@/lib/layouts";
 import { useHyperViewSamplesView } from "@/panels/runtime";
 import { PANEL } from "@/panels/registry";
@@ -23,7 +29,6 @@ import type {
   RuntimePanel,
   RuntimeSnapshot,
   Sample,
-  SimilarityQuery,
   SpaceInfo,
 } from "@/types";
 
@@ -78,12 +83,13 @@ interface SimilarityCommandOptions extends PanelCommandOptions {
   focus?: BuiltinPanelRole | false;
 }
 
-interface RuntimeUiPatchSimilarity {
-  sample_id: string;
-  layout_key?: string | null;
-  space_key?: string | null;
+interface TextSearchCommandOptions extends PanelCommandOptions {
+  queryText: string;
+  layoutKey?: string | null;
+  spaceKey?: string | null;
   k?: number;
   source?: string | null;
+  focus?: BuiltinPanelRole | false;
 }
 
 interface RuntimeUiPatch {
@@ -91,8 +97,6 @@ interface RuntimeUiPatch {
   active_layout_key?: string | null;
   set_selection?: boolean;
   selected_ids?: string[] | null;
-  set_similarity_query?: boolean;
-  similarity_query?: RuntimeUiPatchSimilarity | null;
 }
 
 interface LayoutFindQuery {
@@ -107,6 +111,8 @@ interface PanelInstanceContextValue {
   panel: RuntimePanel | null;
   panelId: string | null;
   props: Record<string, unknown>;
+  state: Record<string, unknown>;
+  stateRevision: number;
 }
 
 const PanelInstanceContext = React.createContext<PanelInstanceContextValue | null>(null);
@@ -155,6 +161,15 @@ function getPersistenceMode(
   return "background";
 }
 
+function assertRuntimeOwnedPersistence(
+  action: string,
+  persistenceMode: PanelCommandPersistenceMode
+) {
+  if (persistenceMode === "none") {
+    throw new Error(`${action} is runtime-managed; persist: false is not supported.`);
+  }
+}
+
 function spaceKeyForSimilarity(
   layoutKey: string | null | undefined,
   spaceKey: string | null | undefined
@@ -163,12 +178,23 @@ function spaceKeyForSimilarity(
 }
 
 export function createHyperViewPanelClient(workspaceId: string | null) {
+  const commandWorkspaceId = workspaceId ?? "default";
   return {
     async getDatasetInfo() {
       return fetchJson(buildUrl(apiUrl("/dataset"), { workspace_id: workspaceId }));
     },
     async getRuntime() {
       return fetchJson(buildUrl(apiUrl("/runtime"), { workspace_id: workspaceId }));
+    },
+    async runCommand(command: string, args?: {
+      target?: Record<string, unknown>;
+      args?: Record<string, unknown>;
+    }) {
+      return runControlCommand({
+        command,
+        target: args?.target ?? { workspace_id: commandWorkspaceId },
+        args: args?.args ?? {},
+      });
     },
     async listSamples(args?: {
       offset?: number;
@@ -253,29 +279,73 @@ export function createHyperViewPanelClient(workspaceId: string | null) {
         })
       );
     },
-    async setSimilarityQuery(args: {
+    async setSamplesRetrieval(args: {
       sampleId: string;
       layoutKey?: string | null;
       spaceKey?: string | null;
       k?: number;
       source?: string | null;
     }) {
-      return fetchJson(apiUrl("/control/ui/similarity"), {
-        method: "POST",
-        body: JSON.stringify({
-          workspace_id: workspaceId,
+      return runControlCommand({
+        command: "samples.retrieval.set-anchor",
+        target: { workspace_id: commandWorkspaceId },
+        args: {
           sample_id: args.sampleId,
           layout_key: args.layoutKey ?? null,
           space_key: spaceKeyForSimilarity(args.layoutKey, args.spaceKey),
           k: args.k ?? 18,
           source: args.source ?? "panel-client",
-        }),
+        },
       });
     },
-    async clearSimilarityQuery() {
-      return fetchJson(apiUrl("/control/ui/similarity"), {
-        method: "DELETE",
-        body: JSON.stringify({ workspace_id: workspaceId }),
+    async clearSamplesRetrieval() {
+      return runControlCommand({
+        command: "samples.retrieval.clear",
+        target: { workspace_id: commandWorkspaceId },
+      });
+    },
+    async setSamplesTextRetrieval(args: {
+      queryText: string;
+      layoutKey?: string | null;
+      spaceKey?: string | null;
+      k?: number;
+      source?: string | null;
+    }) {
+      return runControlCommand({
+        command: "samples.retrieval.set-text-query",
+        target: { workspace_id: commandWorkspaceId },
+        args: {
+          query_text: args.queryText,
+          layout_key: args.layoutKey ?? null,
+          space_key: spaceKeyForSimilarity(args.layoutKey, args.spaceKey),
+          k: args.k ?? 18,
+          source: args.source ?? "panel-client",
+        },
+      });
+    },
+    async getPanelState(panelId: string) {
+      return runControlCommand({
+        command: "ui.panel.state.get",
+        target: { workspace_id: commandWorkspaceId, panel_id: panelId },
+      });
+    },
+    async patchPanelState(
+      panelId: string,
+      state: Record<string, unknown>,
+      args?: {
+        replaceState?: boolean;
+        expectedRevision?: number | null;
+      }
+    ) {
+      return runControlCommand({
+        command: "ui.panel.state.patch",
+        target: { workspace_id: commandWorkspaceId, panel_id: panelId },
+        args: {
+          state,
+          replace_state: args?.replaceState ?? false,
+          expected_revision: args?.expectedRevision ?? null,
+          client_id: getRuntimeClientId(),
+        },
       });
     },
     async getEmbeddings(layoutKey?: string | null) {
@@ -329,12 +399,62 @@ export function usePanelInstance() {
       panel: null,
       panelId: null,
       props: {},
+      state: {},
+      stateRevision: 0,
     }
   );
 }
 
 export function usePanelProps() {
   return usePanelInstance().props;
+}
+
+export function usePanelState() {
+  const instance = usePanelInstance();
+  const activeWorkspaceId = useStore((state) => state.activeWorkspaceId);
+  const applyRuntimeSnapshot = useStore((state) => state.applyRuntimeSnapshot);
+
+  const patchState = useCallback(
+    async (
+      statePatch: Record<string, unknown>,
+      args?: {
+        replaceState?: boolean;
+        expectedRevision?: number | null;
+      }
+    ) => {
+      if (!activeWorkspaceId || !instance.panelId) {
+        throw new Error("No active panel instance");
+      }
+      await runControlCommand({
+        command: "ui.panel.state.patch",
+        target: {
+          workspace_id: activeWorkspaceId,
+          panel_id: instance.panelId,
+        },
+        args: {
+          state: statePatch,
+          replace_state: args?.replaceState ?? false,
+          expected_revision: args?.expectedRevision ?? null,
+          client_id: getRuntimeClientId(),
+        },
+      });
+      const snapshot = await fetchJson<RuntimeSnapshot>(
+        buildUrl(apiUrl("/runtime"), { workspace_id: activeWorkspaceId })
+      );
+      applyRuntimeSnapshot(snapshot);
+      return snapshot;
+    },
+    [activeWorkspaceId, applyRuntimeSnapshot, instance.panelId]
+  );
+
+  return useMemo(
+    () => ({
+      state: instance.state,
+      stateRevision: instance.stateRevision,
+      patchState,
+    }),
+    [instance.state, instance.stateRevision, patchState]
+  );
 }
 
 export function usePanelSamplesView() {
@@ -505,6 +625,7 @@ export function usePanelRuntimeState() {
   const requestedLayoutKey = useStore((state) => state.requestedLayoutKey);
   const workspaces = useStore((state) => state.workspaces);
   const customPanels = useStore((state) => state.customPanels);
+  const panelStates = useStore((state) => state.panelStates);
   const viewRevision = useStore((state) => state.viewRevision);
   const layoutViews = useStore((state) => state.layoutViews);
 
@@ -518,6 +639,7 @@ export function usePanelRuntimeState() {
       requestedLayoutKey,
       workspaces,
       customPanels,
+      panelStates,
       viewRevision,
       layoutViews,
     }),
@@ -528,6 +650,7 @@ export function usePanelRuntimeState() {
       activeWorkspaceId,
       customPanels,
       layoutViews,
+      panelStates,
       requestedLayoutKey,
       runtimeDatasetName,
       viewRevision,
@@ -763,13 +886,12 @@ export function usePanelCommands() {
   const dockview = useDockviewContext();
   const activeWorkspaceId = useStore((state) => state.activeWorkspaceId);
   const applyRuntimeSnapshot = useStore((state) => state.applyRuntimeSnapshot);
-  const setLabelFilter = useStore((state) => state.setLabelFilter);
+  const setLocalLabelFilter = useStore((state) => state.setLabelFilter);
   const setHoveredId = useStore((state) => state.setHoveredId);
   const clearLassoSelection = useStore((state) => state.clearLassoSelection);
   const setSelectedIds = useStore((state) => state.setSelectedIds);
   const setLayoutViewCamera = useStore((state) => state.setLayoutViewCamera);
   const setActiveLayoutKey = useStore((state) => state.setActiveLayoutKey);
-  const setActiveSimilarityQuery = useStore((state) => state.setActiveSimilarityQuery);
 
   return useMemo(
     () => {
@@ -817,22 +939,83 @@ export function usePanelCommands() {
         return snapshot;
       };
 
-      const persistSimilarityQuery = async (
+      const persistSamplesRetrieval = async (
         options: SimilarityCommandOptions,
         source: string | null
       ): Promise<RuntimeSnapshot> => {
         if (!activeWorkspaceId) {
           throw new Error("No active workspace");
         }
-        await fetchJson(apiUrl("/control/ui/similarity"), {
-          method: "POST",
-          body: JSON.stringify({
-            workspace_id: activeWorkspaceId,
+        await runControlCommand({
+          command: "samples.retrieval.set-anchor",
+          target: { workspace_id: activeWorkspaceId },
+          args: {
             sample_id: options.sampleId,
             layout_key: options.layoutKey ?? null,
             space_key: null,
             k: options.k ?? 18,
             source,
+          },
+        });
+        const snapshot = await fetchJson<RuntimeSnapshot>(
+          buildUrl(apiUrl("/runtime"), { workspace_id: activeWorkspaceId })
+        );
+        applyRuntimeSnapshot(snapshot);
+        return snapshot;
+      };
+
+      const setRuntimeLabelFilter = async (
+        label: string | null
+      ): Promise<RuntimeSnapshot | null> => {
+        setLocalLabelFilter(label);
+        if (!activeWorkspaceId) return null;
+        const snapshot = await setLabelFilterCollection({
+          workspaceId: activeWorkspaceId,
+          value: label,
+          clear: label === null,
+        });
+        applyRuntimeSnapshot(snapshot);
+        return snapshot;
+      };
+
+      const persistSamplesTextRetrieval = async (
+        options: TextSearchCommandOptions,
+        source: string | null
+      ): Promise<RuntimeSnapshot> => {
+        if (!activeWorkspaceId) {
+          throw new Error("No active workspace");
+        }
+        await runControlCommand({
+          command: "samples.retrieval.set-text-query",
+          target: { workspace_id: activeWorkspaceId },
+          args: {
+            query_text: options.queryText,
+            layout_key: options.layoutKey ?? null,
+            space_key: spaceKeyForSimilarity(options.layoutKey, options.spaceKey),
+            k: options.k ?? 18,
+            source,
+          },
+        });
+        const snapshot = await fetchJson<RuntimeSnapshot>(
+          buildUrl(apiUrl("/runtime"), { workspace_id: activeWorkspaceId })
+        );
+        applyRuntimeSnapshot(snapshot);
+        return snapshot;
+      };
+
+      const persistQueryContextClear = async (): Promise<RuntimeSnapshot> => {
+        if (!activeWorkspaceId) {
+          throw new Error("No active workspace");
+        }
+        await runControlCommand({
+          command: "samples.retrieval.clear",
+          target: { workspace_id: activeWorkspaceId },
+        });
+        await fetchJson(apiUrl("/control/ui/selection"), {
+          method: "POST",
+          body: JSON.stringify({
+            workspace_id: activeWorkspaceId,
+            sample_ids: [],
           }),
         });
         const snapshot = await fetchJson<RuntimeSnapshot>(
@@ -860,20 +1043,21 @@ export function usePanelCommands() {
         });
       };
 
-      const persistPanelPatch = async (
+      const persistPanelCommand = async (
+        command: string,
         panelId: string,
-        patch: Record<string, unknown>
+        args: Record<string, unknown> = {}
       ): Promise<RuntimeSnapshot> => {
         if (!activeWorkspaceId) {
           throw new Error("No active workspace");
         }
-        await fetchJson(apiUrl("/control/ui/panels"), {
-          method: "PATCH",
-          body: JSON.stringify({
+        await runControlCommand({
+          command,
+          target: {
             workspace_id: activeWorkspaceId,
             panel_id: panelId,
-            ...patch,
-          }),
+          },
+          args,
         });
         const snapshot = await fetchJson<RuntimeSnapshot>(
           buildUrl(apiUrl("/runtime"), { workspace_id: activeWorkspaceId })
@@ -914,16 +1098,7 @@ export function usePanelCommands() {
         if (!sampleId) {
           throw new Error("sampleId is required");
         }
-        const query: SimilarityQuery = {
-          anchor_sample_id: sampleId,
-          layout_key: options.layoutKey ?? null,
-          space_key: null,
-          k: options.k ?? 18,
-          source,
-        };
         clearLassoSelection();
-        setSelectedIds(new Set<string>(), "panel");
-        setActiveSimilarityQuery(query);
 
         if (options.focus) {
           const panelId = getPanelIdForBuiltinRole(options.focus);
@@ -931,31 +1106,70 @@ export function usePanelCommands() {
         }
 
         const persistenceMode = getPersistenceMode(options.persist);
-        if (persistenceMode === "none") {
-          return null;
-        }
+        assertRuntimeOwnedPersistence("Samples retrieval", persistenceMode);
 
         if (persistenceMode === "background") {
-          persistRuntimeUiPatch({
-            set_similarity_query: true,
-            similarity_query: {
-              sample_id: sampleId,
-              layout_key: options.layoutKey ?? null,
-              space_key: null,
-              k: options.k ?? 18,
-              source,
-            },
+          void persistSamplesRetrieval(options, source).catch((error) => {
+            console.error("Failed to persist Samples retrieval state:", error);
           });
           return null;
         }
 
-        return persistSimilarityQuery(options, source);
+        return persistSamplesRetrieval(options, source);
+      };
+
+      const searchByText = async (
+        options: TextSearchCommandOptions,
+      ): Promise<RuntimeSnapshot | null> => {
+        const source = options.source ?? "panel";
+        const queryText = options.queryText.trim();
+        if (!queryText) {
+          throw new Error("queryText is required");
+        }
+        clearLassoSelection();
+
+        if (options.focus) {
+          const panelId = getPanelIdForBuiltinRole(options.focus);
+          if (panelId) focusDockPanel(dockview.api, panelId);
+        }
+
+        const persistenceMode = getPersistenceMode(options.persist);
+        assertRuntimeOwnedPersistence("Samples text retrieval", persistenceMode);
+
+        if (persistenceMode === "background") {
+          void persistSamplesTextRetrieval(options, source).catch((error) => {
+            console.error("Failed to persist Samples text retrieval state:", error);
+          });
+          return null;
+        }
+
+        return persistSamplesTextRetrieval(options, source);
+      };
+
+      const clearQueryContext = async (
+        options: SelectionCommandOptions = {}
+      ): Promise<RuntimeSnapshot | null> => {
+        if (options.clearLasso ?? true) {
+          clearLassoSelection();
+        }
+
+        const persistenceMode = getPersistenceMode(options.persist);
+        assertRuntimeOwnedPersistence("Query context", persistenceMode);
+        if (persistenceMode === "background") {
+          void persistQueryContextClear().catch((error) => {
+            console.error("Failed to clear query context:", error);
+          });
+          return null;
+        }
+
+        return persistQueryContextClear();
       };
 
       return {
-        setLabelFilter,
+        setLabelFilter: setRuntimeLabelFilter,
         setHoveredId,
         clearLassoSelection,
+        clearQueryContext,
         clearSelection: (options: SelectionCommandOptions = {}) =>
           setSelection([], options),
         setActiveLayout: async (layoutKey: string | null, options: LayoutCommandOptions = {}) => {
@@ -973,6 +1187,7 @@ export function usePanelCommands() {
         },
         setSelection,
         showSimilar,
+        searchByText,
         setLayoutViewCamera,
         setLayoutViewCameraPersisted: async (
           layoutKey: string,
@@ -993,23 +1208,26 @@ export function usePanelCommands() {
         setPanelLayout: async (
           panelId: string,
           options: PanelLayoutCommandOptions,
-        ) => persistPanelPatch(panelId, panelLayoutPatch(options)),
+        ) => persistPanelCommand("ui.panel.resize", panelId, panelLayoutPatch(options)),
         resizePanel: async (
           panelId: string,
           options: PanelLayoutCommandOptions,
-        ) => persistPanelPatch(panelId, panelLayoutPatch(options)),
+        ) => persistPanelCommand("ui.panel.resize", panelId, panelLayoutPatch(options)),
         movePanel: async (
           panelId: string,
           options: PanelMoveCommandOptions,
-        ) => persistPanelPatch(panelId, {
-          position: options.position,
-          reference_panel_id: options.referencePanelId ?? null,
-          direction: options.direction ?? null,
-        }),
+        ) =>
+          persistPanelCommand("ui.panel.move", panelId, {
+            position: options.position,
+            reference_panel_id: options.referencePanelId ?? null,
+            direction: options.direction ?? null,
+          }),
         setPanelVisible: async (panelId: string, visible: boolean) =>
-          persistPanelPatch(panelId, { visible }),
+          persistPanelCommand(visible ? "ui.panel.show" : "ui.panel.close", panelId),
         setActivePanel: async (panelId: string) =>
-          persistPanelPatch(panelId, { active: true, visible: true }),
+          persistPanelCommand("ui.panel.focus", panelId),
+        updatePanelProps: async (panelId: string, props: Record<string, unknown>) =>
+          persistPanelCommand("ui.panel.update-props", panelId, { props }),
         focusBuiltin: (role: BuiltinPanelRole) => {
           const panelId = getPanelIdForBuiltinRole(role);
           return panelId ? focusDockPanel(dockview.api, panelId) : false;
@@ -1040,9 +1258,8 @@ export function usePanelCommands() {
       clearLassoSelection,
       dockview.api,
       setActiveLayoutKey,
-      setActiveSimilarityQuery,
       setHoveredId,
-      setLabelFilter,
+      setLocalLabelFilter,
       setSelectedIds,
       setLayoutViewCamera,
     ]
@@ -1096,6 +1313,7 @@ export interface HyperViewPanelSdkGlobal {
     usePanelLayoutView: typeof usePanelLayoutView;
     usePanelInstance: typeof usePanelInstance;
     usePanelProps: typeof usePanelProps;
+    usePanelState: typeof usePanelState;
     usePanelSamples: typeof usePanelSamples;
     usePanelSamplesView: typeof usePanelSamplesView;
     usePanelSelectedSamples: typeof usePanelSelectedSamples;
@@ -1137,6 +1355,7 @@ export function installHyperViewPanelSdkGlobal() {
       usePanelLayoutView,
       usePanelProps,
       usePanelRuntimeState,
+      usePanelState,
       usePanelSamples,
       usePanelSamplesView,
       usePanelSelectedSamples,

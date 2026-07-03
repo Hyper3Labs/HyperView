@@ -240,6 +240,21 @@ def test_public_ui_panel_layout_helpers_update_runtime_view_state() -> None:
     assert panel.height == 360
     assert panel.min_width == 240
 
+    control_result = session.control.run(
+        "ui.panel.resize",
+        target={"workspace_id": workspace_id, "panel_id": "map"},
+        args={"height": 400},
+    )
+    assert control_result["ok"] is True
+    assert control_result["workspace"]["ui"]["custom_panels"][0]["height"] == 400
+    props_result = session.control.run(
+        "ui.panel.update-props",
+        target={"workspace_id": workspace_id, "panel_id": "map"},
+        args={"props": {"mode": "compact"}},
+    )
+    assert props_result["ok"] is True
+    assert props_result["workspace"]["ui"]["custom_panels"][0]["props"] == {"mode": "compact"}
+
     session.ui.resize_panel(
         "map",
         workspace_id=workspace_id,
@@ -260,7 +275,7 @@ def test_public_ui_panel_layout_helpers_update_runtime_view_state() -> None:
     workspace = runtime.get_workspace(workspace_id)
     panel = workspace.ui.custom_panels[0]
     assert panel.width == 620
-    assert panel.height == 360
+    assert panel.height == 400
     assert panel.min_width == 240
     assert panel.min_height == 220
     assert panel.max_width == 900
@@ -291,6 +306,10 @@ id = "summary"
 title = "Summary"
 position = "right"
 file = "panel.js"
+
+[panels.default_layout]
+position = "bottom"
+height = 260
 """.strip()
         + "\n",
         encoding="utf-8",
@@ -322,6 +341,8 @@ file = "panel.js"
     assert len(panels) == 1
     assert panels[0].id == "summary-instance"
     assert panels[0].title == "Summary"
+    assert panels[0].position == "bottom"
+    assert panels[0].height == 260
     assert panels[0].extension == "readout"
     assert panels[0].extension_panel == "summary"
     assert panels[0].module_file == str(panel_file.resolve())
@@ -358,6 +379,43 @@ file = "panel.js"
     assert panels[0].extension_panel == "summary"
 
 
+def test_public_ui_lists_builtin_and_extension_panel_definitions(tmp_path: Path) -> None:
+    workspace_id = f"definitions-{uuid4().hex}"
+    extension_dir = tmp_path / ".hyperview" / "extensions" / "readout"
+    extension_dir.mkdir(parents=True)
+    (extension_dir / "extension.toml").write_text(
+        """
+name = "readout"
+
+[[panels]]
+id = "summary"
+title = "Summary"
+label = "Summary card"
+panel_type = "analysis.summary"
+position = "right"
+file = "panel.js"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (extension_dir / "panel.js").write_text("export default function Panel() { return null; }\n")
+
+    runtime = HyperViewRuntime()
+    runtime.attach_dataset_instance(workspace_id, _make_dataset(), activate_workspace=True)
+    session = hv.Session(runtime, "127.0.0.1", 6262)
+    session.ui.add_extension(extension_dir, workspace_id=workspace_id)
+
+    definitions = {
+        definition["panel_type"]: definition
+        for definition in session.ui.list_panel_definitions()
+    }
+
+    assert {"samples", "scatter", "analysis.summary"}.issubset(definitions)
+    assert definitions["analysis.summary"]["source"] == "extension"
+    assert definitions["analysis.summary"]["extension"] == "readout"
+    assert definitions["analysis.summary"]["label"] == "Summary card"
+
+
 def test_public_ui_show_similar_resolves_layout_context() -> None:
     dataset = _make_dataset()
     sample_ids = [sample.id for sample in dataset]
@@ -382,13 +440,69 @@ def test_public_ui_show_similar_resolves_layout_context() -> None:
 
     workspace = runtime.get_workspace("demo")
     assert workspace.ui.selected_ids == []
-    assert workspace.ui.similarity_query is not None
-    assert workspace.ui.similarity_query.to_dict() == {
+    expected_retrieval = {
         "anchor_sample_id": "sample-2",
         "layout_key": layout_key,
         "space_key": space_key,
         "k": 100,
         "source": "test",
+    }
+    samples_state = workspace.ui.panels["samples"].state
+    assert samples_state["mode"] == "retrieval"
+    assert samples_state["retrieval"] == expected_retrieval
+    assert workspace.ui.similarity_query is not None
+    assert workspace.ui.similarity_query.to_dict() == expected_retrieval
+
+
+def test_public_ui_panel_state_helpers_patch_durable_state() -> None:
+    workspace_id = f"panel-state-{uuid4().hex}"
+    runtime = HyperViewRuntime()
+    runtime.attach_dataset_instance(workspace_id, _make_dataset(), activate_workspace=True)
+    session = hv.Session(runtime, "127.0.0.1", 6262)
+
+    initial = session.ui.get_panel_state("samples", workspace_id=workspace_id)
+    assert initial == {
+        "panel_id": "samples",
+        "state": {},
+        "state_revision": 0,
+    }
+
+    patched = session.ui.patch_panel_state(
+        "samples",
+        {
+            "settings": {"density": "compact"},
+            "sort": "label",
+        },
+        workspace_id=workspace_id,
+        expected_revision=0,
+    )
+    assert patched == {
+        "panel_id": "samples",
+        "state": {
+            "settings": {"density": "compact"},
+            "sort": "label",
+        },
+        "state_revision": 1,
+    }
+
+    merged = session.ui.patch_panel_state(
+        "samples",
+        {
+            "settings": {"columns": 4},
+            "sort": None,
+        },
+        workspace_id=workspace_id,
+        expected_revision=1,
+    )
+    assert merged == {
+        "panel_id": "samples",
+        "state": {
+            "settings": {
+                "density": "compact",
+                "columns": 4,
+            },
+        },
+        "state_revision": 2,
     }
 
 
@@ -439,6 +553,11 @@ def test_reused_session_ui_control_fails_explicitly() -> None:
 
     with pytest.raises(RuntimeError, match="attached to an existing HyperView server"):
         session.ui.set_selection(["sample-1"], workspace_id="demo")
+    with pytest.raises(RuntimeError, match="attached to an existing HyperView server"):
+        session.control.run(
+            "ui.panel.focus",
+            target={"workspace_id": "demo", "panel_id": "samples"},
+        )
 
 
 def test_samples_query_and_aggregate_endpoints() -> None:

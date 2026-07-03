@@ -250,6 +250,7 @@ class Dataset:
         image_key: str = "img",
         label_key: str | None = "fine_label",
         label_names_key: str | None = None,
+        text_key: str | None = None,
         max_samples: int | None = None,
         shuffle: bool = False,
         seed: int = 42,
@@ -325,6 +326,8 @@ class Dataset:
                 columns = [image_key]
                 if label_key:
                     columns.append(label_key)
+                if text_key:
+                    columns.append(text_key)
                 stream = stream.select_columns(list(dict.fromkeys(columns)))
             stream = stream.map(attach_huggingface_source_index, with_indices=True)
             if shuffle:
@@ -445,6 +448,16 @@ class Dataset:
                     else:
                         label = str(label_idx)
 
+                text: str | None = None
+                if text_key and text_key in item:
+                    raw_text = item[text_key]
+                    if isinstance(raw_text, list):
+                        text = " ".join(str(part).strip() for part in raw_text if str(part).strip()) or None
+                    elif raw_text is not None:
+                        text = str(raw_text).strip() or None
+
+                modality = "multimodal" if text else "image"
+
                 safe_name = dataset_name.replace("/", "_")
                 sample_id = f"{safe_name}_{config_name}_{fingerprint}_{split}_{source_index}"
 
@@ -482,6 +495,8 @@ class Dataset:
                     id=sample_id,
                     filepath=str(image_path),
                     label=label,
+                    text=text,
+                    modality=modality,
                     metadata=metadata,
                 )
 
@@ -584,6 +599,7 @@ class Dataset:
             model_id=model,
             checkpoint=checkpoint,
             provider_kwargs=provider_kwargs,
+            modality="multimodal" if provider == "embed-anything" else "image",
         )
 
         space_key, _num_computed, _num_skipped = compute_embeddings(
@@ -715,6 +731,65 @@ class Dataset:
         )
         return self._storage.find_similar_by_vector(vector, k, resolved_space_key)
 
+    def _embedding_spec_for_space(self, space_key: str) -> Any:
+        from hyperview.embeddings.engine import EmbeddingSpec
+
+        space = next(
+            (item for item in self.list_spaces() if item.space_key == space_key),
+            None,
+        )
+        if space is None:
+            raise ValueError(f"Space not found: {space_key}")
+
+        config = dict(space.config or {})
+        provider = str(config.get("provider") or space.provider or "embed-anything")
+        model_id = str(space.model_id)
+        checkpoint = config.get("checkpoint")
+        provider_kwargs = {
+            key: value
+            for key, value in config.items()
+            if key not in {"provider", "model_id", "checkpoint", "dim", "geometry", "modality", "params", "params_source", "spatial_dim"}
+        }
+        modality = config.get("modality") or ("multimodal" if provider == "embed-anything" else "image")
+        return EmbeddingSpec(
+            provider=provider,
+            model_id=model_id,
+            checkpoint=checkpoint if isinstance(checkpoint, str) else None,
+            provider_kwargs=provider_kwargs,
+            modality=modality,  # type: ignore[arg-type]
+        )
+
+    def find_similar_by_text(
+        self,
+        text: str,
+        k: int = 10,
+        space_key: str | None = None,
+        *,
+        layout_key: str | None = None,
+    ) -> list[tuple[Sample, float]]:
+        """Find k most similar samples to a natural-language text query."""
+        query = str(text or "").strip()
+        if not query:
+            raise ValueError("text query must be a non-empty string")
+
+        resolved_space_key = self._resolve_similarity_space_key(
+            space_key=space_key,
+            layout_key=layout_key,
+        )
+        if resolved_space_key is None:
+            raise ValueError("No embedding spaces available")
+
+        from hyperview.embeddings.engine import get_engine
+
+        spec = self._embedding_spec_for_space(resolved_space_key)
+        vector = get_engine().embed_texts([query], spec)[0]
+        return self._storage.find_similar_by_text(
+            query,
+            k,
+            resolved_space_key,
+            query_vector=vector,
+        )
+
     def set_coords(
         self,
         geometry: str,
@@ -799,13 +874,19 @@ class Dataset:
         offset: int = 0,
         limit: int = 100,
         label: str | None = None,
+        missing_label: bool = False,
     ) -> tuple[list[Sample], int]:
         """Get paginated samples.
 
         This avoids loading all samples into memory and is used by the server
         API for efficient pagination.
         """
-        return self._storage.get_samples_paginated(offset=offset, limit=limit, label=label)
+        return self._storage.get_samples_paginated(
+            offset=offset,
+            limit=limit,
+            label=label,
+            missing_label=missing_label,
+        )
 
     def get_samples_by_ids(self, sample_ids: list[str]) -> list[Sample]:
         """Retrieve multiple samples by ID.
@@ -851,6 +932,7 @@ class Dataset:
         y_min: float,
         y_max: float,
         label_filter: str | None = None,
+        missing_label_filter: bool = False,
     ) -> tuple[list[str], np.ndarray]:
         """Return candidate (id, xy) rows within an AABB for a layout."""
         return self._storage.get_lasso_candidates_aabb(
@@ -860,6 +942,7 @@ class Dataset:
             y_min=y_min,
             y_max=y_max,
             label_filter=label_filter,
+            missing_label_filter=missing_label_filter,
         )
 
     def save(self, filepath: str, include_thumbnails: bool = True) -> None:

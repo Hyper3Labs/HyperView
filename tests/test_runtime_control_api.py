@@ -180,6 +180,25 @@ def _wait_for_job(client: TestClient, job_id: str) -> dict:
     raise AssertionError(f"Job {job_id} did not finish in time")
 
 
+def _run_control_command(
+    client: TestClient,
+    command: str,
+    *,
+    target: dict[str, object],
+    args: dict[str, object] | None = None,
+):
+    response = client.post(
+        "/api/control/commands/run",
+        json={
+            "command": command,
+            "target": target,
+            "args": args or {},
+        },
+    )
+    assert response.status_code == 200
+    return response
+
+
 def test_runtime_control_api_supports_checkpoint_jobs_panels_and_ui_state(
     tmp_path: Path,
     monkeypatch,
@@ -275,10 +294,11 @@ def test_runtime_control_api_supports_checkpoint_jobs_panels_and_ui_state(
     runtime.install_extension("default", tmp_path / "label-histogram-ext")
     runtime.install_extension("default", tmp_path / "notes-ext")
 
-    histogram_panel_response = client.post(
-        "/api/control/ui/panels",
-        json={
-            "workspace_id": "default",
+    histogram_panel_response = _run_control_command(
+        client,
+        "ui.panel.add",
+        target={"workspace_id": "default"},
+        args={
             "panel_id": "label-histogram",
             "kind": "extension",
             "extension": "label-histogram-ext",
@@ -288,12 +308,13 @@ def test_runtime_control_api_supports_checkpoint_jobs_panels_and_ui_state(
             "min_width": 240,
         },
     )
-    assert histogram_panel_response.status_code == 200
+    assert histogram_panel_response.json()["ok"] is True
 
-    text_panel_response = client.post(
-        "/api/control/ui/panels",
-        json={
-            "workspace_id": "default",
+    text_panel_response = _run_control_command(
+        client,
+        "ui.panel.add",
+        target={"workspace_id": "default"},
+        args={
             "panel_id": "notes",
             "kind": "extension",
             "extension": "notes-ext",
@@ -301,13 +322,13 @@ def test_runtime_control_api_supports_checkpoint_jobs_panels_and_ui_state(
             "position": "bottom",
         },
     )
-    assert text_panel_response.status_code == 200
+    assert text_panel_response.json()["ok"] is True
 
-    update_panel_response = client.patch(
-        "/api/control/ui/panels",
-        json={
-            "workspace_id": "default",
-            "panel_id": "notes",
+    update_panel_response = _run_control_command(
+        client,
+        "ui.panel.update",
+        target={"workspace_id": "default", "panel_id": "notes"},
+        args={
             "title": "Ranked Notes",
             "position": "right",
             "reference_panel_id": "label-histogram",
@@ -324,13 +345,14 @@ def test_runtime_control_api_supports_checkpoint_jobs_panels_and_ui_state(
             },
         },
     )
-    assert update_panel_response.status_code == 200
+    assert update_panel_response.json()["ok"] is True
 
     target_layout = job_b["result"]["layout_keys"][0]
-    scatter_panel_response = client.post(
-        "/api/control/ui/panels",
-        json={
-            "workspace_id": "default",
+    scatter_panel_response = _run_control_command(
+        client,
+        "ui.panel.add",
+        target={"workspace_id": "default"},
+        args={
             "panel_id": "experiment-b-scatter",
             "title": "Experiment B",
             "kind": "scatter",
@@ -340,7 +362,7 @@ def test_runtime_control_api_supports_checkpoint_jobs_panels_and_ui_state(
             "direction": "right",
         },
     )
-    assert scatter_panel_response.status_code == 200
+    assert scatter_panel_response.json()["ok"] is True
 
     set_layout_response = client.post(
         "/api/control/ui/layout",
@@ -421,15 +443,12 @@ def test_runtime_control_api_supports_checkpoint_jobs_panels_and_ui_state(
     assert panel_asset_response.status_code == 200
     assert "Label Histogram" in panel_asset_response.text
 
-    remove_scatter_response = client.request(
-        "DELETE",
-        "/api/control/ui/panels",
-        json={
-            "workspace_id": "default",
-            "panel_id": "experiment-b-scatter",
-        },
+    remove_scatter_response = _run_control_command(
+        client,
+        "ui.panel.remove",
+        target={"workspace_id": "default", "panel_id": "experiment-b-scatter"},
     )
-    assert remove_scatter_response.status_code == 200
+    assert remove_scatter_response.json()["ok"] is True
 
     after_remove_response = client.get("/api/runtime")
     assert after_remove_response.status_code == 200
@@ -446,10 +465,11 @@ def test_runtime_panel_patch_omits_or_clears_placement_fields() -> None:
     runtime.attach_dataset_instance(workspace_id, _make_dataset(), activate_workspace=True)
     client = TestClient(create_app(runtime=runtime))
 
-    response = client.post(
-        "/api/control/ui/panels",
-        json={
-            "workspace_id": workspace_id,
+    response = _run_control_command(
+        client,
+        "ui.panel.add",
+        target={"workspace_id": workspace_id},
+        args={
             "panel_id": "samples",
             "kind": "builtin",
             "builtin_panel": "samples",
@@ -460,28 +480,26 @@ def test_runtime_panel_patch_omits_or_clears_placement_fields() -> None:
             "min_width": 240,
         },
     )
-    assert response.status_code == 200
+    assert response.json()["ok"] is True
 
-    response = client.patch(
-        "/api/control/ui/panels",
-        json={
-            "workspace_id": workspace_id,
-            "panel_id": "samples",
-            "props": {"mode": "ranked"},
-        },
+    response = _run_control_command(
+        client,
+        "ui.panel.update",
+        target={"workspace_id": workspace_id, "panel_id": "samples"},
+        args={"props": {"mode": "ranked"}},
     )
-    assert response.status_code == 200
+    assert response.json()["ok"] is True
     panel = runtime.get_workspace(workspace_id).ui.custom_panels[0]
     assert panel.reference_panel_id == "map"
     assert panel.direction == "right"
     assert panel.width == 320
     assert panel.min_width == 240
 
-    response = client.patch(
-        "/api/control/ui/panels",
-        json={
-            "workspace_id": workspace_id,
-            "panel_id": "samples",
+    response = _run_control_command(
+        client,
+        "ui.panel.update",
+        target={"workspace_id": workspace_id, "panel_id": "samples"},
+        args={
             "position": "right",
             "reference_panel_id": None,
             "direction": None,
@@ -489,13 +507,189 @@ def test_runtime_panel_patch_omits_or_clears_placement_fields() -> None:
             "min_width": None,
         },
     )
-    assert response.status_code == 200
+    assert response.json()["ok"] is True
     panel = runtime.get_workspace(workspace_id).ui.custom_panels[0]
     assert panel.position == "right"
     assert panel.reference_panel_id is None
     assert panel.direction is None
     assert panel.width is None
     assert panel.min_width is None
+
+
+def test_runtime_snapshot_panel_contract_includes_state_and_layout(tmp_path: Path) -> None:
+    workspace_id = f"panel-contract-{time.time_ns()}"
+    runtime = HyperViewRuntime(
+        provider_registry=ProviderRegistry(tmp_path / "providers.json"),
+        workspace_registry=WorkspaceRegistry(tmp_path / "workspaces.json"),
+    )
+    runtime.attach_dataset_instance(workspace_id, _make_dataset(), activate_workspace=True)
+    runtime.add_runtime_panel(
+        workspace_id,
+        panel_id="samples",
+        kind="builtin",
+        builtin_panel="samples",
+        position="right",
+        width=360,
+        min_width=260,
+        props={"mode": "browse"},
+    )
+    runtime.patch_panel_state(
+        workspace_id,
+        "samples",
+        {"view": {"density": "compact"}},
+        source_client_id="test-client",
+    )
+
+    snapshot = runtime.snapshot(workspace_id)
+    panel = snapshot["workspace"]["ui"]["custom_panels"][0]
+
+    assert panel["id"] == "samples"
+    assert panel["panel_type"] == "samples"
+    assert panel["source"] == "builtin"
+    assert panel["props"] == {"mode": "browse"}
+    assert panel["state"] == {"view": {"density": "compact"}}
+    assert panel["state_revision"] == 1
+    assert panel["layout"] == {
+        "position": "right",
+        "reference_panel_id": None,
+        "direction": None,
+        "width": 360,
+        "height": None,
+        "min_width": 260,
+        "min_height": None,
+        "max_width": None,
+        "max_height": None,
+    }
+    assert snapshot["workspace"]["ui"]["panels"]["samples"] == {
+        "state": {"view": {"density": "compact"}},
+        "state_revision": 1,
+    }
+
+
+def test_extension_panel_definition_drives_runtime_panel_defaults(
+    tmp_path: Path,
+) -> None:
+    extension_dir = tmp_path / "readout-ext"
+    extension_dir.mkdir()
+    (extension_dir / "extension.toml").write_text(
+        """
+name = "readout"
+
+[[panels]]
+id = "summary"
+title = "Summary"
+label = "Summary card"
+panel_type = "analysis.summary"
+position = "right"
+file = "panel.js"
+commands = ["ui.panel.state.get", "custom.refresh"]
+queries = ["samples.query"]
+allow_multiple = false
+icon = "chart"
+category = "analysis"
+
+[panels.default_props]
+mode = "compact"
+
+[panels.default_state]
+collapsed = false
+threshold = 0.75
+
+[panels.default_layout]
+position = "bottom"
+height = 240
+min_height = 180
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (extension_dir / "panel.js").write_text(
+        "export default function Panel() { return null; }\n",
+        encoding="utf-8",
+    )
+    runtime = HyperViewRuntime(
+        provider_registry=ProviderRegistry(tmp_path / "providers.json"),
+        workspace_registry=WorkspaceRegistry(tmp_path / "workspaces.json"),
+    )
+    client = TestClient(create_app(runtime=runtime))
+
+    installation = runtime.install_extension("default", extension_dir, add_panels=True)
+    definition = runtime.get_panel_definition(
+        "analysis.summary",
+        source="extension",
+        extension="readout",
+    )
+    assert definition is not None
+
+    definition_payload = definition.to_dict()
+    assert definition_payload == installation.to_dict()["panel_definitions"][0]
+    assert definition_payload["label"] == "Summary card"
+    assert definition_payload["default_props"] == {"mode": "compact"}
+    assert definition_payload["default_state"] == {
+        "collapsed": False,
+        "threshold": 0.75,
+    }
+    assert definition_payload["default_layout"] == {
+        "position": "bottom",
+        "height": 240,
+        "min_height": 180,
+    }
+    assert definition_payload["commands"] == ["ui.panel.state.get", "custom.refresh"]
+    assert definition_payload["queries"] == ["samples.query"]
+    assert definition_payload["allow_multiple"] is False
+
+    workspace = runtime.get_workspace("default")
+    panel = workspace.ui.custom_panels[0]
+    assert panel.id == "summary"
+    assert panel.panel_type == "analysis.summary"
+    assert panel.source == "extension"
+    assert panel.extension == "readout"
+    assert panel.extension_panel == "summary"
+    assert panel.position == "bottom"
+    assert panel.height == 240
+    assert panel.min_height == 180
+    assert panel.props == {"mode": "compact"}
+    assert workspace.ui.panels["summary"].state == {
+        "collapsed": False,
+        "threshold": 0.75,
+    }
+    assert workspace.ui.panels["summary"].state_revision == 0
+
+    snapshot = runtime.snapshot("default")
+    definitions_by_type = {
+        item["panel_type"]: item for item in snapshot["panel_definitions"]
+    }
+    assert {"samples", "scatter", "analysis.summary"}.issubset(definitions_by_type)
+    assert snapshot["workspace"]["ui"]["custom_panels"][0]["state"] == {
+        "collapsed": False,
+        "threshold": 0.75,
+    }
+
+    response = client.get("/api/panel-definitions")
+    assert response.status_code == 200
+    endpoint_definitions = {
+        item["panel_type"]: item for item in response.json()["panel_definitions"]
+    }
+    assert endpoint_definitions["analysis.summary"] == definition_payload
+
+    runtime.remove_custom_panel("default", "summary")
+    runtime.add_runtime_panel(
+        "default",
+        panel_id="summary-manual",
+        kind="extension",
+        extension="readout",
+        extension_panel="summary",
+    )
+    manual_panel = runtime.get_workspace("default").ui.custom_panels[0]
+    assert manual_panel.id == "summary-manual"
+    assert manual_panel.position == "bottom"
+    assert manual_panel.height == 240
+    assert manual_panel.min_height == 180
+    assert manual_panel.props == {"mode": "compact"}
+    assert runtime.get_workspace("default").ui.panels["summary-manual"].state == {
+        "collapsed": False,
+        "threshold": 0.75,
+    }
 
 
 def test_runtime_panel_builder_matches_public_ui_compilation(tmp_path: Path) -> None:
@@ -520,7 +714,7 @@ def test_runtime_panel_builder_matches_public_ui_compilation(tmp_path: Path) -> 
     )
     runtime.install_extension("default", tmp_path / "readout-ext")
 
-    rest_specs = [
+    runtime_specs = [
         runtime.build_custom_panel(
             "default",
             panel_id="map",
@@ -578,13 +772,13 @@ def test_runtime_panel_builder_matches_public_ui_compilation(tmp_path: Path) -> 
         workspace_id="default",
     )
 
-    assert [spec.to_dict() for spec in rest_specs] == [spec.to_dict() for spec in ui_specs]
-    assert rest_specs[0].geometry == "euclidean"
-    assert rest_specs[0].layout_dimension == 2
-    assert rest_specs[2].module_file == str(panel_file.resolve())
+    assert [spec.to_dict() for spec in runtime_specs] == [spec.to_dict() for spec in ui_specs]
+    assert runtime_specs[0].geometry == "euclidean"
+    assert runtime_specs[0].layout_dimension == 2
+    assert runtime_specs[2].module_file == str(panel_file.resolve())
 
 
-def test_rest_scatter_panel_requires_existing_layout(tmp_path: Path) -> None:
+def test_panel_add_command_requires_existing_layout(tmp_path: Path) -> None:
     runtime = HyperViewRuntime(
         provider_registry=ProviderRegistry(tmp_path / "providers.json"),
         workspace_registry=WorkspaceRegistry(tmp_path / "workspaces.json"),
@@ -592,10 +786,11 @@ def test_rest_scatter_panel_requires_existing_layout(tmp_path: Path) -> None:
     runtime.attach_dataset_instance("default", _make_dataset())
     client = TestClient(create_app(runtime=runtime))
 
-    response = client.post(
-        "/api/control/ui/panels",
-        json={
-            "workspace_id": "default",
+    response = _run_control_command(
+        client,
+        "ui.panel.add",
+        target={"workspace_id": "default"},
+        args={
             "panel_id": "missing-layout",
             "title": "Missing Layout",
             "kind": "scatter",
@@ -603,8 +798,15 @@ def test_rest_scatter_panel_requires_existing_layout(tmp_path: Path) -> None:
         },
     )
 
-    assert response.status_code == 404
-    assert response.json()["detail"] == "Layout not found: missing-layout"
+    assert response.json() == {
+        "ok": False,
+        "command": "ui.panel.add",
+        "result": {},
+        "error": {
+            "code": "not_found",
+            "message": "Layout not found: missing-layout",
+        },
+    }
 
 
 def test_runtime_embedding_job_uses_injected_provider_registry(tmp_path: Path) -> None:
@@ -661,7 +863,8 @@ def test_health_reports_package_version() -> None:
     assert response.json()["version"] == __version__
 
 
-def test_ui_similarity_query_is_explicit_and_cleared_with_selection() -> None:
+def test_ui_similarity_query_is_explicit_and_cleared_with_selection(tmp_path: Path) -> None:
+    workspace_id = f"similarity-ui-{time.time_ns()}"
     dataset = _make_dataset()
     ids = [sample.id for sample in dataset]
     layout_key = dataset.set_coords(
@@ -671,15 +874,19 @@ def test_ui_similarity_query_is_explicit_and_cleared_with_selection() -> None:
     )
     space_key = dataset.list_layouts()[0].space_key
 
-    runtime = HyperViewRuntime()
-    runtime.attach_dataset_instance("default", dataset)
-    runtime.set_selection("default", ["sample-2"])
+    runtime = HyperViewRuntime(
+        provider_registry=ProviderRegistry(tmp_path / "providers.json"),
+        workspace_registry=WorkspaceRegistry(tmp_path / "workspaces.json"),
+    )
+    runtime.attach_dataset_instance(workspace_id, dataset, activate_workspace=True)
+    runtime.set_selection(workspace_id, ["sample-2"])
     client = TestClient(create_app(runtime=runtime))
 
-    response = client.post(
-        "/api/control/ui/similarity",
-        json={
-            "workspace_id": "default",
+    response = _run_control_command(
+        client,
+        "samples.retrieval.set-anchor",
+        target={"workspace_id": workspace_id},
+        args={
             "sample_id": "sample-2",
             "layout_key": layout_key,
             "k": 12,
@@ -687,30 +894,37 @@ def test_ui_similarity_query_is_explicit_and_cleared_with_selection() -> None:
         },
     )
 
-    assert response.status_code == 200
+    assert response.json()["ok"] is True
     ui = response.json()["workspace"]["ui"]
     assert ui["selected_ids"] == []
-    assert ui["similarity_query"] == {
+    expected_retrieval = {
         "anchor_sample_id": "sample-2",
         "layout_key": layout_key,
         "space_key": space_key,
         "k": 12,
         "source": "test",
     }
+    samples_state = ui["panels"]["samples"]["state"]
+    assert samples_state["mode"] == "retrieval"
+    assert samples_state["retrieval"] == expected_retrieval
+    assert ui["similarity_query"] == expected_retrieval
+    assert samples_state["collection"]["kind"] == "neighbors"
 
     selection_response = client.post(
         "/api/control/ui/selection",
-        json={"workspace_id": "default", "sample_ids": ["sample-3"]},
+        json={"workspace_id": workspace_id, "sample_ids": ["sample-3"]},
     )
     assert selection_response.status_code == 200
-    assert selection_response.json()["workspace"]["ui"]["similarity_query"] is None
+    selection_ui = selection_response.json()["workspace"]["ui"]
+    assert selection_ui["similarity_query"] is None
+    assert selection_ui["panels"]["samples"]["state"] == {}
 
-    clear_response = client.request(
-        "DELETE",
-        "/api/control/ui/similarity",
-        json={"workspace_id": "default"},
+    clear_response = _run_control_command(
+        client,
+        "samples.retrieval.clear",
+        target={"workspace_id": workspace_id},
     )
-    assert clear_response.status_code == 200
+    assert clear_response.json()["ok"] is True
     assert clear_response.json()["workspace"]["ui"]["similarity_query"] is None
 
 
@@ -745,8 +959,14 @@ def test_workspace_load_drops_legacy_similarity_anchor_selection(tmp_path: Path)
 
     assert workspace is not None
     assert workspace.ui.selected_ids == []
+    samples_retrieval = workspace.ui.panels["samples"].state["retrieval"]
+    assert samples_retrieval["anchor_sample_id"] == "sample-2"
     assert workspace.ui.similarity_query is not None
-    assert workspace.ui.similarity_query.anchor_sample_id == "sample-2"
+    assert workspace.ui.similarity_query.to_dict() == samples_retrieval
+    assert workspace.ui.panels["samples"].state == {
+        "mode": "retrieval",
+        "retrieval": samples_retrieval,
+    }
 
 
 def test_ui_similarity_query_rejects_mismatched_layout_and_space() -> None:
@@ -762,21 +982,29 @@ def test_ui_similarity_query_rejects_mismatched_layout_and_space() -> None:
     runtime.attach_dataset_instance("default", dataset)
     client = TestClient(create_app(runtime=runtime))
 
-    response = client.post(
-        "/api/control/ui/similarity",
-        json={
-            "workspace_id": "default",
+    response = _run_control_command(
+        client,
+        "samples.retrieval.set-anchor",
+        target={"workspace_id": "default"},
+        args={
             "sample_id": "sample-2",
             "layout_key": layout_key,
             "space_key": "different-space",
         },
     )
 
-    assert response.status_code == 400
-    assert response.json()["detail"] == "space_key does not match the requested layout_key"
+    assert response.json() == {
+        "ok": False,
+        "command": "samples.retrieval.set-anchor",
+        "result": {},
+        "error": {
+            "code": "validation_error",
+            "message": "space_key does not match the requested layout_key",
+        },
+    }
 
 
-def test_ui_state_patch_batches_layout_selection_and_similarity() -> None:
+def test_ui_state_patch_batches_layout_and_selection() -> None:
     dataset = _make_dataset()
     ids = [sample.id for sample in dataset]
     layout_key = dataset.set_coords(
@@ -784,10 +1012,15 @@ def test_ui_state_patch_batches_layout_selection_and_similarity() -> None:
         ids,
         [[float(index), float(index % 2)] for index, _ in enumerate(ids)],
     )
-    space_key = dataset.list_layouts()[0].space_key
-
     runtime = HyperViewRuntime()
     runtime.attach_dataset_instance("default", dataset)
+    runtime.patch_ui_state(
+        "default",
+        set_active_layout=True,
+        active_layout_key=layout_key,
+        set_selection=True,
+        selected_ids=["sample-1"],
+    )
     before_version = runtime.version
     client = TestClient(create_app(runtime=runtime))
 
@@ -796,16 +1029,9 @@ def test_ui_state_patch_batches_layout_selection_and_similarity() -> None:
         json={
             "workspace_id": "default",
             "set_active_layout": True,
-            "active_layout_key": layout_key,
+            "active_layout_key": None,
             "set_selection": True,
-            "selected_ids": ["sample-2"],
-            "set_similarity_query": True,
-            "similarity_query": {
-                "sample_id": "sample-2",
-                "layout_key": layout_key,
-                "k": 12,
-                "source": "test",
-            },
+            "selected_ids": ["sample-5"],
         },
     )
 
@@ -813,15 +1039,9 @@ def test_ui_state_patch_batches_layout_selection_and_similarity() -> None:
     assert runtime.version == before_version + 1
     assert runtime.version_source_client_id is None
     ui = response.json()["workspace"]["ui"]
-    assert ui["active_layout_key"] == layout_key
-    assert ui["selected_ids"] == []
-    assert ui["similarity_query"] == {
-        "anchor_sample_id": "sample-2",
-        "layout_key": layout_key,
-        "space_key": space_key,
-        "k": 12,
-        "source": "test",
-    }
+    assert ui["active_layout_key"] is None
+    assert ui["selected_ids"] == ["sample-5"]
+    assert ui["similarity_query"] is None
 
     sourced_response = client.patch(
         "/api/control/ui/state",
@@ -829,14 +1049,14 @@ def test_ui_state_patch_batches_layout_selection_and_similarity() -> None:
             "workspace_id": "default",
             "client_id": "client-1",
             "set_active_layout": True,
-            "active_layout_key": None,
+            "active_layout_key": layout_key,
         },
     )
     assert sourced_response.status_code == 200
     assert runtime.version_source_client_id == "client-1"
 
 
-def test_ui_state_patch_similarity_clears_selection() -> None:
+def test_ui_state_patch_rejects_samples_retrieval_fields() -> None:
     dataset = _make_dataset()
     ids = [sample.id for sample in dataset]
     layout_key = dataset.set_coords(
@@ -847,6 +1067,7 @@ def test_ui_state_patch_similarity_clears_selection() -> None:
 
     runtime = HyperViewRuntime()
     runtime.attach_dataset_instance("default", dataset)
+    initial_selected_ids = list(runtime.get_workspace("default").ui.selected_ids)
     client = TestClient(create_app(runtime=runtime))
 
     response = client.patch(
@@ -863,10 +1084,10 @@ def test_ui_state_patch_similarity_clears_selection() -> None:
         },
     )
 
-    assert response.status_code == 200
-    ui = response.json()["workspace"]["ui"]
-    assert ui["selected_ids"] == []
-    assert ui["similarity_query"]["anchor_sample_id"] == "sample-2"
+    assert response.status_code == 422
+    workspace = runtime.get_workspace("default")
+    assert workspace.ui.selected_ids == initial_selected_ids
+    assert workspace.ui.similarity_query is None
 
 
 def test_sample_responses_include_media_url_and_content_endpoint_serves_file(
@@ -925,6 +1146,29 @@ def test_sample_responses_include_media_url_and_content_endpoint_serves_file(
     )
     assert inline_batch_response.status_code == 200
     assert inline_batch_response.json()["samples"][0]["thumbnail"] is not None
+
+
+def test_samples_endpoint_filters_missing_labels() -> None:
+    dataset = Dataset("runtime_missing_labels", persist=False)
+    dataset.add_samples(
+        [
+            Sample(id="sample-1", filepath="/virtual/sample-1.png", label="cat"),
+            Sample(id="sample-2", filepath="/virtual/sample-2.png"),
+            Sample(id="sample-3", filepath="/virtual/sample-3.png", label="dog"),
+        ]
+    )
+
+    runtime = HyperViewRuntime()
+    runtime.attach_dataset_instance("default", dataset)
+    client = TestClient(create_app(runtime=runtime))
+
+    response = client.get("/api/samples", params={"missing_label": "true"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert [sample["id"] for sample in payload["samples"]] == ["sample-2"]
+    assert payload["samples"][0]["label"] is None
 
 
 def test_samples_batch_allows_exact_id_reads_larger_than_page_limit() -> None:
@@ -995,10 +1239,11 @@ def test_set_workspace_dataset_clears_dataset_scoped_ui_state(tmp_path: Path, mo
     runtime.attach_dataset_instance("default", _make_dataset())
     runtime.set_active_layout("default", "layout-a")
     runtime.set_selection("default", ["sample-1", "sample-3"])
-    runtime.set_similarity_query(
+    runtime.set_samples_retrieval(
         "default",
         runtime.resolve_similarity_query("default", "sample-1", source="test"),
     )
+    assert runtime.get_workspace("default").ui.panels["samples"].state["mode"] == "retrieval"
 
     workspace = runtime.set_workspace_dataset("default", "second-dataset")
 
@@ -1006,12 +1251,14 @@ def test_set_workspace_dataset_clears_dataset_scoped_ui_state(tmp_path: Path, mo
     assert workspace.ui.active_layout_key is None
     assert workspace.ui.selected_ids == []
     assert workspace.ui.similarity_query is None
+    assert workspace.ui.panels == {}
 
     snapshot = runtime.snapshot()
     assert snapshot["workspace"]["dataset_name"] == "second-dataset"
     assert snapshot["workspace"]["ui"]["active_layout_key"] is None
     assert snapshot["workspace"]["ui"]["selected_ids"] == []
     assert snapshot["workspace"]["ui"]["similarity_query"] is None
+    assert snapshot["workspace"]["ui"]["panels"] == {}
 
 
 def test_runtime_panel_module_src_changes_when_module_file_changes(

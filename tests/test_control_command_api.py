@@ -1,0 +1,116 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from hyperview.runtime import HyperViewRuntime, ProviderRegistry, WorkspaceRegistry
+from hyperview.server.app import create_app
+
+
+def _client_with_panel(tmp_path: Path) -> TestClient:
+    runtime = HyperViewRuntime(
+        provider_registry=ProviderRegistry(tmp_path / "providers.json"),
+        workspace_registry=WorkspaceRegistry(tmp_path / "workspaces.json"),
+    )
+    runtime.add_runtime_panel(
+        "default",
+        panel_id="samples",
+        kind="builtin",
+        builtin_panel="samples",
+        position="right",
+        width=320,
+        min_width=240,
+    )
+    return TestClient(create_app(runtime=runtime))
+
+
+def test_control_commands_endpoint_lists_backend_panel_commands(tmp_path: Path) -> None:
+    client = _client_with_panel(tmp_path)
+
+    response = client.get("/api/control/commands")
+
+    assert response.status_code == 200
+    command_ids = {command["id"] for command in response.json()["commands"]}
+    assert {
+        "ui.panel.resize",
+        "ui.panel.move",
+        "ui.panel.close",
+        "ui.panel.show",
+        "ui.panel.focus",
+        "ui.panel.add",
+        "ui.panel.update",
+        "ui.panel.remove",
+        "ui.panel.state.get",
+        "ui.panel.state.patch",
+        "samples.retrieval.set-anchor",
+        "samples.retrieval.set-text-query",
+        "samples.retrieval.clear",
+        "samples.retrieval.set-k",
+        "panel.labels.filter",
+        "panel.samples.show-neighbors",
+    }.issubset(command_ids)
+    commands = {command["id"]: command for command in response.json()["commands"]}
+    add_kind_schema = commands["ui.panel.add"]["args_schema"]["properties"]["kind"]
+    assert "module" not in add_kind_schema["enum"]
+    builtin_panel_schema = commands["ui.panel.add"]["args_schema"]["properties"][
+        "builtin_panel"
+    ]
+    assert "samples" not in str(builtin_panel_schema.get("enum", ""))
+
+
+def test_control_command_run_mutates_runtime_panel_state(tmp_path: Path) -> None:
+    client = _client_with_panel(tmp_path)
+
+    resize_response = client.post(
+        "/api/control/commands/run",
+        json={
+            "command": "ui.panel.resize",
+            "target": {"workspace_id": "default", "panel_id": "samples"},
+            "args": {"width": 420, "min_width": None},
+        },
+    )
+
+    assert resize_response.status_code == 200
+    resize_payload = resize_response.json()
+    assert resize_payload["ok"] is True
+    assert resize_payload["workspace"]["ui"]["custom_panels"][0]["width"] == 420
+    assert resize_payload["workspace"]["ui"]["custom_panels"][0]["min_width"] is None
+
+    focus_response = client.post(
+        "/api/control/commands/run",
+        json={
+            "command": "ui.panel.focus",
+            "target": {"workspace_id": "default", "panel_id": "samples"},
+        },
+    )
+
+    assert focus_response.status_code == 200
+    focus_payload = focus_response.json()
+    assert focus_payload["ok"] is True
+    assert focus_payload["workspace"]["ui"]["active_panel_id"] == "samples"
+
+
+def test_control_command_run_returns_machine_readable_errors(tmp_path: Path) -> None:
+    client = _client_with_panel(tmp_path)
+
+    response = client.post(
+        "/api/control/commands/run",
+        json={
+            "command": "ui.panel.resize",
+            "target": {"workspace_id": "default", "panel_id": "missing"},
+            "args": {"width": 420},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "not_found"
+
+
+def test_panel_rest_adapter_routes_are_not_registered(tmp_path: Path) -> None:
+    client = _client_with_panel(tmp_path)
+
+    route_paths = {getattr(route, "path", "") for route in client.app.routes}
+    assert not any(path.startswith("/api/control/ui/panels") for path in route_paths)

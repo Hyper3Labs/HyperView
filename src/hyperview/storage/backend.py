@@ -30,6 +30,7 @@ class StorageBackend(ABC):
         offset: int = 0,
         limit: int = 100,
         label: str | None = None,
+        missing_label: bool = False,
     ) -> tuple[list[Sample], int]:
         """Get paginated samples. Returns (samples, total_count)."""
 
@@ -171,6 +172,7 @@ class StorageBackend(ABC):
         y_min: float,
         y_max: float,
         label_filter: str | None = None,
+        missing_label_filter: bool = False,
     ) -> tuple[list[str], np.ndarray]:
         """Return candidate (id, xy) rows within an axis-aligned bounding box."""
 
@@ -191,6 +193,26 @@ class StorageBackend(ABC):
         space_key: str | None = None,
     ) -> list[tuple[Sample, float]]:
         """Find k nearest neighbors to a query vector."""
+
+    def find_similar_by_text(
+        self,
+        text: str,
+        k: int = 10,
+        space_key: str | None = None,
+        *,
+        query_vector: np.ndarray | None = None,
+    ) -> list[tuple[Sample, float]]:
+        """Find k nearest neighbors to a text query vector.
+
+        Storage backends do not encode text themselves. Callers should pass a
+        precomputed ``query_vector`` from the active embedding space.
+        """
+        if query_vector is None:
+            raise ValueError(
+                "query_vector is required for find_similar_by_text; "
+                "encode text with the dataset's embedding model first"
+            )
+        return self.find_similar_by_vector(query_vector, k, space_key)
 
     @abstractmethod
     def close(self) -> None:

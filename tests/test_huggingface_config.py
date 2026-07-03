@@ -260,6 +260,7 @@ def test_cli_dataset_create_forwards_hf_subset_config(monkeypatch, capsys) -> No
             "image_key": "image",
             "label_key": "label",
             "label_names_key": None,
+            "text_key": None,
             "max_samples": 100,
             "shuffle": True,
             "seed": 42,

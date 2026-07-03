@@ -10,6 +10,7 @@ import { SampleGridView } from "@/components/SampleGridView";
 import {
   fetchSamplesBatch,
   fetchSimilarSamples,
+  fetchTextSimilarSamples,
   isAbortError,
 } from "@/lib/api";
 import { findLayoutByKey } from "@/lib/layouts";
@@ -29,7 +30,10 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
-import { defineBuiltInCenterPanel } from "@/panels/definitions";
+import {
+  createBuiltInPanelContract,
+  defineBuiltInCenterPanel,
+} from "@/panels/definitions";
 import { useStore } from "@/store/useStore";
 import type { Sample, SimilarSample } from "@/types";
 
@@ -44,6 +48,7 @@ type SamplesPanelMode = "auto" | "browse" | "ranked";
 
 interface SamplesPanelRankParams extends Record<string, unknown> {
   anchorSampleId?: string;
+  queryText?: string;
   layoutKey?: string;
   spaceKey?: string;
   k?: number;
@@ -92,7 +97,8 @@ function useRankedSamplesPanel(rank: SamplesPanelRankParams | undefined, enabled
     () => getRankAnchorFromSelection(selectedIds),
     [selectedIds]
   );
-  const anchorSampleId = enabled ? rank?.anchorSampleId ?? selectedAnchorId : null;
+  const queryText = enabled ? rank?.queryText ?? null : null;
+  const anchorSampleId = enabled && !queryText ? rank?.anchorSampleId ?? selectedAnchorId : null;
   const layoutKey = rank?.layoutKey;
   const spaceKey = rank?.spaceKey;
 
@@ -106,10 +112,10 @@ function useRankedSamplesPanel(rank: SamplesPanelRankParams | undefined, enabled
 
   React.useEffect(() => {
     setLimit(configuredLimit);
-  }, [configuredLimit, anchorSampleId, layoutKey, spaceKey]);
+  }, [configuredLimit, anchorSampleId, queryText, layoutKey, spaceKey]);
 
   React.useEffect(() => {
-    if (!enabled || !anchorSampleId) {
+    if (!enabled || (!anchorSampleId && !queryText)) {
       setAnchorSample(null);
       setRankedSamples([]);
       setMetric(null);
@@ -123,27 +129,41 @@ function useRankedSamplesPanel(rank: SamplesPanelRankParams | undefined, enabled
     setLoading(true);
     setError(null);
 
-    const fetchAnchor = loadedAnchorSample
-      ? Promise.resolve(loadedAnchorSample)
-      : fetchSamplesBatch([anchorSampleId]).then((samples) => samples[0] ?? null);
+    const rankedPromise = queryText
+      ? fetchTextSimilarSamples(queryText, {
+          k: limit,
+          layoutKey,
+          spaceKey: layoutKey ? undefined : spaceKey,
+          includeThumbnails: false,
+          signal: abort.signal,
+        }).then((response) => ({
+          anchor: null as Sample | null,
+          results: response.results,
+          metric: response.metric,
+        }))
+      : Promise.all([
+          (loadedAnchorSample
+            ? Promise.resolve(loadedAnchorSample)
+            : fetchSamplesBatch([anchorSampleId!]).then((samples) => samples[0] ?? null)),
+          fetchSimilarSamples(anchorSampleId!, {
+            k: limit,
+            layoutKey,
+            spaceKey: layoutKey ? undefined : spaceKey,
+            includeThumbnails: false,
+            signal: abort.signal,
+          }),
+        ]).then(([nextAnchorSample, response]) => ({
+          anchor: nextAnchorSample,
+          results: response.results.filter((sample) => sample.id !== anchorSampleId),
+          metric: response.metric,
+        }));
 
-    Promise.all([
-      fetchAnchor,
-      fetchSimilarSamples(anchorSampleId, {
-        k: limit,
-        layoutKey,
-        spaceKey: layoutKey ? undefined : spaceKey,
-        includeThumbnails: false,
-        signal: abort.signal,
-      }),
-    ])
-      .then(([nextAnchorSample, response]) => {
+    rankedPromise
+      .then(({ anchor, results, metric }) => {
         if (cancelled || abort.signal.aborted) return;
-        setAnchorSample(nextAnchorSample);
-        setRankedSamples(
-          response.results.filter((sample) => sample.id !== anchorSampleId)
-        );
-        setMetric(response.metric);
+        setAnchorSample(anchor);
+        setRankedSamples(results);
+        setMetric(metric);
       })
       .catch((err) => {
         if (cancelled || isAbortError(err)) return;
@@ -162,9 +182,10 @@ function useRankedSamplesPanel(rank: SamplesPanelRankParams | undefined, enabled
       cancelled = true;
       abort.abort();
     };
-  }, [anchorSampleId, enabled, layoutKey, limit, loadedAnchorSample, spaceKey]);
+  }, [anchorSampleId, enabled, layoutKey, limit, loadedAnchorSample, queryText, spaceKey]);
 
   const sourceDescription = React.useMemo(() => {
+    if (queryText) return `"${queryText}"`;
     if (!datasetInfo) return rank?.source ?? null;
     const layout = layoutKey ? findLayoutByKey(datasetInfo.layouts, layoutKey) : null;
     const resolvedSpaceKey = spaceKey ?? layout?.space_key ?? null;
@@ -181,6 +202,7 @@ function useRankedSamplesPanel(rank: SamplesPanelRankParams | undefined, enabled
 
   return {
     anchorSampleId,
+    queryText,
     anchorSample,
     rankedSamples,
     metric,
@@ -192,11 +214,68 @@ function useRankedSamplesPanel(rank: SamplesPanelRankParams | undefined, enabled
     scrollResetKey: [
       "ranked",
       anchorSampleId ?? "none",
+      queryText ?? "none",
       layoutKey ?? "none",
       spaceKey ?? "none",
       limit,
     ].join(":"),
   };
+}
+
+function SamplesTextSearchBar() {
+  const { searchByText, clearQueryContext } = usePanelCommands();
+  const [query, setQuery] = React.useState("");
+  const [submitting, setSubmitting] = React.useState(false);
+
+  const handleSubmit = React.useCallback(
+    async (event: React.FormEvent) => {
+      event.preventDefault();
+      const trimmed = query.trim();
+      if (!trimmed) return;
+      setSubmitting(true);
+      try {
+        await searchByText({ queryText: trimmed, source: "samples-panel" });
+      } catch (error) {
+        console.error("Failed to run text search:", error);
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [query, searchByText]
+  );
+
+  return (
+    <form
+      onSubmit={handleSubmit}
+      className="flex items-center gap-2 border-b border-border px-3 py-2"
+    >
+      <input
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        placeholder="Search by text…"
+        className="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-sm outline-none ring-offset-background focus-visible:ring-2 focus-visible:ring-ring"
+      />
+      <button
+        type="submit"
+        disabled={submitting || query.trim().length === 0}
+        className="h-8 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground disabled:opacity-50"
+      >
+        Search
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setQuery("");
+          void clearQueryContext().catch((error) => {
+            console.error("Failed to clear text search:", error);
+          });
+        }}
+        className="h-8 rounded-md border border-input px-3 text-xs text-muted-foreground"
+      >
+        Clear
+      </button>
+    </form>
+  );
 }
 
 export const SamplesImageGridPanel = React.memo(function SamplesImageGridPanel(
@@ -224,7 +303,15 @@ export const SamplesImageGridPanel = React.memo(function SamplesImageGridPanel(
             label: "Results",
             value: rankedPanel.rankedSamples.length.toLocaleString(),
           },
-          ...(rankedPanel.anchorSampleId
+          ...(rankedPanel.queryText
+            ? [
+                {
+                  id: "query",
+                  label: "Query",
+                  value: rankedPanel.queryText,
+                } satisfies PanelToolbarItem,
+              ]
+            : rankedPanel.anchorSampleId
             ? [
                 {
                   id: "anchor",
@@ -263,6 +350,7 @@ export const SamplesImageGridPanel = React.memo(function SamplesImageGridPanel(
       collection.meta.source,
       collection.total,
       rankedPanel.anchorSampleId,
+      rankedPanel.queryText,
       rankedPanel.rankedSamples.length,
       showRankedPanel,
     ]
@@ -308,26 +396,41 @@ export const SamplesImageGridPanel = React.memo(function SamplesImageGridPanel(
       <PanelToolbar items={toolbarItems} actions={toolbarActions} />
 
       {showRankedPanel ? (
-        !rankedPanel.anchorSampleId ? (
+        !rankedPanel.anchorSampleId && !rankedPanel.queryText ? (
           <SampleCollectionState
             title="No rank anchor"
-            description="Select one sample or set rank.anchorSampleId in this panel's props."
+            description="Select one sample, run a text search, or set rank props on this panel."
           />
-        ) : rankedPanel.anchorSample === null && rankedPanel.loading ? (
+        ) : rankedPanel.queryText && rankedPanel.loading && rankedPanel.rankedSamples.length === 0 ? (
+          <SampleCollectionState
+            tone="loading"
+            title="Searching by text"
+            description={`Finding matches for "${rankedPanel.queryText}".`}
+          />
+        ) : !rankedPanel.queryText && rankedPanel.anchorSample === null && rankedPanel.loading ? (
           <SampleCollectionState
             tone="loading"
             title="Loading ranked samples"
             description="Resolving the anchor and ranking candidates."
           />
-        ) : rankedPanel.anchorSample === null ? (
+        ) : !rankedPanel.queryText && rankedPanel.anchorSample === null ? (
           <SampleCollectionState
             tone="error"
             title="Could not load rank anchor"
-            description={rankedPanel.error ?? rankedPanel.anchorSampleId}
+            description={rankedPanel.error ?? rankedPanel.anchorSampleId ?? "Unknown anchor"}
+          />
+        ) : rankedPanel.queryText ? (
+          <SampleGridView
+            samples={rankedPanel.rankedSamples}
+            onLoadMore={rankedPanel.loadMore}
+            hasMore={rankedPanel.hasMore}
+            scrollResetKey={rankedPanel.scrollResetKey}
+            showRankSimilarityBadge
+            distanceMetric={rankedPanel.metric}
           />
         ) : (
           <SampleDerivedSpace
-            selectionSamples={[rankedPanel.anchorSample]}
+            selectionSamples={[rankedPanel.anchorSample!]}
             neighborSamples={rankedPanel.rankedSamples}
             neighborsMetric={rankedPanel.metric}
             neighborsSourceLabel={rankedPanel.sourceDescription}
@@ -352,6 +455,8 @@ export const SamplesImageGridPanel = React.memo(function SamplesImageGridPanel(
           neighborsScrollResetKey={derivedSpace.neighborsScrollResetKey}
         />
       ) : null}
+
+      {!showRankedPanel ? <SamplesTextSearchBar /> : null}
 
       {showRankedPanel ? null : collection.error ? (
         <SampleCollectionState
@@ -389,9 +494,27 @@ SamplesImageGridPanel.displayName = "SamplesImageGridPanel";
 
 export const samplesImageGridBuiltInPanel = defineBuiltInCenterPanel({
   id: "grid",
+  panelType: "samples",
   component: "grid",
   title: "Samples",
   label: "Samples",
+  contract: createBuiltInPanelContract({
+    panelType: "samples",
+    label: "Samples",
+    title: "Samples",
+    defaultLayout: { position: "right" },
+    commands: [
+      "ui.panel.state.get",
+      "ui.panel.state.patch",
+      "samples.retrieval.set-anchor",
+      "samples.retrieval.set-text-query",
+      "samples.retrieval.set-k",
+      "samples.retrieval.clear",
+    ],
+    queries: ["samples.query", "samples.similar"],
+    icon: "grid",
+    category: "dataset",
+  }),
   icon: Grid3X3,
   tabComponent: "samplesTab",
   Component: SamplesImageGridPanel,

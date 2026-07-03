@@ -46,9 +46,12 @@ class MemoryBackend(StorageBackend):
         offset: int = 0,
         limit: int = 100,
         label: str | None = None,
+        missing_label: bool = False,
     ) -> tuple[list[Sample], int]:
         samples = list(self._samples.values())
-        if label:
+        if missing_label:
+            samples = [s for s in samples if not s.label]
+        elif label:
             samples = [s for s in samples if s.label == label]
         total = len(samples)
         return samples[offset : offset + limit], total
@@ -246,6 +249,7 @@ class MemoryBackend(StorageBackend):
         y_min: float,
         y_max: float,
         label_filter: str | None = None,
+        missing_label_filter: bool = False,
     ) -> tuple[list[str], np.ndarray]:
         if parse_layout_dimension(layout_key) != 2:
             raise ValueError(
@@ -255,7 +259,11 @@ class MemoryBackend(StorageBackend):
         layout_store = self._layouts.get(layout_key, {})
         ids, coords = [], []
         for id_, coord in layout_store.items():
-            if label_filter is not None:
+            if missing_label_filter:
+                sample = self._samples.get(id_)
+                if sample is None or sample.label:
+                    continue
+            elif label_filter is not None:
                 sample = self._samples.get(id_)
                 if sample is None or sample.label != label_filter:
                     continue

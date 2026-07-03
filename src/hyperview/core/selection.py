@@ -267,11 +267,23 @@ def select_ids_for_3d_lasso(
     viewport_width: int,
     viewport_height: int,
     label_filter: str | None,
+    missing_label_filter: bool = False,
 ) -> list[str]:
     width = max(1, int(viewport_width))
     height = max(1, int(viewport_height))
 
-    if label_filter is not None:
+    if missing_label_filter:
+        label_mask = np.fromiter(
+            (not label for label in labels),
+            dtype=bool,
+            count=len(labels),
+        )
+        if not np.any(label_mask):
+            return []
+        kept_indices = np.flatnonzero(label_mask)
+        ids = [ids[int(i)] for i in kept_indices]
+        coords = coords[label_mask]
+    elif label_filter is not None:
         label_mask = np.fromiter(
             (label == label_filter for label in labels),
             dtype=bool,

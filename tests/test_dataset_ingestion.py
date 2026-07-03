@@ -153,6 +153,7 @@ def test_lancedb_backend_indexes_filter_columns_and_counts_filtered_rows(tmp_pat
             Sample(id="a", filepath="/tmp/a.png", label="cat"),
             Sample(id="b", filepath="/tmp/b.png", label="dog"),
             Sample(id="c", filepath="/tmp/c.png", label="kid's label"),
+            Sample(id="d", filepath="/tmp/d.png"),
         ]
     )
 
@@ -160,6 +161,9 @@ def test_lancedb_backend_indexes_filter_columns_and_counts_filtered_rows(tmp_pat
 
     assert total == 1
     assert [sample.id for sample in filtered] == ["c"]
+    missing_filtered, missing_total = storage.get_samples_paginated(missing_label=True)
+    assert missing_total == 1
+    assert [sample.id for sample in missing_filtered] == ["d"]
     sample_indices = {
         index.columns[0]: index.index_type.lower()
         for index in storage._samples_table.list_indices()
@@ -170,8 +174,8 @@ def test_lancedb_backend_indexes_filter_columns_and_counts_filtered_rows(tmp_pat
     storage.ensure_layout("demo_space__euclidean_umap__2d", "demo_space", "umap", "euclidean")
     storage.add_layout_coords(
         "demo_space__euclidean_umap__2d",
-        ["a", "b", "c"],
-        [[0.0, 0.0], [5.0, 5.0], [1.0, 1.0]],
+        ["a", "b", "c", "d"],
+        [[0.0, 0.0], [5.0, 5.0], [1.0, 1.0], [1.5, 1.5]],
     )
 
     candidate_ids, coords = storage.get_lasso_candidates_aabb(
@@ -185,6 +189,18 @@ def test_lancedb_backend_indexes_filter_columns_and_counts_filtered_rows(tmp_pat
 
     assert candidate_ids == ["c"]
     assert coords.tolist() == [[1.0, 1.0]]
+
+    missing_candidate_ids, missing_coords = storage.get_lasso_candidates_aabb(
+        layout_key="demo_space__euclidean_umap__2d",
+        x_min=-1.0,
+        x_max=2.0,
+        y_min=-1.0,
+        y_max=2.0,
+        missing_label_filter=True,
+    )
+
+    assert missing_candidate_ids == ["d"]
+    assert missing_coords.tolist() == [[1.5, 1.5]]
     layout_table = storage._db.open_table("layouts__demo_space__euclidean_umap__2d")
     layout_indices = {
         index.columns[0]: index.index_type.lower() for index in layout_table.list_indices()

@@ -89,3 +89,41 @@ def test_3d_lasso_label_filter_excludes_hidden_occluders() -> None:
     )
 
     assert selected_ids == ["back-cat"]
+
+
+def test_3d_lasso_missing_label_filter_excludes_labeled_occluders() -> None:
+    coords = np.array(
+        [
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    view = OrbitViewState3D(
+        yaw=0.0,
+        pitch=0.0,
+        distance=4.0,
+        target_x=0.0,
+        target_y=0.0,
+        target_z=0.0,
+        ortho_scale=1.5,
+    )
+
+    mvp = build_mvp_for_orbit(view, coords, 200, 200)
+    screen_x, screen_y, _, _ = project_points_3d_to_screen(mvp, coords, 200, 200)
+    polygon = _square_around(float(screen_x[1]), float(screen_y[1]))
+
+    selected_ids = select_ids_for_3d_lasso(
+        ids=["front-dog", "back-unlabeled"],
+        labels=["dog", None],
+        coords=coords,
+        geometry="euclidean",
+        polygon=polygon,
+        view=view,
+        viewport_width=200,
+        viewport_height=200,
+        label_filter=None,
+        missing_label_filter=True,
+    )
+
+    assert selected_ids == ["back-unlabeled"]

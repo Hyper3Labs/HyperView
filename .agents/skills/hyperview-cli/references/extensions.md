@@ -137,7 +137,7 @@ export default function SelectionProfilePanel() {
 }
 ```
 
-Available SDK hooks include `usePanelRuntimeState`, `usePanelHostState`, `usePanelDatasetInfo`, `usePanelSamplesView`, `usePanelSelectedSamples`, `usePanelSelection`, `usePanelHover`, `usePanelLayouts`, `usePanelLayoutView`, `usePanelCommands`, `usePanelUiState`, `usePanelClient`, and `useTool`.
+Available SDK hooks include `usePanelRuntimeState`, `usePanelHostState`, `usePanelDatasetInfo`, `usePanelSamplesView`, `usePanelSelectedSamples`, `usePanelSelection`, `usePanelHover`, `usePanelLayouts`, `usePanelLayoutView`, `usePanelCommands`, `usePanelState`, `usePanelUiState`, `usePanelClient`, and `useTool`.
 
 For dataset-wide panel behavior, prefer `usePanelClient().querySamples(...)`,
 `aggregateSamples(...)`, `selectSamples(...)`, `getSamplesByIds(...)`,
@@ -154,10 +154,14 @@ Use `usePanelHostState()` for synchronized host state. Use narrower hooks such a
 update host state immediately and persist to runtime UI state in the
 background by default. Pass `{ persist: true }` only when the caller must wait
 for durable runtime state, and pass `{ persist: false }` for local transient UI
-changes.
+changes. Samples retrieval and query-context commands are durable panel state
+commands and do not support `{ persist: false }`.
 
 Do not use browser globals such as `window.dispatchEvent` to synchronize panels,
-and use SDK commands for control-plane writes.
+and use SDK commands for control-plane writes. Use `usePanelState()` for durable
+panel-owned state, `commands.clearQueryContext(...)` to reset selection plus
+nearest-neighbor context, and `commands.updatePanelProps(panelId, props)` when a
+panel needs to update another runtime panel instance's documented props.
 
 `useTool(uri)` returns `{ run, result, loading, error, reset }`. Call `run(params)` to invoke the tool; `result` holds the last successful return value, `loading` is true while a call is in flight, and `error` is the last failure message (or `null`). See [panel-modules.md](panel-modules.md#hook-return-shapes) for the full hook return shape table.
 

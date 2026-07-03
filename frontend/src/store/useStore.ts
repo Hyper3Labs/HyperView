@@ -2,7 +2,10 @@ import { create } from "zustand";
 import type {
   DatasetInfo,
   EmbeddingsData,
+  RuntimeCollection,
   RuntimePanel,
+  RuntimePanelDefinition,
+  RuntimePanelStateEntry,
   RuntimeSnapshot,
   Sample,
   SimilarityQuery,
@@ -37,6 +40,8 @@ function createClearedDatasetScopedState() {
     totalSamples: 0,
     samplesLoaded: 0,
     embeddingsByLayoutKey: {} as Record<string, EmbeddingsData>,
+    runtimeCollections: [] as RuntimeCollection[],
+    panelStates: {} as Record<string, RuntimePanelStateEntry>,
     activeLayoutKey: null as string | null,
     activeSimilarityQuery: null as SimilarityQuery | null,
     selectionLayoutKey: null as string | null,
@@ -53,6 +58,41 @@ function areSetsEqual<T>(left: Set<T>, right: Set<T>) {
     if (!right.has(value)) return false;
   }
   return true;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function coerceSimilarityQuery(value: unknown): SimilarityQuery | null {
+  if (!isRecord(value)) return null;
+  const anchorSampleId =
+    typeof value.anchor_sample_id === "string" && value.anchor_sample_id.length > 0
+      ? value.anchor_sample_id
+      : null;
+  const queryText =
+    typeof value.query_text === "string" && value.query_text.length > 0
+      ? value.query_text
+      : null;
+  if (!anchorSampleId && !queryText) return null;
+  const k = typeof value.k === "number" ? value.k : Number(value.k ?? 18);
+  return {
+    anchor_sample_id: anchorSampleId,
+    query_text: queryText,
+    layout_key: typeof value.layout_key === "string" ? value.layout_key : null,
+    space_key: typeof value.space_key === "string" ? value.space_key : null,
+    k: Number.isFinite(k) ? Math.max(1, Math.min(k, 100)) : 18,
+    source: typeof value.source === "string" ? value.source : null,
+  };
+}
+
+function labelFilterFromSamplesPanelState(state: Record<string, unknown>): string | null {
+  if (state.mode !== "collection" || !isRecord(state.collection)) return null;
+  const collection = state.collection;
+  if (collection.kind !== "filter" || !isRecord(collection.query)) return null;
+  const { field, op, value } = collection.query;
+  if (field !== "label" || op !== "eq") return null;
+  return normalizeLabel(typeof value === "string" ? value : null);
 }
 
 type SelectionSource = "scatter" | "grid" | "panel";
@@ -86,6 +126,9 @@ interface AppState {
   workspaces: WorkspaceSummary[];
   runtimeDatasetName: string | null;
   customPanels: RuntimePanel[];
+  panelDefinitions: RuntimePanelDefinition[];
+  runtimeCollections: RuntimeCollection[];
+  panelStates: Record<string, RuntimePanelStateEntry>;
   hasExplicitView: boolean;
   activePanelId: string | null;
   viewRevision: number;
@@ -111,7 +154,6 @@ interface AppState {
   activeLayoutKey: string | null;
   setActiveLayoutKey: (layoutKey: string | null) => void;
   activeSimilarityQuery: SimilarityQuery | null;
-  setActiveSimilarityQuery: (query: SimilarityQuery | null) => void;
 
   // Label filter (sidebar-driven)
   labelFilter: string | null;
@@ -179,6 +221,9 @@ export const useStore = create<AppState>((set) => ({
   workspaces: [],
   runtimeDatasetName: null,
   customPanels: [],
+  panelDefinitions: [],
+  runtimeCollections: [],
+  panelStates: {},
   hasExplicitView: false,
   activePanelId: null,
   viewRevision: 0,
@@ -202,10 +247,14 @@ export const useStore = create<AppState>((set) => ({
         state.activeWorkspaceId !== nextWorkspaceId ||
         state.runtimeDatasetName !== nextDatasetName;
 
-      const activeSimilarityQuery = snapshot.workspace.ui.similarity_query ?? null;
+      const samplesPanelState = snapshot.workspace.ui.panels?.samples?.state ?? {};
+      const activeSimilarityQuery =
+        coerceSimilarityQuery(samplesPanelState.retrieval) ??
+        snapshot.workspace.ui.similarity_query;
       const selectedIds = activeSimilarityQuery
         ? []
         : snapshot.workspace.ui.selected_ids;
+      const labelFilter = labelFilterFromSamplesPanelState(samplesPanelState);
 
       return {
         ...(runtimeScopeChanged ? createClearedDatasetScopedState() : {}),
@@ -213,6 +262,9 @@ export const useStore = create<AppState>((set) => ({
         workspaces: snapshot.workspaces,
         runtimeDatasetName: nextDatasetName,
         customPanels: snapshot.workspace.ui.custom_panels,
+        panelDefinitions: snapshot.panel_definitions ?? [],
+        runtimeCollections: snapshot.workspace.collections ?? [],
+        panelStates: snapshot.workspace.ui.panels ?? {},
         hasExplicitView: snapshot.workspace.ui.has_explicit_view,
         activePanelId: snapshot.workspace.ui.active_panel_id,
         viewRevision: snapshot.workspace.ui.view_revision ?? 0,
@@ -222,6 +274,7 @@ export const useStore = create<AppState>((set) => ({
         selectionSource: selectedIds.length > 0 ? "scatter" : null,
         selectionLayoutKey: null,
         activeSimilarityQuery,
+        labelFilter,
         ...createClearedLassoState(),
         ...createClearedNeighborsState(),
       };
@@ -262,7 +315,6 @@ export const useStore = create<AppState>((set) => ({
   activeLayoutKey: null,
   setActiveLayoutKey: (layoutKey) => set({ activeLayoutKey: layoutKey }),
   activeSimilarityQuery: null,
-  setActiveSimilarityQuery: (query) => set({ activeSimilarityQuery: query }),
 
   // Label filter
   labelFilter: null,

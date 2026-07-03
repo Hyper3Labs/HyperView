@@ -5,16 +5,21 @@ import io
 import json
 import os
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import numpy as np
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from hyperview._version import __version__
+from hyperview.control import (
+    CommandEnvelope,
+    ControlService,
+    create_default_command_registry,
+)
 from hyperview.core.dataset import Dataset
 from hyperview.core.selection import (
     OrbitViewState3D,
@@ -60,6 +65,7 @@ class LassoSelectionRequest(BaseModel):
     viewport_width: int | None = None
     viewport_height: int | None = None
     label_filter: str | None = None
+    missing_label_filter: bool = False
     offset: int = 0
     limit: int = 100
     include_thumbnails: bool = False
@@ -93,88 +99,21 @@ class UiSelectionRequest(BaseModel):
     sample_ids: list[str]
 
 
-class UiSimilarityQueryRequest(BaseModel):
-    workspace_id: str
-    sample_id: str
-    layout_key: str | None = None
-    space_key: str | None = None
-    k: int = 18
-    source: str | None = None
-
-
-class UiSimilarityClearRequest(BaseModel):
-    workspace_id: str
-
-
-class UiStatePatchSimilarity(BaseModel):
-    sample_id: str
-    layout_key: str | None = None
-    space_key: str | None = None
-    k: int = 18
-    source: str | None = None
-
-
 class UiStatePatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     workspace_id: str
     client_id: str | None = None
     set_active_layout: bool = False
     active_layout_key: str | None = None
     set_selection: bool = False
     selected_ids: list[str] | None = None
-    set_similarity_query: bool = False
-    similarity_query: UiStatePatchSimilarity | None = None
 
 
 class UiLayoutViewRequest(BaseModel):
     workspace_id: str
     layout_key: str
     camera_3d: OrbitViewState3D | None = None
-
-
-class UiPanelRequest(BaseModel):
-    workspace_id: str
-    panel_id: str
-    title: str | None = None
-    kind: Literal["extension", "scatter", "module", "builtin"] = "extension"
-    builtin_panel: Literal["samples"] | None = None
-    extension: str | None = None
-    extension_panel: str | None = None
-    module_file: str | None = None
-    layout_key: str | None = None
-    position: str = "right"
-    reference_panel_id: str | None = None
-    direction: str | None = None
-    width: int | None = None
-    height: int | None = None
-    min_width: int | None = None
-    min_height: int | None = None
-    max_width: int | None = None
-    max_height: int | None = None
-    visible: bool = True
-    props: dict[str, Any] | None = None
-
-
-class UiPanelRemoveRequest(BaseModel):
-    workspace_id: str
-    panel_id: str
-
-
-class UiPanelUpdateRequest(BaseModel):
-    workspace_id: str
-    panel_id: str
-    title: str | None = None
-    position: Literal["center", "right", "bottom"] | None = None
-    reference_panel_id: str | None = None
-    direction: Literal["right", "left", "above", "below", "within"] | None = None
-    width: int | None = None
-    height: int | None = None
-    min_width: int | None = None
-    min_height: int | None = None
-    max_width: int | None = None
-    max_height: int | None = None
-    visible: bool | None = None
-    active: bool | None = None
-    props: dict[str, Any] | None = None
 
 
 class SamplesQueryRequest(BaseModel):
@@ -246,6 +185,10 @@ class ExtensionRemoveRequest(BaseModel):
     name: str
 
 
+def _control_service(runtime: HyperViewRuntime) -> ControlService:
+    return ControlService(runtime, create_default_command_registry())
+
+
 class SampleResponse(BaseModel):
     """Response model for a sample."""
 
@@ -253,6 +196,8 @@ class SampleResponse(BaseModel):
     filepath: str
     filename: str
     label: str | None
+    text: str | None = None
+    modality: str = "image"
     thumbnail: str | None
     media_url: str | None = None
     thumbnail_url: str | None = None
@@ -313,12 +258,21 @@ class SimilarSampleResponse(SampleResponse):
 class SimilaritySearchResponse(BaseModel):
     """Response model for similarity search results."""
 
-    query_id: str
+    query_id: str | None = None
+    query_text: str | None = None
     query_sample: SampleResponse | None
     space_key: str | None
     metric: str
     k: int
     results: list[SimilarSampleResponse]
+
+
+class TextSearchRequest(BaseModel):
+    query_text: str
+    k: int = 10
+    space_key: str | None = None
+    layout_key: str | None = None
+    include_thumbnails: bool = False
 
 
 def serialize_sample_for_response(
@@ -694,56 +648,11 @@ def create_app(
         workspace = runtime_dep.set_selection(request.workspace_id, [sample.id for sample in samples])
         return {"workspace": workspace.to_dict()}
 
-    @app.post("/api/control/ui/similarity")
-    async def set_ui_similarity_query_endpoint(
-        request: UiSimilarityQueryRequest,
-        runtime_dep: HyperViewRuntime = Depends(get_runtime),
-    ):
-        try:
-            query = runtime_dep.resolve_similarity_query(
-                request.workspace_id,
-                request.sample_id,
-                layout_key=request.layout_key,
-                space_key=request.space_key,
-                k=request.k,
-                source=request.source,
-            )
-        except (KeyError, LookupError) as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        workspace = runtime_dep.set_similarity_query(request.workspace_id, query)
-        return {"workspace": workspace.to_dict()}
-
-    @app.delete("/api/control/ui/similarity")
-    async def clear_ui_similarity_query_endpoint(
-        request: UiSimilarityClearRequest,
-        runtime_dep: HyperViewRuntime = Depends(get_runtime),
-    ):
-        workspace = runtime_dep.set_similarity_query(request.workspace_id, None)
-        return {"workspace": workspace.to_dict()}
-
     @app.patch("/api/control/ui/state")
     async def patch_ui_state_endpoint(
         request: UiStatePatchRequest,
         runtime_dep: HyperViewRuntime = Depends(get_runtime),
     ):
-        query = None
-        if request.set_similarity_query and request.similarity_query is not None:
-            try:
-                query = runtime_dep.resolve_similarity_query(
-                    request.workspace_id,
-                    request.similarity_query.sample_id,
-                    layout_key=request.similarity_query.layout_key,
-                    space_key=request.similarity_query.space_key,
-                    k=request.similarity_query.k,
-                    source=request.similarity_query.source,
-                )
-            except (KeyError, LookupError) as exc:
-                raise HTTPException(status_code=404, detail=str(exc)) from exc
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-
         try:
             workspace = runtime_dep.patch_ui_state(
                 request.workspace_id,
@@ -751,8 +660,6 @@ def create_app(
                 active_layout_key=request.active_layout_key,
                 set_selection=request.set_selection,
                 selected_ids=request.selected_ids,
-                set_similarity_query=request.set_similarity_query,
-                similarity_query=query,
                 source_client_id=request.client_id,
             )
         except ValueError as exc:
@@ -773,82 +680,18 @@ def create_app(
         )
         return {"workspace": workspace.to_dict()}
 
-    @app.post("/api/control/ui/panels")
-    async def add_ui_panel_endpoint(
-        request: UiPanelRequest,
+    @app.get("/api/control/commands")
+    async def list_control_commands_endpoint(
         runtime_dep: HyperViewRuntime = Depends(get_runtime),
     ):
-        try:
-            workspace = runtime_dep.add_runtime_panel(
-                request.workspace_id,
-                panel_id=request.panel_id,
-                title=request.title,
-                kind=request.kind,
-                builtin_panel=request.builtin_panel,
-                extension=request.extension,
-                extension_panel=request.extension_panel,
-                layout_key=request.layout_key,
-                position=request.position,
-                reference_panel_id=request.reference_panel_id,
-                direction=request.direction,
-                width=request.width,
-                height=request.height,
-                min_width=request.min_width,
-                min_height=request.min_height,
-                max_width=request.max_width,
-                max_height=request.max_height,
-                visible=request.visible,
-                props=request.props,
-            )
-        except LookupError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"workspace": workspace.to_dict()}
+        return {"commands": _control_service(runtime_dep).list_commands()}
 
-    @app.patch("/api/control/ui/panels")
-    async def update_ui_panel_endpoint(
-        request: UiPanelUpdateRequest,
+    @app.post("/api/control/commands/run")
+    async def run_control_command_endpoint(
+        request: CommandEnvelope,
         runtime_dep: HyperViewRuntime = Depends(get_runtime),
     ):
-        fields = request.model_fields_set
-        patch: dict[str, Any] = {}
-        for field_name in (
-            "title",
-            "position",
-            "reference_panel_id",
-            "direction",
-            "width",
-            "height",
-            "min_width",
-            "min_height",
-            "max_width",
-            "max_height",
-            "visible",
-            "active",
-            "props",
-        ):
-            if field_name in fields:
-                patch[field_name] = getattr(request, field_name)
-        try:
-            workspace = runtime_dep.update_custom_panel(
-                request.workspace_id,
-                request.panel_id,
-                **patch,
-            )
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"workspace": workspace.to_dict()}
-
-    @app.delete("/api/control/ui/panels")
-    async def remove_ui_panel_endpoint(
-        request: UiPanelRemoveRequest,
-        runtime_dep: HyperViewRuntime = Depends(get_runtime),
-    ):
-        workspace = runtime_dep.remove_custom_panel(request.workspace_id, request.panel_id)
-        return {"workspace": workspace.to_dict()}
+        return _control_service(runtime_dep).run(request).to_dict()
 
     @app.get("/api/tools")
     async def list_tools_endpoint(
@@ -882,6 +725,16 @@ def create_app(
     ):
         return {
             "extensions": [item.to_dict() for item in runtime_dep.list_extensions()],
+        }
+
+    @app.get("/api/panel-definitions")
+    async def list_panel_definitions_endpoint(
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+    ):
+        return {
+            "panel_definitions": [
+                definition.to_dict() for definition in runtime_dep.list_panel_definitions()
+            ],
         }
 
     @app.post("/api/control/extensions/install")
@@ -935,11 +788,15 @@ def create_app(
         offset: int = Query(0, ge=0),
         limit: int = Query(100, ge=1, le=MAX_SAMPLE_PAGE_SIZE),
         label: str | None = None,
+        missing_label: bool = Query(False),
         include_thumbnails: bool = Query(False),
     ):
         """Get paginated sample metadata."""
         samples, total = ds.get_samples_paginated(
-            offset=offset, limit=limit, label=label
+            offset=offset,
+            limit=limit,
+            label=None if missing_label else label,
+            missing_label=missing_label,
         )
 
         return {
@@ -1161,7 +1018,8 @@ def create_app(
                 x_max=x_max,
                 y_min=y_min,
                 y_max=y_max,
-                label_filter=request.label_filter,
+                label_filter=None if request.missing_label_filter else request.label_filter,
+                missing_label_filter=request.missing_label_filter,
             )
 
             if candidate_coords.size == 0:
@@ -1265,7 +1123,8 @@ def create_app(
                 view=view_3d,
                 viewport_width=request.viewport_width,
                 viewport_height=request.viewport_height,
-                label_filter=request.label_filter,
+                label_filter=None if request.missing_label_filter else request.label_filter,
+                missing_label_filter=request.missing_label_filter,
             )
         else:
             raise HTTPException(
@@ -1354,6 +1213,69 @@ def create_app(
             space_key=resolved_space_key,
             metric=metric,
             k=k,
+            results=results,
+        )
+
+    @app.post("/api/search/text", response_model=SimilaritySearchResponse)
+    async def search_by_text(
+        request: TextSearchRequest,
+        ds: Dataset = Depends(get_dataset),
+    ):
+        """Return k nearest neighbors for a natural-language text query."""
+        query_text = request.query_text.strip()
+        if not query_text:
+            raise HTTPException(status_code=400, detail="query_text must be a non-empty string")
+
+        resolved_space_key = request.space_key
+        if request.layout_key is not None:
+            layout = next(
+                (item for item in ds.list_layouts() if item.layout_key == request.layout_key),
+                None,
+            )
+            if layout is None:
+                raise HTTPException(status_code=404, detail=f"Layout not found: {request.layout_key}")
+            if resolved_space_key is not None and resolved_space_key != layout.space_key:
+                raise HTTPException(
+                    status_code=400,
+                    detail="space_key does not match the requested layout_key",
+                )
+            resolved_space_key = layout.space_key
+
+        spaces = ds.list_spaces()
+        if resolved_space_key is None:
+            if not spaces:
+                raise HTTPException(status_code=400, detail="No embedding spaces available")
+            resolved_space_key = spaces[0].space_key
+        space = next((s for s in spaces if s.space_key == resolved_space_key), None)
+        metric = distance_metric_for_space(space) if space is not None else "cosine"
+
+        try:
+            similar = ds.find_similar_by_text(
+                query_text,
+                k=request.k,
+                space_key=resolved_space_key,
+                layout_key=request.layout_key,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        results = []
+        for sample, distance in similar:
+            results.append(
+                SimilarSampleResponse(
+                    **serialize_sample_for_response(
+                        sample, include_thumbnail=request.include_thumbnails
+                    ),
+                    distance=distance,
+                )
+            )
+
+        return SimilaritySearchResponse(
+            query_text=query_text,
+            query_sample=None,
+            space_key=resolved_space_key,
+            metric=metric,
+            k=request.k,
             results=results,
         )
 

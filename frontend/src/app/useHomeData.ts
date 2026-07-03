@@ -79,11 +79,12 @@ function useSamplesDataFlow(
   const loadInitialData = useCallback(async (signal?: AbortSignal) => {
     setIsLoading(true);
     setError(null);
+    const initialLabelFilter = labelFilterRef.current ?? undefined;
 
     try {
       const [nextDatasetInfo, samplesRes] = await Promise.all([
         fetchDataset(signal),
-        fetchSamples(0, SAMPLES_PER_PAGE, undefined, signal),
+        fetchSamples(0, SAMPLES_PER_PAGE, initialLabelFilter, signal),
       ]);
       if (signal?.aborted) return;
 

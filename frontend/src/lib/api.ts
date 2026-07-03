@@ -1,8 +1,8 @@
 import type {
   DatasetInfo,
   EmbeddingsData,
+  RuntimeCollection,
   RuntimePanelDirection,
-  RuntimePanelKind,
   RuntimePanelPosition,
   RuntimeSnapshot,
   Sample,
@@ -34,6 +34,10 @@ function toApiLabel(label: string | null | undefined): string | null {
     return null;
   }
   return label;
+}
+
+function isMissingLabelFilter(label: string | null | undefined): boolean {
+  return label === MISSING_LABEL_SENTINEL;
 }
 
 export class ApiError extends Error {
@@ -91,6 +95,51 @@ export function getRuntimeEventsUrl(): string {
   return `${apiUrl("/events")}?client_id=${encodeURIComponent(RUNTIME_CLIENT_ID)}`;
 }
 
+export interface ControlCommandResult {
+  ok: boolean;
+  command: string;
+  result?: {
+    panel_id?: string;
+    collection_id?: string | null;
+    collection?: RuntimeCollection | null;
+    [key: string]: unknown;
+  };
+  workspace?: RuntimeSnapshot["workspace"];
+  revision?: number;
+  error?: {
+    code: string;
+    message: string;
+  };
+}
+
+export async function runControlCommand(args: {
+  command: string;
+  target?: Record<string, unknown>;
+  args?: Record<string, unknown>;
+}): Promise<ControlCommandResult> {
+  const res = await fetch(apiUrl("/control/commands/run"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      command: args.command,
+      target: args.target ?? {},
+      args: args.args ?? {},
+    }),
+  });
+  if (!res.ok) {
+    await throwApiError(res, `Failed to run command ${args.command}`);
+  }
+  const payload = (await res.json()) as ControlCommandResult;
+  if (payload.ok === false) {
+    const message = payload.error?.message ?? "Command failed";
+    const code = payload.error?.code ?? "unknown_error";
+    throw new ApiError(`Command ${args.command} failed: ${code}: ${message}`, 400, message);
+  }
+  return payload;
+}
+
 export async function fetchDataset(signal?: AbortSignal): Promise<DatasetInfo> {
   const res = await fetch(apiUrl("/dataset"), signal ? { signal } : undefined);
   if (!res.ok) {
@@ -99,12 +148,35 @@ export async function fetchDataset(signal?: AbortSignal): Promise<DatasetInfo> {
   return res.json();
 }
 
-export async function fetchRuntimeState(): Promise<RuntimeSnapshot> {
-  const res = await fetch(apiUrl("/runtime"));
+export async function fetchRuntimeState(workspaceId?: string | null): Promise<RuntimeSnapshot> {
+  const params = new URLSearchParams();
+  if (workspaceId) {
+    params.set("workspace_id", workspaceId);
+  }
+  const query = params.toString();
+  const res = await fetch(`${apiUrl("/runtime")}${query ? `?${query}` : ""}`);
   if (!res.ok) {
     await throwApiError(res, "Failed to fetch runtime state");
   }
   return res.json();
+}
+
+export async function setLabelFilterCollection(args: {
+  workspaceId: string;
+  field?: string;
+  value?: string | null;
+  clear?: boolean;
+}): Promise<RuntimeSnapshot> {
+  await runControlCommand({
+    command: "panel.labels.filter",
+    target: { workspace_id: args.workspaceId },
+    args: {
+      field: args.field ?? "label",
+      ...(args.clear ? { clear: true } : { value: toApiLabel(args.value) }),
+      source: "frontend",
+    },
+  });
+  return fetchRuntimeState(args.workspaceId);
 }
 
 export async function setActiveWorkspace(workspaceId: string): Promise<RuntimeSnapshot> {
@@ -125,7 +197,7 @@ export async function addRuntimePanel(args: {
   workspaceId: string;
   panelId: string;
   title?: string | null;
-  kind?: RuntimePanelKind | "extension";
+  kind?: "extension" | "scatter" | "builtin";
   builtinPanel?: string | null;
   extension?: string | null;
   extensionPanel?: string | null;
@@ -142,15 +214,12 @@ export async function addRuntimePanel(args: {
   visible?: boolean;
   props?: Record<string, unknown> | null;
 }): Promise<RuntimeSnapshot> {
-  const res = await fetch(apiUrl("/control/ui/panels"), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      workspace_id: args.workspaceId,
+  await runControlCommand({
+    command: "ui.panel.add",
+    target: { workspace_id: args.workspaceId },
+    args: {
       panel_id: args.panelId,
-      title: args.title,
+      title: args.title ?? null,
       kind: args.kind ?? "extension",
       builtin_panel: args.builtinPanel ?? null,
       extension: args.extension ?? null,
@@ -167,32 +236,23 @@ export async function addRuntimePanel(args: {
       max_height: args.maxHeight ?? null,
       visible: args.visible ?? true,
       props: args.props ?? null,
-    }),
+    },
   });
-  if (!res.ok) {
-    await throwApiError(res, "Failed to add runtime panel");
-  }
-  return fetchRuntimeState();
+  return fetchRuntimeState(args.workspaceId);
 }
 
 export async function removeRuntimePanel(args: {
   workspaceId: string;
   panelId: string;
 }): Promise<RuntimeSnapshot> {
-  const res = await fetch(apiUrl("/control/ui/panels"), {
-    method: "DELETE",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
+  await runControlCommand({
+    command: "ui.panel.remove",
+    target: {
       workspace_id: args.workspaceId,
       panel_id: args.panelId,
-    }),
+    },
   });
-  if (!res.ok) {
-    await throwApiError(res, "Failed to remove runtime panel");
-  }
-  return fetchRuntimeState();
+  return fetchRuntimeState(args.workspaceId);
 }
 
 export async function fetchSamples(
@@ -208,7 +268,9 @@ export async function fetchSamples(
     limit: limit.toString(),
     include_thumbnails: String(includeThumbnails),
   });
-  if (apiLabel !== null) {
+  if (isMissingLabelFilter(label)) {
+    params.set("missing_label", "true");
+  } else if (apiLabel !== null) {
     params.set("label", apiLabel);
   }
 
@@ -303,6 +365,36 @@ export async function fetchSimilarSamples(
   return res.json();
 }
 
+export async function fetchTextSimilarSamples(
+  queryText: string,
+  args: {
+    k?: number;
+    spaceKey?: string;
+    layoutKey?: string;
+    includeThumbnails?: boolean;
+    signal?: AbortSignal;
+  } = {}
+): Promise<SimilaritySearchResponse> {
+  const res = await fetch(apiUrl("/search/text"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      query_text: queryText,
+      k: args.k ?? 10,
+      space_key: args.spaceKey ?? null,
+      layout_key: args.layoutKey ?? null,
+      include_thumbnails: args.includeThumbnails ?? false,
+    }),
+    signal: args.signal,
+  });
+  if (!res.ok) {
+    await throwApiError(res, "Failed to fetch text search results");
+  }
+  return res.json();
+}
+
 export interface LassoSelectionResponse {
   total: number;
   offset: number;
@@ -366,6 +458,7 @@ export async function fetchLassoSelection(args: {
       viewport_width: args.viewportWidth ?? null,
       viewport_height: args.viewportHeight ?? null,
       label_filter: toApiLabel(args.labelFilter),
+      missing_label_filter: isMissingLabelFilter(args.labelFilter),
       offset: args.offset ?? 0,
       limit: args.limit ?? 100,
       include_thumbnails: args.includeThumbnails ?? false,

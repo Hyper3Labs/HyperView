@@ -68,6 +68,18 @@ def _parse_provider_args(values: list[str] | None) -> dict[str, Any]:
     return parsed
 
 
+def _parse_key_value_pairs(values: list[str] | None, *, label: str) -> dict[str, Any]:
+    parsed: dict[str, Any] = {}
+    for value in values or []:
+        if "=" not in value:
+            raise ValueError(f"{label} values must use the form key=value, got '{value}'")
+        key, raw_value = value.split("=", 1)
+        if not key:
+            raise ValueError(f"{label} values must include a non-empty key")
+        parsed[key] = _parse_scalar(raw_value)
+    return parsed
+
+
 def _parse_json_object(value: str | None, *, label: str) -> dict[str, Any] | None:
     if value is None:
         return None
@@ -138,6 +150,37 @@ def _panel_layout_payload(args: argparse.Namespace) -> dict[str, int]:
     return payload
 
 
+def _run_control_command(
+    base_url: str,
+    command: str,
+    *,
+    target: dict[str, Any],
+    args: dict[str, Any] | None = None,
+    raise_on_error: bool = True,
+) -> dict[str, Any]:
+    payload = _http_send_json(
+        f"{base_url}/api/control/commands/run",
+        {
+            "command": command,
+            "target": target,
+            "args": args or {},
+        },
+    )
+    if raise_on_error and payload.get("ok") is False:
+        error = payload.get("error") or {}
+        code = error.get("code", "unknown_error")
+        message = error.get("message", "Command failed")
+        raise RuntimeError(f"{code}: {message}")
+    return cast(dict[str, Any], payload)
+
+
+def _workspace_payload_from_command(payload: dict[str, Any]) -> dict[str, Any]:
+    workspace = payload.get("workspace")
+    if not isinstance(workspace, dict):
+        raise RuntimeError("Command did not return a workspace")
+    return {"workspace": workspace}
+
+
 def _add_dataset_source_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--hf-dataset")
     parser.add_argument("--split", default=None)
@@ -145,6 +188,7 @@ def _add_dataset_source_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--image-key", default=None)
     parser.add_argument("--label-key", default=None)
     parser.add_argument("--label-names-key", default=None)
+    parser.add_argument("--text-key", default=None)
     parser.add_argument("--images-dir")
     parser.add_argument("--label-from-folder", action="store_true")
     parser.add_argument("--samples", type=int, default=None)
@@ -307,6 +351,20 @@ def _build_control_parser() -> argparse.ArgumentParser:
     jobs_inspect.add_argument("job_id")
     _add_json_flag(jobs_inspect)
 
+    commands_parser = subparsers.add_parser("commands")
+    commands_subparsers = commands_parser.add_subparsers(
+        dest="commands_command", required=True
+    )
+    commands_list = commands_subparsers.add_parser("list")
+    _add_server_flags(commands_list)
+    _add_json_flag(commands_list)
+    commands_run = commands_subparsers.add_parser("run")
+    _add_server_flags(commands_run)
+    commands_run.add_argument("command_id")
+    commands_run.add_argument("--target", action="append", default=[])
+    commands_run.add_argument("--arg", action="append", dest="args", default=[])
+    _add_json_flag(commands_run)
+
     figure_parser = subparsers.add_parser("figure")
     figure_subparsers = figure_parser.add_subparsers(dest="figure_command", required=True)
     figure_export = figure_subparsers.add_parser("export")
@@ -330,6 +388,35 @@ def _build_control_parser() -> argparse.ArgumentParser:
     figure_export.add_argument("--no-guide", action="store_true")
     figure_export.add_argument("--ignore-selection", action="store_true")
     _add_json_flag(figure_export)
+
+    panel_parser = subparsers.add_parser("panel")
+    panel_subparsers = panel_parser.add_subparsers(dest="panel_command", required=True)
+    panel_samples = panel_subparsers.add_parser("samples")
+    panel_samples_subparsers = panel_samples.add_subparsers(
+        dest="panel_samples_command", required=True
+    )
+    panel_samples_neighbors = panel_samples_subparsers.add_parser("show-neighbors")
+    _add_server_flags(panel_samples_neighbors)
+    panel_samples_neighbors.add_argument("--workspace", required=True)
+    panel_samples_neighbors.add_argument("--sample-id", required=True)
+    panel_samples_neighbors.add_argument("--layout-key")
+    panel_samples_neighbors.add_argument("--space-key")
+    panel_samples_neighbors.add_argument("--k", type=int, default=18)
+    _add_json_flag(panel_samples_neighbors)
+
+    panel_labels = panel_subparsers.add_parser("labels")
+    panel_labels_subparsers = panel_labels.add_subparsers(
+        dest="panel_labels_command", required=True
+    )
+    panel_labels_filter = panel_labels_subparsers.add_parser("filter")
+    _add_server_flags(panel_labels_filter)
+    panel_labels_filter.add_argument("--workspace", required=True)
+    panel_labels_filter.add_argument("--field", default="label")
+    value_group = panel_labels_filter.add_mutually_exclusive_group()
+    value_group.add_argument("--value")
+    value_group.add_argument("--missing-label", action="store_true")
+    value_group.add_argument("--clear", action="store_true")
+    _add_json_flag(panel_labels_filter)
 
     ui_parser = subparsers.add_parser("ui")
     ui_subparsers = ui_parser.add_subparsers(dest="ui_command", required=True)
@@ -364,22 +451,39 @@ def _build_control_parser() -> argparse.ArgumentParser:
     ui_selection_clear.add_argument("--workspace", required=True)
     _add_json_flag(ui_selection_clear)
 
-    ui_similarity = ui_subparsers.add_parser("similarity")
-    ui_similarity_subparsers = ui_similarity.add_subparsers(
-        dest="ui_similarity_command", required=True
+    ui_samples = ui_subparsers.add_parser("samples")
+    ui_samples_subparsers = ui_samples.add_subparsers(
+        dest="ui_samples_command", required=True
     )
-    ui_similarity_set = ui_similarity_subparsers.add_parser("set")
-    _add_server_flags(ui_similarity_set)
-    ui_similarity_set.add_argument("--workspace", required=True)
-    ui_similarity_set.add_argument("--sample-id", required=True)
-    ui_similarity_set.add_argument("--layout-key")
-    ui_similarity_set.add_argument("--space-key")
-    ui_similarity_set.add_argument("--k", type=int, default=18)
-    _add_json_flag(ui_similarity_set)
-    ui_similarity_clear = ui_similarity_subparsers.add_parser("clear")
-    _add_server_flags(ui_similarity_clear)
-    ui_similarity_clear.add_argument("--workspace", required=True)
-    _add_json_flag(ui_similarity_clear)
+    ui_samples_retrieval = ui_samples_subparsers.add_parser("retrieval")
+    ui_samples_retrieval_subparsers = ui_samples_retrieval.add_subparsers(
+        dest="ui_samples_retrieval_command", required=True
+    )
+    ui_samples_retrieval_set_anchor = ui_samples_retrieval_subparsers.add_parser("set-anchor")
+    _add_server_flags(ui_samples_retrieval_set_anchor)
+    ui_samples_retrieval_set_anchor.add_argument("--workspace", required=True)
+    ui_samples_retrieval_set_anchor.add_argument("--sample-id", required=True)
+    ui_samples_retrieval_set_anchor.add_argument("--layout-key")
+    ui_samples_retrieval_set_anchor.add_argument("--space-key")
+    ui_samples_retrieval_set_anchor.add_argument("--k", type=int, default=18)
+    _add_json_flag(ui_samples_retrieval_set_anchor)
+    ui_samples_retrieval_set_k = ui_samples_retrieval_subparsers.add_parser("set-k")
+    _add_server_flags(ui_samples_retrieval_set_k)
+    ui_samples_retrieval_set_k.add_argument("--workspace", required=True)
+    ui_samples_retrieval_set_k.add_argument("--k", type=int, required=True)
+    _add_json_flag(ui_samples_retrieval_set_k)
+    ui_samples_retrieval_set_text = ui_samples_retrieval_subparsers.add_parser("set-text")
+    _add_server_flags(ui_samples_retrieval_set_text)
+    ui_samples_retrieval_set_text.add_argument("--workspace", required=True)
+    ui_samples_retrieval_set_text.add_argument("--query", required=True)
+    ui_samples_retrieval_set_text.add_argument("--layout-key")
+    ui_samples_retrieval_set_text.add_argument("--space-key")
+    ui_samples_retrieval_set_text.add_argument("--k", type=int, default=18)
+    _add_json_flag(ui_samples_retrieval_set_text)
+    ui_samples_retrieval_clear = ui_samples_retrieval_subparsers.add_parser("clear")
+    _add_server_flags(ui_samples_retrieval_clear)
+    ui_samples_retrieval_clear.add_argument("--workspace", required=True)
+    _add_json_flag(ui_samples_retrieval_clear)
 
     ui_panel = ui_subparsers.add_parser("panel")
     ui_panel_subparsers = ui_panel.add_subparsers(dest="ui_panel_command", required=True)
@@ -391,11 +495,11 @@ def _build_control_parser() -> argparse.ArgumentParser:
     ui_panel_add.add_argument(
         "--kind", choices=["auto", "extension", "scatter", "builtin"], default="auto"
     )
-    ui_panel_add.add_argument("--builtin-panel", choices=["samples"])
+    ui_panel_add.add_argument("--builtin-panel")
     ui_panel_add.add_argument("--extension")
     ui_panel_add.add_argument("--extension-panel")
     ui_panel_add.add_argument("--layout-key")
-    ui_panel_add.add_argument("--position", choices=["center", "right", "bottom"], default="right")
+    ui_panel_add.add_argument("--position", choices=["center", "right", "bottom"])
     ui_panel_add.add_argument("--reference-panel-id")
     ui_panel_add.add_argument("--direction", choices=["right", "left", "above", "below", "within"])
     _add_panel_layout_flags(ui_panel_add)
@@ -405,6 +509,10 @@ def _build_control_parser() -> argparse.ArgumentParser:
         help="JSON object stored as runtime panel props.",
     )
     _add_json_flag(ui_panel_add)
+
+    ui_panel_definitions = ui_panel_subparsers.add_parser("definitions")
+    _add_server_flags(ui_panel_definitions)
+    _add_json_flag(ui_panel_definitions)
 
     ui_panel_update = ui_panel_subparsers.add_parser("update")
     _add_server_flags(ui_panel_update)
@@ -457,6 +565,24 @@ def _build_control_parser() -> argparse.ArgumentParser:
     ui_panel_show.add_argument("--workspace", required=True)
     ui_panel_show.add_argument("--panel-id", required=True)
     _add_json_flag(ui_panel_show)
+
+    ui_panel_state = ui_panel_subparsers.add_parser("state")
+    ui_panel_state_subparsers = ui_panel_state.add_subparsers(
+        dest="ui_panel_state_command", required=True
+    )
+    ui_panel_state_get = ui_panel_state_subparsers.add_parser("get")
+    _add_server_flags(ui_panel_state_get)
+    ui_panel_state_get.add_argument("--workspace", required=True)
+    ui_panel_state_get.add_argument("--panel-id", required=True)
+    _add_json_flag(ui_panel_state_get)
+    ui_panel_state_patch = ui_panel_state_subparsers.add_parser("patch")
+    _add_server_flags(ui_panel_state_patch)
+    ui_panel_state_patch.add_argument("--workspace", required=True)
+    ui_panel_state_patch.add_argument("--panel-id", required=True)
+    ui_panel_state_patch.add_argument("--state-json", required=True)
+    ui_panel_state_patch.add_argument("--replace", action="store_true")
+    ui_panel_state_patch.add_argument("--expected-revision", type=int)
+    _add_json_flag(ui_panel_state_patch)
 
     ui_panel_remove = ui_panel_subparsers.add_parser("remove")
     _add_server_flags(ui_panel_remove)
@@ -588,6 +714,7 @@ def _run_dataset_command(args: argparse.Namespace) -> None:
                 image_key=args.image_key,
                 label_key=args.label_key,
                 label_names_key=args.label_names_key,
+                text_key=args.text_key,
                 max_samples=args.samples,
                 shuffle=args.shuffle,
                 seed=args.seed,
@@ -740,6 +867,26 @@ def _run_jobs_command(args: argparse.Namespace) -> None:
     raise RuntimeError(f"Unsupported jobs command: {args.jobs_command}")
 
 
+def _run_commands_command(args: argparse.Namespace) -> None:
+    base_url = _server_base_url(args.host, args.port)
+    if args.commands_command == "list":
+        _print_output(_http_get_json(f"{base_url}/api/control/commands"), as_json=args.json)
+        return
+    if args.commands_command == "run":
+        target = _parse_key_value_pairs(args.target, label="--target")
+        command_args = _parse_key_value_pairs(args.args, label="--arg")
+        payload = _run_control_command(
+            base_url,
+            args.command_id,
+            target=target,
+            args=command_args,
+            raise_on_error=False,
+        )
+        _print_output(payload, as_json=args.json)
+        return
+    raise RuntimeError(f"Unsupported commands command: {args.commands_command}")
+
+
 def _resolve_figure_layout_key(
     dataset: Dataset,
     active_layout_key: str | None,
@@ -825,6 +972,52 @@ def _run_figure_command(args: argparse.Namespace) -> None:
     )
 
 
+def _run_panel_command(args: argparse.Namespace) -> None:
+    base_url = _server_base_url(args.host, args.port)
+    target = {"workspace_id": args.workspace}
+
+    if args.panel_command == "samples" and args.panel_samples_command == "show-neighbors":
+        payload = _run_control_command(
+            base_url,
+            "panel.samples.show-neighbors",
+            target=target,
+            args={
+                "sample_id": args.sample_id,
+                "layout_key": args.layout_key,
+                "space_key": args.space_key,
+                "k": args.k,
+                "source": "cli",
+            },
+        )
+        _print_output(payload, as_json=args.json)
+        return
+
+    if args.panel_command == "labels" and args.panel_labels_command == "filter":
+        command_args: dict[str, Any] = {
+            "field": args.field,
+            "source": "cli",
+        }
+        if args.clear:
+            command_args["clear"] = True
+        elif args.missing_label:
+            command_args["value"] = None
+        elif args.value is not None:
+            command_args["value"] = args.value
+        else:
+            raise RuntimeError("Labels filter requires --value, --missing-label, or --clear")
+
+        payload = _run_control_command(
+            base_url,
+            "panel.labels.filter",
+            target=target,
+            args=command_args,
+        )
+        _print_output(payload, as_json=args.json)
+        return
+
+    raise RuntimeError(f"Unsupported panel command: {args.panel_command}")
+
+
 def _run_ui_command(args: argparse.Namespace) -> None:
     base_url = _server_base_url(args.host, args.port)
     if args.ui_command == "workspace" and args.ui_workspace_command == "set":
@@ -856,27 +1049,65 @@ def _run_ui_command(args: argparse.Namespace) -> None:
         )
         _print_output(payload, as_json=args.json)
         return
-    if args.ui_command == "similarity" and args.ui_similarity_command == "set":
-        payload = _http_send_json(
-            f"{base_url}/api/control/ui/similarity",
-            {
-                "workspace_id": args.workspace,
-                "sample_id": args.sample_id,
-                "layout_key": args.layout_key,
-                "space_key": args.space_key,
-                "k": args.k,
-                "source": "cli",
-            },
-        )
-        _print_output(payload, as_json=args.json)
-        return
-    if args.ui_command == "similarity" and args.ui_similarity_command == "clear":
-        payload = _http_send_json(
-            f"{base_url}/api/control/ui/similarity",
-            {"workspace_id": args.workspace},
-            method="DELETE",
-        )
-        _print_output(payload, as_json=args.json)
+    if args.ui_command == "samples" and args.ui_samples_command == "retrieval":
+        target = {"workspace_id": args.workspace}
+        if args.ui_samples_retrieval_command == "set-anchor":
+            payload = _workspace_payload_from_command(
+                _run_control_command(
+                    base_url,
+                    "samples.retrieval.set-anchor",
+                    target=target,
+                    args={
+                        "sample_id": args.sample_id,
+                        "layout_key": args.layout_key,
+                        "space_key": args.space_key,
+                        "k": args.k,
+                        "source": "cli",
+                    },
+                )
+            )
+            _print_output(payload, as_json=args.json)
+            return
+        if args.ui_samples_retrieval_command == "set-k":
+            payload = _workspace_payload_from_command(
+                _run_control_command(
+                    base_url,
+                    "samples.retrieval.set-k",
+                    target=target,
+                    args={"k": args.k},
+                )
+            )
+            _print_output(payload, as_json=args.json)
+            return
+        if args.ui_samples_retrieval_command == "set-text":
+            payload = _workspace_payload_from_command(
+                _run_control_command(
+                    base_url,
+                    "samples.retrieval.set-text-query",
+                    target=target,
+                    args={
+                        "query_text": args.query,
+                        "layout_key": args.layout_key,
+                        "space_key": args.space_key,
+                        "k": args.k,
+                        "source": "cli",
+                    },
+                )
+            )
+            _print_output(payload, as_json=args.json)
+            return
+        if args.ui_samples_retrieval_command == "clear":
+            payload = _workspace_payload_from_command(
+                _run_control_command(
+                    base_url,
+                    "samples.retrieval.clear",
+                    target=target,
+                )
+            )
+            _print_output(payload, as_json=args.json)
+            return
+    if args.ui_command == "panel" and args.ui_panel_command == "definitions":
+        _print_output(_http_get_json(f"{base_url}/api/panel-definitions"), as_json=args.json)
         return
     if args.ui_command == "panel" and args.ui_panel_command == "add":
         panel_kind = args.kind
@@ -885,8 +1116,11 @@ def _run_ui_command(args: argparse.Namespace) -> None:
                 panel_kind = "builtin"
             else:
                 panel_kind = "scatter" if args.layout_key else "extension"
-        if panel_kind == "builtin" and args.builtin_panel != "samples":
-            raise RuntimeError("Built-in panels require --builtin-panel samples")
+        if panel_kind == "builtin" and not args.builtin_panel:
+            raise RuntimeError(
+                "Built-in panels require --builtin-panel. "
+                "Run `hyperview ui panel definitions` to list available panel types."
+            )
         if panel_kind == "extension" and (not args.extension or not args.extension_panel):
             raise RuntimeError(
                 "Extension panels require --extension and --extension-panel. "
@@ -896,24 +1130,27 @@ def _run_ui_command(args: argparse.Namespace) -> None:
             raise RuntimeError("Scatter panels require --title")
         props = _parse_json_object(args.props_json, label="--props-json")
         layout_payload = _panel_layout_payload(args)
-        payload = _http_send_json(
-            f"{base_url}/api/control/ui/panels",
-            {
-                "workspace_id": args.workspace,
-                "panel_id": args.panel_id,
-                "title": args.title,
-                "kind": panel_kind,
-                "builtin_panel": args.builtin_panel,
-                "extension": args.extension,
-                "extension_panel": args.extension_panel,
-                "layout_key": args.layout_key,
-                "position": args.position,
-                "reference_panel_id": args.reference_panel_id,
-                "direction": args.direction,
-                **layout_payload,
-                "visible": not args.hidden,
-                "props": props,
-            },
+        payload = _workspace_payload_from_command(
+            _run_control_command(
+                base_url,
+                "ui.panel.add",
+                target={"workspace_id": args.workspace},
+                args={
+                    "panel_id": args.panel_id,
+                    "title": args.title,
+                    "kind": panel_kind,
+                    "builtin_panel": args.builtin_panel,
+                    "extension": args.extension,
+                    "extension_panel": args.extension_panel,
+                    "layout_key": args.layout_key,
+                    "position": args.position,
+                    "reference_panel_id": args.reference_panel_id,
+                    "direction": args.direction,
+                    **layout_payload,
+                    "visible": not args.hidden,
+                    "props": props,
+                },
+            )
         )
         _print_output(payload, as_json=args.json)
         return
@@ -931,10 +1168,7 @@ def _run_ui_command(args: argparse.Namespace) -> None:
         ):
             raise RuntimeError("Panel update requires at least one field to update")
         props = _parse_json_object(args.props_json, label="--props-json")
-        update_payload: dict[str, object | None] = {
-            "workspace_id": args.workspace,
-            "panel_id": args.panel_id,
-        }
+        update_payload: dict[str, object | None] = {}
         if args.title is not None:
             update_payload["title"] = args.title
         if args.position is not None:
@@ -950,10 +1184,13 @@ def _run_ui_command(args: argparse.Namespace) -> None:
             update_payload["visible"] = visible
         if props is not None:
             update_payload["props"] = props
-        payload = _http_send_json(
-            f"{base_url}/api/control/ui/panels",
-            update_payload,
-            method="PATCH",
+        payload = _workspace_payload_from_command(
+            _run_control_command(
+                base_url,
+                "ui.panel.update",
+                target={"workspace_id": args.workspace, "panel_id": args.panel_id},
+                args=update_payload,
+            )
         )
         _print_output(payload, as_json=args.json)
         return
@@ -961,73 +1198,93 @@ def _run_ui_command(args: argparse.Namespace) -> None:
         layout_payload = _panel_layout_payload(args)
         if not layout_payload:
             raise RuntimeError("Panel resize requires at least one size or constraint flag")
-        payload = _http_send_json(
-            f"{base_url}/api/control/ui/panels",
-            {
-                "workspace_id": args.workspace,
-                "panel_id": args.panel_id,
-                **layout_payload,
-            },
-            method="PATCH",
+        payload = _workspace_payload_from_command(
+            _run_control_command(
+                base_url,
+                "ui.panel.resize",
+                target={"workspace_id": args.workspace, "panel_id": args.panel_id},
+                args=layout_payload,
+            )
         )
         _print_output(payload, as_json=args.json)
         return
     if args.ui_command == "panel" and args.ui_panel_command == "move":
-        payload = _http_send_json(
-            f"{base_url}/api/control/ui/panels",
-            {
-                "workspace_id": args.workspace,
-                "panel_id": args.panel_id,
-                "position": args.position,
-                "reference_panel_id": args.reference_panel_id,
-                "direction": args.direction,
-            },
-            method="PATCH",
+        payload = _workspace_payload_from_command(
+            _run_control_command(
+                base_url,
+                "ui.panel.move",
+                target={"workspace_id": args.workspace, "panel_id": args.panel_id},
+                args={
+                    "position": args.position,
+                    "reference_panel_id": args.reference_panel_id,
+                    "direction": args.direction,
+                },
+            )
         )
         _print_output(payload, as_json=args.json)
         return
     if args.ui_command == "panel" and args.ui_panel_command == "focus":
-        payload = _http_send_json(
-            f"{base_url}/api/control/ui/panels",
-            {
-                "workspace_id": args.workspace,
-                "panel_id": args.panel_id,
-                "active": True,
-                "visible": True,
-            },
-            method="PATCH",
+        payload = _workspace_payload_from_command(
+            _run_control_command(
+                base_url,
+                "ui.panel.focus",
+                target={"workspace_id": args.workspace, "panel_id": args.panel_id},
+            )
         )
         _print_output(payload, as_json=args.json)
         return
     if args.ui_command == "panel" and args.ui_panel_command == "close":
-        payload = _http_send_json(
-            f"{base_url}/api/control/ui/panels",
-            {
-                "workspace_id": args.workspace,
-                "panel_id": args.panel_id,
-                "visible": False,
-            },
-            method="PATCH",
+        payload = _workspace_payload_from_command(
+            _run_control_command(
+                base_url,
+                "ui.panel.close",
+                target={"workspace_id": args.workspace, "panel_id": args.panel_id},
+            )
         )
         _print_output(payload, as_json=args.json)
         return
     if args.ui_command == "panel" and args.ui_panel_command == "show":
-        payload = _http_send_json(
-            f"{base_url}/api/control/ui/panels",
-            {
-                "workspace_id": args.workspace,
-                "panel_id": args.panel_id,
-                "visible": True,
-            },
-            method="PATCH",
+        payload = _workspace_payload_from_command(
+            _run_control_command(
+                base_url,
+                "ui.panel.show",
+                target={"workspace_id": args.workspace, "panel_id": args.panel_id},
+            )
         )
         _print_output(payload, as_json=args.json)
         return
+    if args.ui_command == "panel" and args.ui_panel_command == "state":
+        if args.ui_panel_state_command == "get":
+            payload = _run_control_command(
+                base_url,
+                "ui.panel.state.get",
+                target={"workspace_id": args.workspace, "panel_id": args.panel_id},
+                raise_on_error=False,
+            )
+            _print_output(payload, as_json=args.json)
+            return
+        if args.ui_panel_state_command == "patch":
+            state = _parse_json_object(args.state_json, label="--state-json")
+            payload = _run_control_command(
+                base_url,
+                "ui.panel.state.patch",
+                target={"workspace_id": args.workspace, "panel_id": args.panel_id},
+                args={
+                    "state": state,
+                    "replace_state": args.replace,
+                    "expected_revision": args.expected_revision,
+                },
+                raise_on_error=False,
+            )
+            _print_output(payload, as_json=args.json)
+            return
     if args.ui_command == "panel" and args.ui_panel_command == "remove":
-        payload = _http_send_json(
-            f"{base_url}/api/control/ui/panels",
-            {"workspace_id": args.workspace, "panel_id": args.panel_id},
-            method="DELETE",
+        payload = _workspace_payload_from_command(
+            _run_control_command(
+                base_url,
+                "ui.panel.remove",
+                target={"workspace_id": args.workspace, "panel_id": args.panel_id},
+            )
         )
         _print_output(payload, as_json=args.json)
         return
@@ -1157,8 +1414,14 @@ def main(argv: list[str] | None = None):
     if args.command == "jobs":
         _run_jobs_command(args)
         return
+    if args.command == "commands":
+        _run_commands_command(args)
+        return
     if args.command == "figure":
         _run_figure_command(args)
+        return
+    if args.command == "panel":
+        _run_panel_command(args)
         return
     if args.command == "ui":
         _run_ui_command(args)

@@ -61,6 +61,8 @@ export function RuntimeModulePanel(
   );
   const [LoadedPanel, setLoadedPanel] = useState<ComponentType<RuntimePanelComponentProps> | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const moduleSrc = backendUrl(panel?.data.module_src);
+  const hasPanel = panel !== null;
 
   useEffect(() => {
     let cancelled = false;
@@ -84,18 +86,17 @@ export function RuntimeModulePanel(
       }
     }
 
-    const moduleSrc = backendUrl(panel?.data.module_src);
     if (moduleSrc) {
       void loadPanelModule(moduleSrc);
     } else {
       setLoadedPanel(null);
-      setError(panel ? "Panel module source is not available." : null);
+      setError(hasPanel ? "Panel module source is not available." : null);
     }
 
     return () => {
       cancelled = true;
     };
-  }, [panel?.data.module_src, panel]);
+  }, [hasPanel, moduleSrc]);
 
   if (!panel) {
     return (
@@ -132,7 +133,15 @@ export function RuntimeModulePanel(
 
   const panelProps = panel.props ?? {};
   return (
-    <PanelInstanceProvider value={{ panel, panelId: panel.id, props: panelProps }}>
+    <PanelInstanceProvider
+      value={{
+        panel,
+        panelId: panel.id,
+        props: panelProps,
+        state: panel.state ?? {},
+        stateRevision: panel.state_revision ?? 0,
+      }}
+    >
       <LoadedPanel panel={panel} panelId={panel.id} props={panelProps} />
     </PanelInstanceProvider>
   );

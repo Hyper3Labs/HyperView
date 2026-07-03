@@ -19,10 +19,12 @@ class Sample(BaseModel):
     id: str = Field(..., description="Unique identifier for the sample")
     filepath: str = Field(..., description="Path to the image file")
     label: str | None = Field(default=None, description="Label for the sample")
+    text: str | None = Field(default=None, description="Text content or caption")
     metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
     thumbnail_base64: str | None = Field(default=None, description="Cached thumbnail as base64")
     width: int | None = Field(default=None, description="Image width in pixels")
     height: int | None = Field(default=None, description="Image height in pixels")
+    modality: str = Field(default="image", description="Data modality: image, text, or multimodal")
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -78,6 +80,8 @@ class Sample(BaseModel):
             "filepath": self.filepath,
             "filename": self.filename,
             "label": self.label,
+            "text": self.text,
+            "modality": self.modality,
             "metadata": self.metadata,
             "width": self.width,
             "height": self.height,

@@ -76,6 +76,7 @@ Current global SDK fields:
 - `hooks.usePanelLayouts()`
 - `hooks.usePanelLayoutView()`
 - `hooks.usePanelProps()`
+- `hooks.usePanelState()`
 - `hooks.usePanelRuntimeState()`
 - `hooks.usePanelSamples()`
 - `hooks.usePanelSamplesView()`
@@ -97,18 +98,19 @@ Important distinction:
 Current hook return shapes:
 
 - `usePanelSelection()` → `{ selectedIds: string[], selectionSource: SelectionUpdateSource }`
-- `usePanelCommands()` → `{ setLabelFilter, setHoveredId, clearLassoSelection, clearSelection(): void, setSelection(ids, { source?, persist?, clearLasso? }): Promise<RuntimeSnapshot | null>, showSimilar({ sampleId, layoutKey, k?, source?, focus?, persist? }): Promise<RuntimeSnapshot | null>, setActiveLayout(layoutKey, { persist? }): Promise<RuntimeSnapshot | null>, setLayoutViewCamera(layoutKey, camera3d): void, setLayoutViewCameraPersisted(layoutKey, camera3d): Promise<null>, setPanelLayout(panelId, { width?, height?, minWidth?, minHeight?, maxWidth?, maxHeight? }), resizePanel(panelId, { width?, height?, minWidth?, minHeight?, maxWidth?, maxHeight? }), movePanel(panelId, { position, referencePanelId?, direction? }), setPanelVisible(panelId, visible), setActivePanel(panelId), focusPanel(panelId): boolean, focusBuiltin(role): boolean, focusPanelByRole(role): boolean, closePanel(panelId): boolean }`. `showSimilar` is layout-scoped: pass the layout key and HyperView resolves the associated embedding space automatically. `persist` accepts `true`, `false`, or `"background"` for selection/layout/similarity commands; omitted/`"background"` updates local state immediately and writes runtime state asynchronously, `true` waits for runtime persistence, and `false` is local-only.
+- `usePanelCommands()` → `{ setLabelFilter, setHoveredId, clearLassoSelection, clearSelection({ persist? }), clearQueryContext({ persist? }), setSelection(ids, { source?, persist?, clearLasso? }): Promise<RuntimeSnapshot | null>, showSimilar({ sampleId, layoutKey, k?, source?, focus?, persist? }): Promise<RuntimeSnapshot | null>, setActiveLayout(layoutKey, { persist? }): Promise<RuntimeSnapshot | null>, setLayoutViewCamera(layoutKey, camera3d): void, setLayoutViewCameraPersisted(layoutKey, camera3d): Promise<null>, setPanelLayout(panelId, { width?, height?, minWidth?, minHeight?, maxWidth?, maxHeight? }), resizePanel(panelId, { width?, height?, minWidth?, minHeight?, maxWidth?, maxHeight? }), movePanel(panelId, { position, referencePanelId?, direction? }), setPanelVisible(panelId, visible), setActivePanel(panelId), updatePanelProps(panelId, props), focusPanel(panelId): boolean, focusBuiltin(role): boolean, focusPanelByRole(role): boolean, closePanel(panelId): boolean }`. `showSimilar` is layout-scoped: pass the layout key and HyperView resolves the associated embedding space automatically. Use `clearQueryContext` when resetting both selection and nearest-neighbor/similarity context. Use `updatePanelProps` when one panel needs to update another runtime panel instance's documented props. `persist` accepts `true`, `false`, or `"background"` for selection/layout commands; omitted/`"background"` writes runtime state asynchronously and applies the resulting snapshot, `true` waits for runtime persistence, and `false` is local-only. Samples retrieval and query-context commands are runtime-owned and reject `persist: false`.
 - `usePanelHover()` → `{ hoveredId, setHoveredId(id), clearHover() }`
 - `usePanelLayoutView(layoutKey?)` → `{ layoutKey, view, camera3d, setCamera3d(camera3d) }`
 - `usePanelLayouts()` → `{ layouts, spaces, get(layoutKey), getSpace(spaceKey), find(query), filter(query) }`; query supports `layoutKey`, `spaceKey`, `geometry`, `modelId`, and `dimension`.
 - `usePanelSelectedSamples({ includeThumbnails? })` → `{ selectedIds, samples, loading, error }`
-- `usePanelRuntimeState()` → `{ activeWorkspaceId, runtimeDatasetName, activeLayoutKey, activeSimilarityQuery, requestedLayoutKey, workspaces, customPanels, viewRevision, layoutViews }`
+- `usePanelState()` → `{ state, stateRevision, patchState(statePatch, { replaceState?, expectedRevision? }): Promise<RuntimeSnapshot> }` for durable panel-owned state.
+- `usePanelRuntimeState()` → `{ activeWorkspaceId, runtimeDatasetName, activeLayoutKey, activeSimilarityQuery, requestedLayoutKey, workspaces, customPanels, panelStates, viewRevision, layoutViews }`
 - `usePanelHostState()` → grouped low-level host state: `{ instance, runtime, datasetInfo, samples, samplesView, selection, hover, ui, filters, lasso, neighbors }`
 - `usePanelProps()` → props supplied by the concrete `hv.ui.ExtensionPanel(...)` instance
 - `usePanelUiState()` → `{ sampleGridSize, setSampleGridSize, scatterLabelOverlayMode, setScatterLabelOverlayMode }`
 - `usePanelDatasetInfo()` / `usePanelSamples()` / `usePanelSamplesView()` → host-managed dataset and view state
 - `useTool(uri)` → `{ loading: boolean, result: TResult | null, error: string | null, run(params?): Promise<TResult | null>, reset(): void }`
-- `usePanelClient()` → API data client. Prefer host hooks and `usePanelCommands()` for UI state; useful data methods include `querySamples`, `aggregateSamples`, `getSamplesByIds`, `searchSimilar`, and `selectSamples`.
+- `usePanelClient()` → API data client. Prefer host hooks and `usePanelCommands()` for UI state; useful data methods include `querySamples`, `aggregateSamples`, `getSamplesByIds`, `searchSimilar`, `setSamplesRetrieval`, `clearSamplesRetrieval`, `getPanelState`, `patchPanelState`, and `selectSamples`.
 
 Sample reads default to `includeThumbnails: false` and return `thumbnail_url`
 for image rendering. Request inline thumbnails only when the panel specifically
@@ -156,6 +158,10 @@ hyperview ui panel add \
 - Use `usePanelClient().querySamples(...)`, `aggregateSamples(...)`, or `selectSamples(...)` for dataset-wide behavior instead of fixed-limit client scans.
 - Use `usePanelClient().searchSimilar(...)` instead of hand-building `/api/search/similar/...` URLs.
 - Use `commands.showSimilar({ sampleId, layoutKey })` for nearest-neighbor UI state; pass the layout key and let HyperView resolve the embedding space.
+- Use `commands.clearQueryContext({ persist: true })` for reset buttons that must clear both selected samples and active nearest-neighbor context in runtime state.
+- Use `usePanelState()` for durable panel-owned state. Patch with `expectedRevision` when concurrent edits would lose user work.
+- Do not use browser storage, ad hoc events, or timers to coordinate startup state or cross-panel readiness; write durable intent through runtime commands or `usePanelState()`.
+- Use `commands.updatePanelProps(panelId, props)` instead of hand-building panel-control HTTP requests from panel modules.
 - Use SDK commands or client methods for control-plane writes.
 - Use `setActivePanel`, `setPanelVisible`, `resizePanel`, and `movePanel` when a panel needs to durably control panel view state. Use local `focusPanel` and `closePanel` only for transient user actions.
 - Do not use `window.dispatchEvent` / `window.addEventListener` to synchronize panel state. Keep shared state in the host/runtime model, or keep the interaction inside one owner panel until a public shared-state hook exists.

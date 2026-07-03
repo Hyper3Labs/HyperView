@@ -56,7 +56,7 @@ class ExtensionPanel:
     extension: str
     panel: str
     title: str | None = None
-    position: PanelPosition = "right"
+    position: PanelPosition | None = None
     reference_panel_id: str | None = None
     direction: PanelDirection | None = None
     layout: PanelLayout | None = None
@@ -228,7 +228,7 @@ def _compile_item(
             workspace_id=workspace_id,
         )
 
-    position = default_position or item.position
+    position = default_position if default_position is not None else item.position
     spec = _panel_to_spec(
         item,
         position=position,
@@ -280,7 +280,7 @@ def _container_direction(kind: ContainerKind) -> PanelDirection:
 def _panel_to_spec(
     panel: ExtensionPanel | Scatter | Samples,
     *,
-    position: PanelPosition,
+    position: PanelPosition | None,
     runtime: HyperViewRuntime | None,
     workspace_id: str | None,
 ) -> CustomPanelSpec:

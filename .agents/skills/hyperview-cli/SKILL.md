@@ -51,7 +51,7 @@ HyperView currently supports Python 3.10 through 3.13; `--python 3.12` keeps the
 - Datasets are created separately from workspaces.
 - The workspace owns the dataset selection.
 - `ui layout set` changes the active layout and opens the matching built-in scatter panel.
-- `ui similarity set` selects an anchor sample and pins the nearest-neighbor context to an explicit layout or space.
+- Samples retrieval state lives under the runtime-managed Samples panel state. `ui samples retrieval set-anchor` selects an anchor sample and pins nearest-neighbor context to an explicit layout or space.
 - Runtime-added panels can be built-in samples panels, typed scatter instances bound to explicit layout keys, or extension-backed panel modules loaded into the host React tree.
 - Runtime-added panels use the stable `HyperViewPanelSDK` surface on `window`.
 - Extensions are repo-local folders with `extension.toml`, optional Python tools, and optional panel modules.
@@ -72,12 +72,19 @@ Read [references/extensions.md](references/extensions.md) when the task involves
 - Prefer `workspace create --dataset ...` over separate create and dataset-attach calls when setting up a new workspace.
 - In Python dataset setup code, use public ingestion helpers such as `dataset.add_samples([...])` or `dataset.add_images_dir(...)`.
 - Prefer built-in providers before registering custom providers. For Hyper3-CLIP, use `dataset.compute_embeddings(model="hyper3-clip-v0.5", provider="hyper-models")`.
+- In comparison demos, fail fast when a required model/provider cannot compute embeddings; do not silently substitute the baseline model as a "candidate" fallback.
 - When a project truly needs a custom Python provider, use `hyperview provider register ...` from the CLI or `hv.register_provider(...)` in Python.
 - For custom panel code, create an extension under `.hyperview/extensions/<extension-name>/`; do not register arbitrary panel module files directly.
 - For side-by-side embedding comparisons, add typed scatter panels through `hyperview ui panel add --kind scatter --layout-key ... --reference-panel-id ... --direction right`.
 - Use first-class view layout fields for panel sizing and visibility: `hv.ui.PanelLayout(width=..., min_width=...)` in Python, or `hyperview ui panel resize/move/focus/close/show` from the CLI. Do not pass Dockview-specific sizing through panel props.
+- Runtime panel add/update/remove, sizing, placement, focus, visibility, and state commands share the same control path in CLI and Python. Use `hyperview ui panel ...` or `session.ui`/`session.control`; do not call raw panel-control HTTP routes from examples or demos.
 - To retitle an existing runtime panel or replace its props, use `hyperview ui panel update --panel-id ... --title ... --props-json ...` instead of remove/re-add when preserving panel identity matters.
-- For nearest-neighbor comparisons, use `hyperview ui similarity set --sample-id ... --layout-key ...` or panel SDK `commands.showSimilar(...)`; do not infer neighbor space from whichever scatter panel is focused.
+- For nearest-neighbor comparisons, use `hyperview ui samples retrieval set-anchor --sample-id ... --layout-key ...` or panel SDK `commands.showSimilar(...)`; do not infer neighbor space from whichever scatter panel is focused.
+- For collection-backed Samples panel actions, use `hyperview panel samples show-neighbors ...` and `hyperview panel labels filter ...`; read the returned `result.collection_id` and `result.collection`.
+- Use `hyperview ui panel state get/patch` or SDK `usePanelState()` when a panel needs durable panel-owned state. Keep durable state under runtime panel state instead of browser local storage or ad hoc events.
+- For reset controls in panels, use SDK `commands.clearQueryContext(...)` when both selection and nearest-neighbor context should be cleared.
+- Do not use timers or browser storage to wait for panel readiness or guard startup state. Write the intended state through runtime commands or `usePanelState()`.
+- When a panel needs to update another runtime panel's documented props, use SDK `commands.updatePanelProps(...)`; do not hand-roll panel-control HTTP requests from panel code.
 - For extensions, prefer `.hyperview/extensions/<extension-name>/` in the project root. `hyperview serve` auto-discovers those folders and attaches them to the launched workspace, so they can live in version control with the dataset/project code.
 - For demos/spaces that launch HyperView from Python, compose panels with `hv.ui.Horizontal`, `hv.ui.Vertical`, `hv.ui.Tabs`, `hv.ui.Grid`, `hv.ui.Scatter`, `hv.ui.Samples`, `hv.ui.ExtensionPanel`, and `hv.ui.PanelLayout`; keep extension manifests focused on reusable panel/tool definitions.
 - Keep layout orchestration out of panel modules. A panel should not close, hide, or rearrange sibling panels on mount; use `hv.ui.View(...)` or `hyperview ui panel ...` to compose the workspace.
@@ -101,7 +108,7 @@ Read [references/extensions.md](references/extensions.md) when the task involves
 
 The runtime exposes JSON discovery endpoints alongside the CLI. Use them to obtain layout keys, sample IDs, and registered tools/panels for follow-up commands:
 
-- `GET /api/runtime?workspace_id=<ws>` &mdash; full snapshot. Read `workspace.ui.active_layout_key`, `workspace.ui.selected_ids`, `workspace.ui.custom_panels[*].data.module_src`, and registered `extensions`/`tools`.
+- `GET /api/runtime?workspace_id=<ws>` &mdash; full snapshot. Read `workspace.ui.active_layout_key`, `workspace.ui.selected_ids`, `workspace.ui.panels`, `workspace.ui.custom_panels[*].state`, `workspace.ui.custom_panels[*].data.module_src`, and registered `extensions`/`tools`.
 - `GET /api/embeddings?workspace_id=<ws>` &mdash; the active or default layout, including `layout_key`, `geometry`, and sample `ids`. Use the returned `layout_key` for `hyperview ui layout set --layout-key ...` and pick from `ids` for `hyperview ui selection set --ids ...`.
 - `GET /api/tools` &mdash; registered tool URIs (also returned by `hyperview tools list --json`).
 
