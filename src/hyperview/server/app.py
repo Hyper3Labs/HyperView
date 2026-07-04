@@ -345,6 +345,75 @@ def _query_samples(ds: Dataset, request: SamplesQueryRequest | SamplesAggregateR
     return samples
 
 
+def _resolve_collection_items(
+    ds: Dataset,
+    collection: Any,
+    *,
+    offset: int,
+    limit: int,
+) -> tuple[list[tuple[Any, float | None]], int, bool]:
+    """Materialize a page of a collection's members as (sample, score) pairs.
+
+    Reuses the same retrieval/filtering methods the collection.* commands used
+    to build the collection, rather than storing membership row-by-row, so a
+    collection always reflects current data.
+    """
+    query = collection.query or {}
+
+    if collection.kind == "neighbors":
+        anchor = query.get("anchor") or {}
+        sample_id = str(anchor.get("entityId") or "")
+        if not sample_id:
+            raise ValueError("Neighbors collection is missing an anchor entity id")
+        k = int(query.get("k") or 18)
+        results = ds.find_similar(sample_id, k=k, space_key=query.get("spaceKey"))
+        total = len(results)
+        page = results[offset : offset + limit]
+        return (
+            [(sample, float(distance)) for sample, distance in page],
+            total,
+            offset + limit < total,
+        )
+
+    if collection.kind == "search":
+        query_text = str(query.get("queryText") or "")
+        if not query_text:
+            raise ValueError("Search collection is missing queryText")
+        k = int(query.get("k") or 18)
+        results = ds.find_similar_by_text(query_text, k=k, space_key=query.get("spaceKey"))
+        total = len(results)
+        page = results[offset : offset + limit]
+        return (
+            [(sample, float(distance)) for sample, distance in page],
+            total,
+            offset + limit < total,
+        )
+
+    if collection.kind == "filter":
+        field = str(query.get("field") or "label")
+        op = str(query.get("op") or "eq")
+        value = query.get("value")
+        if field == "label" and op == "eq":
+            samples, total = ds.get_samples_paginated(offset=offset, limit=limit, label=value)
+            return [(sample, None) for sample in samples], total, offset + limit < total
+        # Less common field/op combinations: filter in memory. Every sample is
+        # still loaded once per request in this path, unlike the label fast path.
+        all_samples = ds.samples
+        if field == "label":
+            matches = [s for s in all_samples if s.label == value]
+        else:
+            matches = [s for s in all_samples if _metadata_value(s.metadata, field) == value]
+        total = len(matches)
+        page = matches[offset : offset + limit]
+        return [(sample, None) for sample in page], total, offset + limit < total
+
+    if collection.kind == "all":
+        samples, total = ds.get_samples_paginated(offset=offset, limit=limit)
+        return [(sample, None) for sample in samples], total, offset + limit < total
+
+    raise ValueError(f"Collection kind '{collection.kind}' is not yet materializable")
+
+
 def create_app(
     dataset: Dataset | None = None,
     runtime: HyperViewRuntime | None = None,
@@ -934,6 +1003,76 @@ def create_app(
             for key, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
         ]
         return {"total": len(samples), "group_by": request.group_by, "groups": groups}
+
+    @app.get("/api/collections/{collection_id}")
+    async def get_collection(
+        collection_id: str,
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+        workspace_id: str | None = Query(None),
+    ):
+        """Get collection metadata (kind, query, dataset scope)."""
+        try:
+            workspace = runtime_dep.get_workspace(workspace_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        collection = workspace.collections.get(collection_id)
+        if collection is None:
+            raise HTTPException(status_code=404, detail=f"Unknown collection: {collection_id}")
+        return collection.to_dict()
+
+    @app.get("/api/collections/{collection_id}/items")
+    async def get_collection_items(
+        collection_id: str,
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+        workspace_id: str | None = Query(None),
+        offset: int = Query(0, ge=0),
+        limit: int = Query(100, ge=1, le=MAX_SAMPLE_PAGE_SIZE),
+        include_thumbnails: bool = Query(False),
+    ):
+        """Get a paged, materialized slice of a collection's member samples.
+
+        This is the read path collections were introduced for: panels resolve
+        `collection_id` to rows here instead of owning retrieval/filter logic
+        themselves. Membership is (re)computed from the collection's stored
+        `query`, not stored row-by-row, so it always reflects current data.
+        """
+        try:
+            workspace = runtime_dep.get_workspace(workspace_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        collection = workspace.collections.get(collection_id)
+        if collection is None:
+            raise HTTPException(status_code=404, detail=f"Unknown collection: {collection_id}")
+
+        try:
+            ds = runtime_dep.get_dataset(
+                workspace_id=workspace.id, dataset_name=collection.dataset_id or None
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        try:
+            items, total, has_more = _resolve_collection_items(
+                ds, collection, offset=offset, limit=limit
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        return {
+            "collection_id": collection.id,
+            "kind": collection.kind,
+            "offset": offset,
+            "limit": limit,
+            "total": total,
+            "has_more": has_more,
+            "items": [
+                {
+                    **serialize_sample_for_response(sample, include_thumbnail=include_thumbnails),
+                    "score": score,
+                }
+                for sample, score in items
+            ],
+        }
 
     @app.get("/api/embeddings", response_model=EmbeddingsResponse)
     async def get_embeddings(ds: Dataset = Depends(get_dataset), layout_key: str | None = None):
