@@ -56,28 +56,25 @@ extension surfaces all have a concrete mechanism today.
 server-side (`runtime.py:_resolve_retrieval_context`). Confirms "runtime/
 workspace state is the source of truth" is honored. **No gap.**
 
-## 7. Collections materialization (Phase 3, in progress)
+## 7. Collections materialization (Phase 3, landed)
 
-`GET /api/collections/{id}` and `GET /api/collections/{id}/items` now exist
-(this pass) for neighbors/search/filter/all collection kinds. Not yet done:
-the frontend Samples/ImageGrid panel does not render by `collection_id`
-against this endpoint — `useSamples(collectionId)` in
-`frontend/src/panel-sdk/index.tsx` still filters the client-side `state.samples`
-array in memory (`sampleMatchesCollection`), which only understands
-`kind === "filter"` with `field === "label"` and doesn't page or support
-`neighbors`/`search` collections at all. Rewiring that hook (and
-`samplesImageGridPanel.tsx`) to page through the new endpoint is the real
-remaining Phase 3 work, deliberately deferred — see the commit message on
-`1fc55fe` for why (it's a materially riskier change to the primary UI with no
-frontend test harness to catch regressions, and deserves its own pass).
-`space_key` -> representation/index split (plan's Phase 3 item 3) is also
-still open and independently scoped.
+`GET /api/collections/{id}` and `GET /api/collections/{id}/items` exist for
+neighbors/search/filter/all collection kinds. `useSamples(collectionId)` in
+`frontend/src/panel-sdk/index.tsx` now pages through that endpoint for those
+kinds (51a712f), in live servers and static bundles alike; non-materializable
+kinds (selection/lasso/tool_result/extension) keep the legacy client-side
+filter. The `space_key` -> representation/index split landed at the contract
+level (c90bfca): `/api/dataset` exposes derived `representations[]` and
+`indexes[]`, and `index_id` (`space:<space_key>`) is accepted at every
+retrieval boundary. Remaining follow-ups: point the built-in Samples grid's
+host view model at a `collection_id`, and eventually key storage by
+representation/index instead of `space_key`.
 
 ## Conclusion
 
-The only concrete architectural gaps beyond what `refactor-plan-2026-07.md`
-already scopes are (a) generic field mapping / typed Field discovery — Medium
-priority per architecture.md, own follow-up phase — and (b) finishing the
-frontend half of Phase 3 (collection_id-driven rendering) plus the
-space_key/representation-index split, both already named in the plan doc.
+The only concrete architectural gap beyond what `refactor-plan-2026-07.md`
+already scopes is generic field mapping / typed Field discovery — Medium
+priority per architecture.md, own follow-up phase. Phase 3's frontend half
+and the contract-level representation/index split have landed; the storage
+rename and the built-in grid's collection_id rendering are named follow-ups.
 No changes needed to phase ordering.

@@ -88,10 +88,19 @@ special cases.
 ### Phase 3 — Collections as source of truth
 
 1. Materialize collection membership (result rows with ranks/scores) in the
-   backend, paged via `GET /api/collections/{id}/items`.
+   backend, paged via `GET /api/collections/{id}/items`. **Done** (1fc55fe).
 2. Samples panel renders whatever `collection_id` it is pointed at; retrieval
    commands produce/update collections instead of panel-local result state.
+   **Done for the SDK surface** (51a712f): `useSamples(collectionId)` pages
+   through the endpoint for `all`/`filter`/`neighbors`/`search` kinds (live
+   and static bundles). The built-in Samples grid still renders through the
+   host view model; pointing it at a `collection_id` is follow-up work.
 3. Split `space_key` into representation/index per architecture doc.
+   **First landing done** (contract level): `/api/dataset` exposes derived
+   `representations[]`/`indexes[]`, and `index_id` (`space:<space_key>`) is
+   accepted at every retrieval boundary with `space_key` as the alias.
+   Storage/table rename deferred until representations get their own
+   lifecycle.
 
 ### Phase 4 — Static export (`hyperview export`)
 
