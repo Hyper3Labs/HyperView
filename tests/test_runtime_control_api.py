@@ -296,7 +296,7 @@ def test_runtime_control_api_supports_checkpoint_jobs_panels_and_ui_state(
 
     histogram_panel_response = _run_control_command(
         client,
-        "ui.panel.add",
+        "workspace.panel.add",
         target={"workspace_id": "default"},
         args={
             "panel_id": "label-histogram",
@@ -312,7 +312,7 @@ def test_runtime_control_api_supports_checkpoint_jobs_panels_and_ui_state(
 
     text_panel_response = _run_control_command(
         client,
-        "ui.panel.add",
+        "workspace.panel.add",
         target={"workspace_id": "default"},
         args={
             "panel_id": "notes",
@@ -326,7 +326,7 @@ def test_runtime_control_api_supports_checkpoint_jobs_panels_and_ui_state(
 
     update_panel_response = _run_control_command(
         client,
-        "ui.panel.update",
+        "workspace.panel.update",
         target={"workspace_id": "default", "panel_id": "notes"},
         args={
             "title": "Ranked Notes",
@@ -350,7 +350,7 @@ def test_runtime_control_api_supports_checkpoint_jobs_panels_and_ui_state(
     target_layout = job_b["result"]["layout_keys"][0]
     scatter_panel_response = _run_control_command(
         client,
-        "ui.panel.add",
+        "workspace.panel.add",
         target={"workspace_id": "default"},
         args={
             "panel_id": "experiment-b-scatter",
@@ -445,7 +445,7 @@ def test_runtime_control_api_supports_checkpoint_jobs_panels_and_ui_state(
 
     remove_scatter_response = _run_control_command(
         client,
-        "ui.panel.remove",
+        "workspace.panel.remove",
         target={"workspace_id": "default", "panel_id": "experiment-b-scatter"},
     )
     assert remove_scatter_response.json()["ok"] is True
@@ -467,7 +467,7 @@ def test_runtime_panel_patch_omits_or_clears_placement_fields() -> None:
 
     response = _run_control_command(
         client,
-        "ui.panel.add",
+        "workspace.panel.add",
         target={"workspace_id": workspace_id},
         args={
             "panel_id": "samples",
@@ -484,7 +484,7 @@ def test_runtime_panel_patch_omits_or_clears_placement_fields() -> None:
 
     response = _run_control_command(
         client,
-        "ui.panel.update",
+        "workspace.panel.update",
         target={"workspace_id": workspace_id, "panel_id": "samples"},
         args={"props": {"mode": "ranked"}},
     )
@@ -497,7 +497,7 @@ def test_runtime_panel_patch_omits_or_clears_placement_fields() -> None:
 
     response = _run_control_command(
         client,
-        "ui.panel.update",
+        "workspace.panel.update",
         target={"workspace_id": workspace_id, "panel_id": "samples"},
         args={
             "position": "right",
@@ -582,7 +582,7 @@ label = "Summary card"
 panel_type = "analysis.summary"
 position = "right"
 file = "panel.js"
-commands = ["ui.panel.state.get", "custom.refresh"]
+commands = ["workspace.panel.state.get", "custom.refresh"]
 queries = ["samples.query"]
 allow_multiple = false
 icon = "chart"
@@ -634,7 +634,7 @@ min_height = 180
         "height": 240,
         "min_height": 180,
     }
-    assert definition_payload["commands"] == ["ui.panel.state.get", "custom.refresh"]
+    assert definition_payload["commands"] == ["workspace.panel.state.get", "custom.refresh"]
     assert definition_payload["queries"] == ["samples.query"]
     assert definition_payload["allow_multiple"] is False
 
@@ -788,7 +788,7 @@ def test_panel_add_command_requires_existing_layout(tmp_path: Path) -> None:
 
     response = _run_control_command(
         client,
-        "ui.panel.add",
+        "workspace.panel.add",
         target={"workspace_id": "default"},
         args={
             "panel_id": "missing-layout",
@@ -800,7 +800,7 @@ def test_panel_add_command_requires_existing_layout(tmp_path: Path) -> None:
 
     assert response.json() == {
         "ok": False,
-        "command": "ui.panel.add",
+        "command": "workspace.panel.add",
         "result": {},
         "error": {
             "code": "not_found",
@@ -884,7 +884,7 @@ def test_ui_similarity_query_is_explicit_and_cleared_with_selection(tmp_path: Pa
 
     response = _run_control_command(
         client,
-        "samples.retrieval.set-anchor",
+        "panel.samples.retrieval.set-anchor",
         target={"workspace_id": workspace_id},
         args={
             "sample_id": "sample-2",
@@ -907,7 +907,7 @@ def test_ui_similarity_query_is_explicit_and_cleared_with_selection(tmp_path: Pa
     samples_state = ui["panels"]["samples"]["state"]
     assert samples_state["mode"] == "retrieval"
     assert samples_state["retrieval"] == expected_retrieval
-    assert ui["similarity_query"] == expected_retrieval
+    assert "similarity_query" not in ui
     assert samples_state["collection"]["kind"] == "neighbors"
 
     selection_response = client.post(
@@ -916,16 +916,16 @@ def test_ui_similarity_query_is_explicit_and_cleared_with_selection(tmp_path: Pa
     )
     assert selection_response.status_code == 200
     selection_ui = selection_response.json()["workspace"]["ui"]
-    assert selection_ui["similarity_query"] is None
+    assert "similarity_query" not in selection_ui
     assert selection_ui["panels"]["samples"]["state"] == {}
 
     clear_response = _run_control_command(
         client,
-        "samples.retrieval.clear",
+        "panel.samples.retrieval.clear",
         target={"workspace_id": workspace_id},
     )
     assert clear_response.json()["ok"] is True
-    assert clear_response.json()["workspace"]["ui"]["similarity_query"] is None
+    assert "similarity_query" not in clear_response.json()["workspace"]["ui"]
 
 
 def test_workspace_load_drops_legacy_similarity_anchor_selection(tmp_path: Path) -> None:
@@ -961,8 +961,6 @@ def test_workspace_load_drops_legacy_similarity_anchor_selection(tmp_path: Path)
     assert workspace.ui.selected_ids == []
     samples_retrieval = workspace.ui.panels["samples"].state["retrieval"]
     assert samples_retrieval["anchor_sample_id"] == "sample-2"
-    assert workspace.ui.similarity_query is not None
-    assert workspace.ui.similarity_query.to_dict() == samples_retrieval
     assert workspace.ui.panels["samples"].state == {
         "mode": "retrieval",
         "retrieval": samples_retrieval,
@@ -984,7 +982,7 @@ def test_ui_similarity_query_rejects_mismatched_layout_and_space() -> None:
 
     response = _run_control_command(
         client,
-        "samples.retrieval.set-anchor",
+        "panel.samples.retrieval.set-anchor",
         target={"workspace_id": "default"},
         args={
             "sample_id": "sample-2",
@@ -995,7 +993,7 @@ def test_ui_similarity_query_rejects_mismatched_layout_and_space() -> None:
 
     assert response.json() == {
         "ok": False,
-        "command": "samples.retrieval.set-anchor",
+        "command": "panel.samples.retrieval.set-anchor",
         "result": {},
         "error": {
             "code": "validation_error",
@@ -1041,7 +1039,7 @@ def test_ui_state_patch_batches_layout_and_selection() -> None:
     ui = response.json()["workspace"]["ui"]
     assert ui["active_layout_key"] is None
     assert ui["selected_ids"] == ["sample-5"]
-    assert ui["similarity_query"] is None
+    assert "similarity_query" not in ui
 
     sourced_response = client.patch(
         "/api/control/ui/state",
@@ -1087,7 +1085,7 @@ def test_ui_state_patch_rejects_samples_retrieval_fields() -> None:
     assert response.status_code == 422
     workspace = runtime.get_workspace("default")
     assert workspace.ui.selected_ids == initial_selected_ids
-    assert workspace.ui.similarity_query is None
+    assert runtime.get_samples_retrieval_query("default") is None
 
 
 def test_sample_responses_include_media_url_and_content_endpoint_serves_file(
@@ -1250,14 +1248,13 @@ def test_set_workspace_dataset_clears_dataset_scoped_ui_state(tmp_path: Path, mo
     assert workspace.dataset_name == "second-dataset"
     assert workspace.ui.active_layout_key is None
     assert workspace.ui.selected_ids == []
-    assert workspace.ui.similarity_query is None
     assert workspace.ui.panels == {}
 
     snapshot = runtime.snapshot()
     assert snapshot["workspace"]["dataset_name"] == "second-dataset"
     assert snapshot["workspace"]["ui"]["active_layout_key"] is None
     assert snapshot["workspace"]["ui"]["selected_ids"] == []
-    assert snapshot["workspace"]["ui"]["similarity_query"] is None
+    assert "similarity_query" not in snapshot["workspace"]["ui"]
     assert snapshot["workspace"]["ui"]["panels"] == {}
 
 

@@ -40,14 +40,20 @@ class ControlService:
             )
             execution = spec.handler(self.runtime, target, args)
             workspace = execution.workspace.to_dict() if execution.workspace is not None else None
+            snapshot = (
+                self.runtime.snapshot(execution.workspace.id)
+                if execution.workspace is not None
+                else None
+            )
             revision = execution.revision
             if revision is None and execution.workspace is not None:
                 revision = execution.workspace.ui.view_revision
             return CommandResult(
                 ok=True,
-                command=request.command,
+                command=spec.id,
                 result=dict(execution.result or {}),
                 workspace=workspace,
+                snapshot=snapshot,
                 revision=revision,
             )
         except ValidationError as exc:

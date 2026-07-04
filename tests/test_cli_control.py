@@ -267,7 +267,7 @@ def test_cli_panel_add_posts_extension_panel_instance(
     assert recorded["method"] == "POST"
     assert recorded["url"] == "http://127.0.0.1:6262/api/control/commands/run"
     assert recorded["payload"] == {
-        "command": "ui.panel.add",
+        "command": "workspace.panel.add",
         "target": {"workspace_id": "default"},
         "args": {
             "panel_id": "agent-panel",
@@ -327,7 +327,7 @@ def test_cli_panel_add_posts_scatter_panel_layout_binding(monkeypatch, capsys) -
     assert recorded["method"] == "POST"
     assert recorded["url"] == "http://127.0.0.1:6262/api/control/commands/run"
     assert recorded["payload"] == {
-        "command": "ui.panel.add",
+        "command": "workspace.panel.add",
         "target": {"workspace_id": "default"},
         "args": {
             "panel_id": "uncha-poincare",
@@ -381,7 +381,7 @@ def test_cli_panel_add_posts_builtin_samples_panel(monkeypatch, capsys) -> None:
     assert recorded["method"] == "POST"
     assert recorded["url"] == "http://127.0.0.1:6262/api/control/commands/run"
     assert recorded["payload"] == {
-        "command": "ui.panel.add",
+        "command": "workspace.panel.add",
         "target": {"workspace_id": "default"},
         "args": {
             "panel_id": "samples",
@@ -456,7 +456,7 @@ def test_cli_panel_update_posts_runtime_panel_props(monkeypatch, capsys) -> None
     assert recorded["method"] == "POST"
     assert recorded["url"] == "http://127.0.0.1:6262/api/control/commands/run"
     assert recorded["payload"] == {
-        "command": "ui.panel.update",
+        "command": "workspace.panel.update",
         "target": {"workspace_id": "default", "panel_id": "ranked-clip"},
         "args": {
             "props": {
@@ -556,12 +556,12 @@ def test_cli_panel_layout_commands_patch_runtime_panel_state(monkeypatch, capsys
         "http://127.0.0.1:6262/api/control/commands/run"
     }
     assert recorded[0]["payload"] == {
-        "command": "ui.panel.resize",
+        "command": "workspace.panel.resize",
         "target": {"workspace_id": "default", "panel_id": "readout"},
         "args": {"width": 360, "min_width": 280},
     }
     assert recorded[1]["payload"] == {
-        "command": "ui.panel.move",
+        "command": "workspace.panel.move",
         "target": {"workspace_id": "default", "panel_id": "readout"},
         "args": {
             "position": "right",
@@ -570,17 +570,17 @@ def test_cli_panel_layout_commands_patch_runtime_panel_state(monkeypatch, capsys
         },
     }
     assert recorded[2]["payload"] == {
-        "command": "ui.panel.focus",
+        "command": "workspace.panel.focus",
         "target": {"workspace_id": "default", "panel_id": "readout"},
         "args": {},
     }
     assert recorded[3]["payload"] == {
-        "command": "ui.panel.close",
+        "command": "workspace.panel.close",
         "target": {"workspace_id": "default", "panel_id": "readout"},
         "args": {},
     }
     assert recorded[4]["payload"] == {
-        "command": "ui.panel.show",
+        "command": "workspace.panel.show",
         "target": {"workspace_id": "default", "panel_id": "readout"},
         "args": {},
     }
@@ -595,7 +595,7 @@ def test_cli_generic_command_runner_posts_command_envelope(monkeypatch, capsys) 
         recorded["method"] = method
         return {
             "ok": True,
-            "command": "ui.panel.resize",
+            "command": "workspace.panel.resize",
             "workspace": {"id": "default"},
             "revision": 2,
         }
@@ -606,7 +606,7 @@ def test_cli_generic_command_runner_posts_command_envelope(monkeypatch, capsys) 
         [
             "commands",
             "run",
-            "ui.panel.resize",
+            "workspace.panel.resize",
             "--target",
             "workspace_id=default",
             "--target",
@@ -624,7 +624,7 @@ def test_cli_generic_command_runner_posts_command_envelope(monkeypatch, capsys) 
     assert recorded["method"] == "POST"
     assert recorded["url"] == "http://127.0.0.1:6262/api/control/commands/run"
     assert recorded["payload"] == {
-        "command": "ui.panel.resize",
+        "command": "workspace.panel.resize",
         "target": {"workspace_id": "default", "panel_id": "readout"},
         "args": {"width": 360, "min_width": None},
     }
@@ -634,7 +634,7 @@ def test_cli_generic_command_runner_prints_error_envelope(monkeypatch, capsys) -
     def fake_send(url: str, payload: dict[str, object], method: str = "POST") -> dict[str, object]:
         return {
             "ok": False,
-            "command": "ui.panel.resize",
+            "command": "workspace.panel.resize",
             "error": {
                 "code": "not_found",
                 "message": "Panel not found: missing",
@@ -647,7 +647,7 @@ def test_cli_generic_command_runner_prints_error_envelope(monkeypatch, capsys) -
         [
             "commands",
             "run",
-            "ui.panel.resize",
+            "workspace.panel.resize",
             "--target",
             "workspace_id=default",
             "--target",
@@ -661,7 +661,7 @@ def test_cli_generic_command_runner_prints_error_envelope(monkeypatch, capsys) -
     output = json.loads(capsys.readouterr().out)
     assert output == {
         "ok": False,
-        "command": "ui.panel.resize",
+        "command": "workspace.panel.resize",
         "error": {
             "code": "not_found",
             "message": "Panel not found: missing",
@@ -700,7 +700,7 @@ def test_cli_panel_state_and_samples_retrieval_commands_post_command_envelopes(
         ]
     )
     panel_state_get = json.loads(capsys.readouterr().out)
-    assert panel_state_get["command"] == "ui.panel.state.get"
+    assert panel_state_get["command"] == "workspace.panel.state.get"
 
     main(
         [
@@ -721,7 +721,7 @@ def test_cli_panel_state_and_samples_retrieval_commands_post_command_envelopes(
         ]
     )
     panel_state_patch = json.loads(capsys.readouterr().out)
-    assert panel_state_patch["command"] == "ui.panel.state.patch"
+    assert panel_state_patch["command"] == "workspace.panel.state.patch"
 
     main(
         [
@@ -778,12 +778,12 @@ def test_cli_panel_state_and_samples_retrieval_commands_post_command_envelopes(
         "http://127.0.0.1:6262/api/control/commands/run"
     }
     assert recorded[0]["payload"] == {
-        "command": "ui.panel.state.get",
+        "command": "workspace.panel.state.get",
         "target": {"workspace_id": "default", "panel_id": "samples"},
         "args": {},
     }
     assert recorded[1]["payload"] == {
-        "command": "ui.panel.state.patch",
+        "command": "workspace.panel.state.patch",
         "target": {"workspace_id": "default", "panel_id": "samples"},
         "args": {
             "state": {"settings": {"density": "compact"}},
@@ -792,7 +792,7 @@ def test_cli_panel_state_and_samples_retrieval_commands_post_command_envelopes(
         },
     }
     assert recorded[2]["payload"] == {
-        "command": "samples.retrieval.set-anchor",
+        "command": "panel.samples.retrieval.set-anchor",
         "target": {"workspace_id": "default"},
         "args": {
             "sample_id": "sample-2",
@@ -803,12 +803,12 @@ def test_cli_panel_state_and_samples_retrieval_commands_post_command_envelopes(
         },
     }
     assert recorded[3]["payload"] == {
-        "command": "samples.retrieval.set-k",
+        "command": "panel.samples.retrieval.set-k",
         "target": {"workspace_id": "default"},
         "args": {"k": 24},
     }
     assert recorded[4]["payload"] == {
-        "command": "samples.retrieval.clear",
+        "command": "panel.samples.retrieval.clear",
         "target": {"workspace_id": "default"},
         "args": {},
     }
@@ -848,7 +848,7 @@ def test_cli_panel_state_patch_prints_error_envelope(monkeypatch, capsys) -> Non
     output = json.loads(capsys.readouterr().out)
     assert output == {
         "ok": False,
-        "command": "ui.panel.state.patch",
+        "command": "workspace.panel.state.patch",
         "error": {
             "code": "conflict",
             "message": "panel state revision conflict: expected 1, got 2",
@@ -921,7 +921,7 @@ def test_cli_panel_collection_shortcuts_post_command_envelopes(monkeypatch, caps
         {
             "url": "http://127.0.0.1:6262/api/control/commands/run",
             "payload": {
-                "command": "panel.samples.show-neighbors",
+                "command": "collection.neighbors.create",
                 "target": {"workspace_id": "default"},
                 "args": {
                     "sample_id": "sample-2",
@@ -936,7 +936,7 @@ def test_cli_panel_collection_shortcuts_post_command_envelopes(monkeypatch, caps
         {
             "url": "http://127.0.0.1:6262/api/control/commands/run",
             "payload": {
-                "command": "panel.labels.filter",
+                "command": "collection.filter.set",
                 "target": {"workspace_id": "default"},
                 "args": {
                     "field": "label",
@@ -949,7 +949,7 @@ def test_cli_panel_collection_shortcuts_post_command_envelopes(monkeypatch, caps
         {
             "url": "http://127.0.0.1:6262/api/control/commands/run",
             "payload": {
-                "command": "panel.labels.filter",
+                "command": "collection.filter.set",
                 "target": {"workspace_id": "default"},
                 "args": {
                     "field": "label",

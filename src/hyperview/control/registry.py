@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ValidationError
 
+from hyperview.control.aliases import resolve_command_alias
 from hyperview.control.models import CommandError, CommandMetadata, CommandOwner
 
 if TYPE_CHECKING:
@@ -68,6 +69,7 @@ class CommandRegistry:
         self._commands[spec.id] = spec
 
     def get(self, command_id: str) -> CommandSpec:
+        command_id = resolve_command_alias(command_id)
         try:
             return self._commands[command_id]
         except KeyError as exc:

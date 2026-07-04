@@ -248,9 +248,7 @@ export const useStore = create<AppState>((set) => ({
         state.runtimeDatasetName !== nextDatasetName;
 
       const samplesPanelState = snapshot.workspace.ui.panels?.samples?.state ?? {};
-      const activeSimilarityQuery =
-        coerceSimilarityQuery(samplesPanelState.retrieval) ??
-        snapshot.workspace.ui.similarity_query;
+      const activeSimilarityQuery = coerceSimilarityQuery(samplesPanelState.retrieval);
       const selectedIds = activeSimilarityQuery
         ? []
         : snapshot.workspace.ui.selected_ids;
@@ -361,7 +359,8 @@ export const useStore = create<AppState>((set) => ({
         selectionSource: nextSelectionSource,
         selectionLayoutKey: nextSelectionLayoutKey,
         activeSimilarityQuery:
-          state.activeSimilarityQuery && ids.has(state.activeSimilarityQuery.anchor_sample_id)
+          state.activeSimilarityQuery?.anchor_sample_id &&
+          ids.has(state.activeSimilarityQuery.anchor_sample_id)
             ? state.activeSimilarityQuery
             : null,
         ...createClearedLassoState(),
@@ -382,7 +381,8 @@ export const useStore = create<AppState>((set) => ({
         selectionSource: newSet.size > 0 ? "grid" : null,
         selectionLayoutKey: null,
         activeSimilarityQuery:
-          state.activeSimilarityQuery && newSet.has(state.activeSimilarityQuery.anchor_sample_id)
+          state.activeSimilarityQuery?.anchor_sample_id &&
+          newSet.has(state.activeSimilarityQuery.anchor_sample_id)
             ? state.activeSimilarityQuery
             : null,
         ...createClearedLassoState(),
@@ -399,7 +399,8 @@ export const useStore = create<AppState>((set) => ({
         selectionSource: newSet.size > 0 ? "grid" : null,
         selectionLayoutKey: null,
         activeSimilarityQuery:
-          state.activeSimilarityQuery && newSet.has(state.activeSimilarityQuery.anchor_sample_id)
+          state.activeSimilarityQuery?.anchor_sample_id &&
+          newSet.has(state.activeSimilarityQuery.anchor_sample_id)
             ? state.activeSimilarityQuery
             : null,
         ...createClearedLassoState(),

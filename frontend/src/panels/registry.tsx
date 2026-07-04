@@ -10,7 +10,6 @@ import { Circle, Disc, Globe2 } from "lucide-react";
 
 import { ScatterPanel } from "@/components/ScatterPanel";
 import {
-  createBuiltInPanelContract,
   defineBuiltInCenterPanel,
   type BuiltInCenterPanelDefinition,
   type DockviewPanelPosition,
@@ -86,20 +85,6 @@ function createScatterPanelDefinition(args: {
     component: "scatter",
     title,
     label,
-    contract: createBuiltInPanelContract({
-      panelType: "scatter",
-      label: "Scatter",
-      title: "Embeddings",
-      defaultProps: {
-        geometry,
-        layoutDimension,
-      },
-      defaultLayout: { position: "center" },
-      commands: ["ui.panel.state.get", "ui.panel.state.patch"],
-      queries: ["embeddings", "layouts"],
-      icon: "scatter",
-      category: "embedding",
-    }),
     icon,
     tabComponent,
     Component: ScatterDockPanel,
@@ -182,16 +167,6 @@ const fallbackScatterBuiltInPanel = defineBuiltInCenterPanel<ScatterPanelParams>
   component: "scatter",
   title: "Embeddings",
   label: "Embeddings",
-  contract: createBuiltInPanelContract({
-    panelType: "scatter",
-    label: "Scatter",
-    title: "Embeddings",
-    defaultLayout: { position: "center" },
-    commands: ["ui.panel.state.get", "ui.panel.state.patch"],
-    queries: ["embeddings", "layouts"],
-    icon: "scatter",
-    category: "embedding",
-  }),
   icon: Circle,
   tabComponent: "embeddingsTab",
   Component: ScatterDockPanel,
@@ -242,23 +217,16 @@ const builtInCenterPanelByPanelType = new Map(
   BUILT_IN_CENTER_PANELS.map((panel) => [panel.panelType, panel])
 );
 
-export const BUILT_IN_PANEL_CONTRACTS = Array.from(
-  new Map(
-    BUILT_IN_CENTER_PANELS.map((panel) => [
-      panel.contract.panel_type,
-      panel.contract,
-    ])
-  ).values()
-);
-
 export const CENTER_PANEL_DEFS = BUILT_IN_CENTER_PANELS.filter(
   (panel) => panel.visibleInViewMenu !== false
 ).map((panel) => ({
   id: panel.id,
+  panelType: panel.panelType,
   label: panel.label,
   icon: panel.icon,
 })) as ReadonlyArray<{
   id: string;
+  panelType: string;
   label: string;
   icon: BuiltInCenterPanelDefinition["icon"];
 }>;

@@ -241,14 +241,14 @@ def test_public_ui_panel_layout_helpers_update_runtime_view_state() -> None:
     assert panel.min_width == 240
 
     control_result = session.control.run(
-        "ui.panel.resize",
+        "workspace.panel.resize",
         target={"workspace_id": workspace_id, "panel_id": "map"},
         args={"height": 400},
     )
     assert control_result["ok"] is True
     assert control_result["workspace"]["ui"]["custom_panels"][0]["height"] == 400
     props_result = session.control.run(
-        "ui.panel.update-props",
+        "workspace.panel.update-props",
         target={"workspace_id": workspace_id, "panel_id": "map"},
         args={"props": {"mode": "compact"}},
     )
@@ -450,8 +450,6 @@ def test_public_ui_show_similar_resolves_layout_context() -> None:
     samples_state = workspace.ui.panels["samples"].state
     assert samples_state["mode"] == "retrieval"
     assert samples_state["retrieval"] == expected_retrieval
-    assert workspace.ui.similarity_query is not None
-    assert workspace.ui.similarity_query.to_dict() == expected_retrieval
 
 
 def test_public_ui_panel_state_helpers_patch_durable_state() -> None:
@@ -555,7 +553,7 @@ def test_reused_session_ui_control_fails_explicitly() -> None:
         session.ui.set_selection(["sample-1"], workspace_id="demo")
     with pytest.raises(RuntimeError, match="attached to an existing HyperView server"):
         session.control.run(
-            "ui.panel.focus",
+            "workspace.panel.focus",
             target={"workspace_id": "demo", "panel_id": "samples"},
         )
 

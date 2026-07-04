@@ -17,6 +17,7 @@ import {
   fetchSamplesBatch,
   getRuntimeClientId,
   runControlCommand,
+  runtimeSnapshotFromCommandResult,
   setLabelFilterCollection,
 } from "@/lib/api";
 import { getLayoutDimension } from "@/lib/layouts";
@@ -287,7 +288,7 @@ export function createHyperViewPanelClient(workspaceId: string | null) {
       source?: string | null;
     }) {
       return runControlCommand({
-        command: "samples.retrieval.set-anchor",
+        command: "panel.samples.retrieval.set-anchor",
         target: { workspace_id: commandWorkspaceId },
         args: {
           sample_id: args.sampleId,
@@ -300,7 +301,7 @@ export function createHyperViewPanelClient(workspaceId: string | null) {
     },
     async clearSamplesRetrieval() {
       return runControlCommand({
-        command: "samples.retrieval.clear",
+        command: "panel.samples.retrieval.clear",
         target: { workspace_id: commandWorkspaceId },
       });
     },
@@ -312,7 +313,7 @@ export function createHyperViewPanelClient(workspaceId: string | null) {
       source?: string | null;
     }) {
       return runControlCommand({
-        command: "samples.retrieval.set-text-query",
+        command: "panel.samples.retrieval.set-text-query",
         target: { workspace_id: commandWorkspaceId },
         args: {
           query_text: args.queryText,
@@ -325,7 +326,7 @@ export function createHyperViewPanelClient(workspaceId: string | null) {
     },
     async getPanelState(panelId: string) {
       return runControlCommand({
-        command: "ui.panel.state.get",
+        command: "workspace.panel.state.get",
         target: { workspace_id: commandWorkspaceId, panel_id: panelId },
       });
     },
@@ -338,7 +339,7 @@ export function createHyperViewPanelClient(workspaceId: string | null) {
       }
     ) {
       return runControlCommand({
-        command: "ui.panel.state.patch",
+        command: "workspace.panel.state.patch",
         target: { workspace_id: commandWorkspaceId, panel_id: panelId },
         args: {
           state,
@@ -425,8 +426,8 @@ export function usePanelState() {
       if (!activeWorkspaceId || !instance.panelId) {
         throw new Error("No active panel instance");
       }
-      await runControlCommand({
-        command: "ui.panel.state.patch",
+      const payload = await runControlCommand({
+        command: "workspace.panel.state.patch",
         target: {
           workspace_id: activeWorkspaceId,
           panel_id: instance.panelId,
@@ -438,9 +439,7 @@ export function usePanelState() {
           client_id: getRuntimeClientId(),
         },
       });
-      const snapshot = await fetchJson<RuntimeSnapshot>(
-        buildUrl(apiUrl("/runtime"), { workspace_id: activeWorkspaceId })
-      );
+      const snapshot = runtimeSnapshotFromCommandResult(payload);
       applyRuntimeSnapshot(snapshot);
       return snapshot;
     },
@@ -946,8 +945,8 @@ export function usePanelCommands() {
         if (!activeWorkspaceId) {
           throw new Error("No active workspace");
         }
-        await runControlCommand({
-          command: "samples.retrieval.set-anchor",
+        const payload = await runControlCommand({
+          command: "panel.samples.retrieval.set-anchor",
           target: { workspace_id: activeWorkspaceId },
           args: {
             sample_id: options.sampleId,
@@ -957,9 +956,7 @@ export function usePanelCommands() {
             source,
           },
         });
-        const snapshot = await fetchJson<RuntimeSnapshot>(
-          buildUrl(apiUrl("/runtime"), { workspace_id: activeWorkspaceId })
-        );
+        const snapshot = runtimeSnapshotFromCommandResult(payload);
         applyRuntimeSnapshot(snapshot);
         return snapshot;
       };
@@ -985,8 +982,8 @@ export function usePanelCommands() {
         if (!activeWorkspaceId) {
           throw new Error("No active workspace");
         }
-        await runControlCommand({
-          command: "samples.retrieval.set-text-query",
+        const payload = await runControlCommand({
+          command: "panel.samples.retrieval.set-text-query",
           target: { workspace_id: activeWorkspaceId },
           args: {
             query_text: options.queryText,
@@ -996,9 +993,7 @@ export function usePanelCommands() {
             source,
           },
         });
-        const snapshot = await fetchJson<RuntimeSnapshot>(
-          buildUrl(apiUrl("/runtime"), { workspace_id: activeWorkspaceId })
-        );
+        const snapshot = runtimeSnapshotFromCommandResult(payload);
         applyRuntimeSnapshot(snapshot);
         return snapshot;
       };
@@ -1007,10 +1002,6 @@ export function usePanelCommands() {
         if (!activeWorkspaceId) {
           throw new Error("No active workspace");
         }
-        await runControlCommand({
-          command: "samples.retrieval.clear",
-          target: { workspace_id: activeWorkspaceId },
-        });
         await fetchJson(apiUrl("/control/ui/selection"), {
           method: "POST",
           body: JSON.stringify({
@@ -1018,9 +1009,11 @@ export function usePanelCommands() {
             sample_ids: [],
           }),
         });
-        const snapshot = await fetchJson<RuntimeSnapshot>(
-          buildUrl(apiUrl("/runtime"), { workspace_id: activeWorkspaceId })
-        );
+        const payload = await runControlCommand({
+          command: "panel.samples.retrieval.clear",
+          target: { workspace_id: activeWorkspaceId },
+        });
+        const snapshot = runtimeSnapshotFromCommandResult(payload);
         applyRuntimeSnapshot(snapshot);
         return snapshot;
       };
@@ -1051,7 +1044,7 @@ export function usePanelCommands() {
         if (!activeWorkspaceId) {
           throw new Error("No active workspace");
         }
-        await runControlCommand({
+        const payload = await runControlCommand({
           command,
           target: {
             workspace_id: activeWorkspaceId,
@@ -1059,9 +1052,7 @@ export function usePanelCommands() {
           },
           args,
         });
-        const snapshot = await fetchJson<RuntimeSnapshot>(
-          buildUrl(apiUrl("/runtime"), { workspace_id: activeWorkspaceId })
-        );
+        const snapshot = runtimeSnapshotFromCommandResult(payload);
         applyRuntimeSnapshot(snapshot);
         return snapshot;
       };
@@ -1208,26 +1199,26 @@ export function usePanelCommands() {
         setPanelLayout: async (
           panelId: string,
           options: PanelLayoutCommandOptions,
-        ) => persistPanelCommand("ui.panel.resize", panelId, panelLayoutPatch(options)),
+        ) => persistPanelCommand("workspace.panel.resize", panelId, panelLayoutPatch(options)),
         resizePanel: async (
           panelId: string,
           options: PanelLayoutCommandOptions,
-        ) => persistPanelCommand("ui.panel.resize", panelId, panelLayoutPatch(options)),
+        ) => persistPanelCommand("workspace.panel.resize", panelId, panelLayoutPatch(options)),
         movePanel: async (
           panelId: string,
           options: PanelMoveCommandOptions,
         ) =>
-          persistPanelCommand("ui.panel.move", panelId, {
+          persistPanelCommand("workspace.panel.move", panelId, {
             position: options.position,
             reference_panel_id: options.referencePanelId ?? null,
             direction: options.direction ?? null,
           }),
         setPanelVisible: async (panelId: string, visible: boolean) =>
-          persistPanelCommand(visible ? "ui.panel.show" : "ui.panel.close", panelId),
+          persistPanelCommand(visible ? "workspace.panel.show" : "workspace.panel.close", panelId),
         setActivePanel: async (panelId: string) =>
-          persistPanelCommand("ui.panel.focus", panelId),
+          persistPanelCommand("workspace.panel.focus", panelId),
         updatePanelProps: async (panelId: string, props: Record<string, unknown>) =>
-          persistPanelCommand("ui.panel.update-props", panelId, { props }),
+          persistPanelCommand("workspace.panel.update-props", panelId, { props }),
         focusBuiltin: (role: BuiltinPanelRole) => {
           const panelId = getPanelIdForBuiltinRole(role);
           return panelId ? focusDockPanel(dockview.api, panelId) : false;

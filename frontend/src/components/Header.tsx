@@ -44,7 +44,7 @@ import {
   Search,
   Github,
 } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
 import { setActiveWorkspace } from "@/lib/api";
 import { isLabelColorMapId } from "@/lib/labelColors";
@@ -53,8 +53,6 @@ import {
   useColorSettings,
 } from "@/store/useColorSettings";
 
-const PANEL_CONFIG = CENTER_PANEL_DEFS;
-const VIEW_MENU_PANEL_IDS = PANEL_CONFIG.map((panel) => panel.id);
 const EDGE_ZONE_IDS = ["left", "bottom", "right"] as const;
 const GITHUB_URL = "https://github.com/Hyper3Labs/HyperView";
 const DISCORD_URL = process.env.NEXT_PUBLIC_DISCORD_URL ?? "https://discord.gg/Za3rBkTPSf";
@@ -63,11 +61,21 @@ export function Header() {
   const {
     datasetInfo,
     activeWorkspaceId,
+    panelDefinitions,
     workspaces,
   } = useStore();
   const applyRuntimeSnapshot = useStore((state) => state.applyRuntimeSnapshot);
   const dockview = useDockviewApi();
-  const openPanels = useDockviewOpenPanelIds(VIEW_MENU_PANEL_IDS);
+  const panelConfig = useMemo(() => {
+    if (panelDefinitions.length === 0) return CENTER_PANEL_DEFS;
+    const runtimePanelTypes = new Set(panelDefinitions.map((definition) => definition.panel_type));
+    return CENTER_PANEL_DEFS.filter((panel) => runtimePanelTypes.has(panel.panelType));
+  }, [panelDefinitions]);
+  const viewMenuPanelIds = useMemo(
+    () => panelConfig.map((panel) => panel.id),
+    [panelConfig]
+  );
+  const openPanels = useDockviewOpenPanelIds(viewMenuPanelIds);
   const openEdgeZones = useDockviewOpenEdgeZones(EDGE_ZONE_IDS);
   const [datasetPickerOpen, setDatasetPickerOpen] = useState(false);
   const labelColorMapId = useColorSettings((state) => state.labelColorMapId);
@@ -112,7 +120,7 @@ export function Header() {
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-48">
                 {/* Panel toggles - no section header, similar to Rerun */}
-                {PANEL_CONFIG.map((panel) => {
+                {panelConfig.map((panel) => {
                   const Icon = panel.icon;
                   const isOpen = openPanels.has(panel.id);
                   return (

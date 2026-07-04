@@ -78,7 +78,7 @@ def test_control_command_sets_text_retrieval_state(tmp_path: Path) -> None:
     service = _service(tmp_path)
     result = service.run(
         CommandEnvelope(
-            command="samples.retrieval.set-text-query",
+            command="panel.samples.retrieval.set-text-query",
             target={"workspace_id": "default"},
             args={"query_text": "a dog in the park", "space_key": "clip_space", "k": 5},
         )

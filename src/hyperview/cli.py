@@ -979,7 +979,7 @@ def _run_panel_command(args: argparse.Namespace) -> None:
     if args.panel_command == "samples" and args.panel_samples_command == "show-neighbors":
         payload = _run_control_command(
             base_url,
-            "panel.samples.show-neighbors",
+            "collection.neighbors.create",
             target=target,
             args={
                 "sample_id": args.sample_id,
@@ -1008,7 +1008,7 @@ def _run_panel_command(args: argparse.Namespace) -> None:
 
         payload = _run_control_command(
             base_url,
-            "panel.labels.filter",
+            "collection.filter.set",
             target=target,
             args=command_args,
         )
@@ -1055,7 +1055,7 @@ def _run_ui_command(args: argparse.Namespace) -> None:
             payload = _workspace_payload_from_command(
                 _run_control_command(
                     base_url,
-                    "samples.retrieval.set-anchor",
+                    "panel.samples.retrieval.set-anchor",
                     target=target,
                     args={
                         "sample_id": args.sample_id,
@@ -1072,7 +1072,7 @@ def _run_ui_command(args: argparse.Namespace) -> None:
             payload = _workspace_payload_from_command(
                 _run_control_command(
                     base_url,
-                    "samples.retrieval.set-k",
+                    "panel.samples.retrieval.set-k",
                     target=target,
                     args={"k": args.k},
                 )
@@ -1083,7 +1083,7 @@ def _run_ui_command(args: argparse.Namespace) -> None:
             payload = _workspace_payload_from_command(
                 _run_control_command(
                     base_url,
-                    "samples.retrieval.set-text-query",
+                    "panel.samples.retrieval.set-text-query",
                     target=target,
                     args={
                         "query_text": args.query,
@@ -1100,7 +1100,7 @@ def _run_ui_command(args: argparse.Namespace) -> None:
             payload = _workspace_payload_from_command(
                 _run_control_command(
                     base_url,
-                    "samples.retrieval.clear",
+                    "panel.samples.retrieval.clear",
                     target=target,
                 )
             )
@@ -1133,7 +1133,7 @@ def _run_ui_command(args: argparse.Namespace) -> None:
         payload = _workspace_payload_from_command(
             _run_control_command(
                 base_url,
-                "ui.panel.add",
+                "workspace.panel.add",
                 target={"workspace_id": args.workspace},
                 args={
                     "panel_id": args.panel_id,
@@ -1187,7 +1187,7 @@ def _run_ui_command(args: argparse.Namespace) -> None:
         payload = _workspace_payload_from_command(
             _run_control_command(
                 base_url,
-                "ui.panel.update",
+                "workspace.panel.update",
                 target={"workspace_id": args.workspace, "panel_id": args.panel_id},
                 args=update_payload,
             )
@@ -1201,7 +1201,7 @@ def _run_ui_command(args: argparse.Namespace) -> None:
         payload = _workspace_payload_from_command(
             _run_control_command(
                 base_url,
-                "ui.panel.resize",
+                "workspace.panel.resize",
                 target={"workspace_id": args.workspace, "panel_id": args.panel_id},
                 args=layout_payload,
             )
@@ -1212,7 +1212,7 @@ def _run_ui_command(args: argparse.Namespace) -> None:
         payload = _workspace_payload_from_command(
             _run_control_command(
                 base_url,
-                "ui.panel.move",
+                "workspace.panel.move",
                 target={"workspace_id": args.workspace, "panel_id": args.panel_id},
                 args={
                     "position": args.position,
@@ -1227,7 +1227,7 @@ def _run_ui_command(args: argparse.Namespace) -> None:
         payload = _workspace_payload_from_command(
             _run_control_command(
                 base_url,
-                "ui.panel.focus",
+                "workspace.panel.focus",
                 target={"workspace_id": args.workspace, "panel_id": args.panel_id},
             )
         )
@@ -1237,7 +1237,7 @@ def _run_ui_command(args: argparse.Namespace) -> None:
         payload = _workspace_payload_from_command(
             _run_control_command(
                 base_url,
-                "ui.panel.close",
+                "workspace.panel.close",
                 target={"workspace_id": args.workspace, "panel_id": args.panel_id},
             )
         )
@@ -1247,7 +1247,7 @@ def _run_ui_command(args: argparse.Namespace) -> None:
         payload = _workspace_payload_from_command(
             _run_control_command(
                 base_url,
-                "ui.panel.show",
+                "workspace.panel.show",
                 target={"workspace_id": args.workspace, "panel_id": args.panel_id},
             )
         )
@@ -1257,7 +1257,7 @@ def _run_ui_command(args: argparse.Namespace) -> None:
         if args.ui_panel_state_command == "get":
             payload = _run_control_command(
                 base_url,
-                "ui.panel.state.get",
+                "workspace.panel.state.get",
                 target={"workspace_id": args.workspace, "panel_id": args.panel_id},
                 raise_on_error=False,
             )
@@ -1267,7 +1267,7 @@ def _run_ui_command(args: argparse.Namespace) -> None:
             state = _parse_json_object(args.state_json, label="--state-json")
             payload = _run_control_command(
                 base_url,
-                "ui.panel.state.patch",
+                "workspace.panel.state.patch",
                 target={"workspace_id": args.workspace, "panel_id": args.panel_id},
                 args={
                     "state": state,
@@ -1282,7 +1282,7 @@ def _run_ui_command(args: argparse.Namespace) -> None:
         payload = _workspace_payload_from_command(
             _run_control_command(
                 base_url,
-                "ui.panel.remove",
+                "workspace.panel.remove",
                 target={"workspace_id": args.workspace, "panel_id": args.panel_id},
             )
         )

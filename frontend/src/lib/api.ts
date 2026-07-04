@@ -105,6 +105,7 @@ export interface ControlCommandResult {
     [key: string]: unknown;
   };
   workspace?: RuntimeSnapshot["workspace"];
+  snapshot?: RuntimeSnapshot;
   revision?: number;
   error?: {
     code: string;
@@ -140,6 +141,14 @@ export async function runControlCommand(args: {
   return payload;
 }
 
+export function runtimeSnapshotFromCommandResult(
+  payload: ControlCommandResult,
+  context: string = "Command did not return a runtime snapshot"
+): RuntimeSnapshot {
+  if (payload.snapshot) return payload.snapshot;
+  throw new ApiError(context, 500, context);
+}
+
 export async function fetchDataset(signal?: AbortSignal): Promise<DatasetInfo> {
   const res = await fetch(apiUrl("/dataset"), signal ? { signal } : undefined);
   if (!res.ok) {
@@ -167,8 +176,8 @@ export async function setLabelFilterCollection(args: {
   value?: string | null;
   clear?: boolean;
 }): Promise<RuntimeSnapshot> {
-  await runControlCommand({
-    command: "panel.labels.filter",
+  const payload = await runControlCommand({
+    command: "collection.filter.set",
     target: { workspace_id: args.workspaceId },
     args: {
       field: args.field ?? "label",
@@ -176,7 +185,7 @@ export async function setLabelFilterCollection(args: {
       source: "frontend",
     },
   });
-  return fetchRuntimeState(args.workspaceId);
+  return runtimeSnapshotFromCommandResult(payload, "Label filter command did not return a runtime snapshot");
 }
 
 export async function setActiveWorkspace(workspaceId: string): Promise<RuntimeSnapshot> {
@@ -214,8 +223,8 @@ export async function addRuntimePanel(args: {
   visible?: boolean;
   props?: Record<string, unknown> | null;
 }): Promise<RuntimeSnapshot> {
-  await runControlCommand({
-    command: "ui.panel.add",
+  const payload = await runControlCommand({
+    command: "workspace.panel.add",
     target: { workspace_id: args.workspaceId },
     args: {
       panel_id: args.panelId,
@@ -238,21 +247,21 @@ export async function addRuntimePanel(args: {
       props: args.props ?? null,
     },
   });
-  return fetchRuntimeState(args.workspaceId);
+  return runtimeSnapshotFromCommandResult(payload, "Add panel command did not return a runtime snapshot");
 }
 
 export async function removeRuntimePanel(args: {
   workspaceId: string;
   panelId: string;
 }): Promise<RuntimeSnapshot> {
-  await runControlCommand({
-    command: "ui.panel.remove",
+  const payload = await runControlCommand({
+    command: "workspace.panel.remove",
     target: {
       workspace_id: args.workspaceId,
       panel_id: args.panelId,
     },
   });
-  return fetchRuntimeState(args.workspaceId);
+  return runtimeSnapshotFromCommandResult(payload, "Remove panel command did not return a runtime snapshot");
 }
 
 export async function fetchSamples(

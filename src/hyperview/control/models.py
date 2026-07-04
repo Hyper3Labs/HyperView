@@ -57,6 +57,7 @@ class CommandResult(BaseModel):
     command: str
     result: dict[str, Any] = Field(default_factory=dict)
     workspace: dict[str, Any] | None = None
+    snapshot: dict[str, Any] | None = None
     revision: int | None = None
     error: CommandErrorPayload | None = None
 

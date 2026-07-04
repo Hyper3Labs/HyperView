@@ -382,7 +382,7 @@ class SessionUiController:
         """Add a scatter panel pinned to an explicit layout."""
 
         self._session.control.run(
-            "ui.panel.add",
+            "workspace.panel.add",
             target={"workspace_id": workspace_id},
             args={
                 "panel_id": panel_id,
@@ -445,7 +445,7 @@ class SessionUiController:
         if props is not None:
             update_args["props"] = dict(props)
         self._session.control.run(
-            "ui.panel.update",
+            "workspace.panel.update",
             target={"workspace_id": workspace_id, "panel_id": panel_id},
             args=update_args,
         )
@@ -477,7 +477,7 @@ class SessionUiController:
             if value is not None
         }
         self._session.control.run(
-            "ui.panel.resize",
+            "workspace.panel.resize",
             target={"workspace_id": workspace_id, "panel_id": panel_id},
             args=layout_kwargs,
         )
@@ -494,7 +494,7 @@ class SessionUiController:
         """Move a panel in the durable workspace view."""
 
         self._session.control.run(
-            "ui.panel.move",
+            "workspace.panel.move",
             target={"workspace_id": workspace_id, "panel_id": panel_id},
             args={
                 "position": position,
@@ -507,7 +507,7 @@ class SessionUiController:
         """Set the active panel for the workspace view."""
 
         self._session.control.run(
-            "ui.panel.focus",
+            "workspace.panel.focus",
             target={"workspace_id": workspace_id, "panel_id": panel_id},
         )
 
@@ -515,7 +515,7 @@ class SessionUiController:
         """Hide a panel without deleting it from the workspace view."""
 
         self._session.control.run(
-            "ui.panel.close",
+            "workspace.panel.close",
             target={"workspace_id": workspace_id, "panel_id": panel_id},
         )
 
@@ -523,7 +523,7 @@ class SessionUiController:
         """Show a panel that was hidden in the workspace view."""
 
         self._session.control.run(
-            "ui.panel.show",
+            "workspace.panel.show",
             target={"workspace_id": workspace_id, "panel_id": panel_id},
         )
 
@@ -536,7 +536,7 @@ class SessionUiController:
         """Return durable runtime-managed state for a panel."""
 
         payload = self._session.control.run(
-            "ui.panel.state.get",
+            "workspace.panel.state.get",
             target={"workspace_id": workspace_id, "panel_id": panel_id},
         )
         return dict(payload.get("result") or {})
@@ -553,7 +553,7 @@ class SessionUiController:
         """Patch durable runtime-managed panel state."""
 
         payload = self._session.control.run(
-            "ui.panel.state.patch",
+            "workspace.panel.state.patch",
             target={"workspace_id": workspace_id, "panel_id": panel_id},
             args={
                 "state": dict(state),
@@ -565,7 +565,7 @@ class SessionUiController:
 
     def remove_panel(self, panel_id: str, *, workspace_id: str = "default") -> None:
         self._session.control.run(
-            "ui.panel.remove",
+            "workspace.panel.remove",
             target={"workspace_id": workspace_id, "panel_id": panel_id},
         )
 
@@ -623,7 +623,7 @@ class SessionUiController:
         """Set Samples panel retrieval state."""
 
         self._session.control.run(
-            "samples.retrieval.set-anchor",
+            "panel.samples.retrieval.set-anchor",
             target={"workspace_id": workspace_id},
             args={
                 "sample_id": sample_id,
@@ -643,7 +643,7 @@ class SessionUiController:
         """Update the active Samples retrieval result count."""
 
         self._session.control.run(
-            "samples.retrieval.set-k",
+            "panel.samples.retrieval.set-k",
             target={"workspace_id": workspace_id},
             args={"k": k},
         )
@@ -652,7 +652,7 @@ class SessionUiController:
         """Clear Samples panel retrieval state."""
 
         self._session.control.run(
-            "samples.retrieval.clear",
+            "panel.samples.retrieval.clear",
             target={"workspace_id": workspace_id},
         )
 
@@ -669,7 +669,7 @@ class SessionUiController:
         """Run a text query against the workspace dataset and show results in the Samples panel."""
 
         self._session.control.run(
-            "samples.retrieval.set-text-query",
+            "panel.samples.retrieval.set-text-query",
             target={"workspace_id": workspace_id},
             args={
                 "query_text": query_text,

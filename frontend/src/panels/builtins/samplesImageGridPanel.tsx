@@ -31,7 +31,6 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import {
-  createBuiltInPanelContract,
   defineBuiltInCenterPanel,
 } from "@/panels/definitions";
 import { useStore } from "@/store/useStore";
@@ -498,23 +497,6 @@ export const samplesImageGridBuiltInPanel = defineBuiltInCenterPanel({
   component: "grid",
   title: "Samples",
   label: "Samples",
-  contract: createBuiltInPanelContract({
-    panelType: "samples",
-    label: "Samples",
-    title: "Samples",
-    defaultLayout: { position: "right" },
-    commands: [
-      "ui.panel.state.get",
-      "ui.panel.state.patch",
-      "samples.retrieval.set-anchor",
-      "samples.retrieval.set-text-query",
-      "samples.retrieval.set-k",
-      "samples.retrieval.clear",
-    ],
-    queries: ["samples.query", "samples.similar"],
-    icon: "grid",
-    category: "dataset",
-  }),
   icon: Grid3X3,
   tabComponent: "samplesTab",
   Component: SamplesImageGridPanel,

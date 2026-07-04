@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -55,7 +56,7 @@ def test_panel_resize_command_mutates_runtime_panel_layout(tmp_path: Path) -> No
 
     result = service.run(
         CommandEnvelope(
-            command="ui.panel.resize",
+            command="workspace.panel.resize",
             target={"workspace_id": "default", "panel_id": "samples"},
             args={"width": 420, "min_width": None},
         )
@@ -69,12 +70,31 @@ def test_panel_resize_command_mutates_runtime_panel_layout(tmp_path: Path) -> No
     assert panel["min_width"] is None
 
 
+def test_deprecated_command_alias_dispatches_and_warns(tmp_path: Path, caplog) -> None:
+    service = _service_with_panel(tmp_path)
+
+    with caplog.at_level(logging.WARNING, logger="hyperview.control.aliases"):
+        result = service.run(
+            CommandEnvelope(
+                command="ui.panel.resize",
+                target={"workspace_id": "default", "panel_id": "samples"},
+                args={"width": 420},
+            )
+        )
+
+    assert result.ok is True
+    assert result.command == "workspace.panel.resize"
+    assert result.workspace is not None
+    assert result.workspace["ui"]["custom_panels"][0]["width"] == 420
+    assert "Deprecated HyperView command 'ui.panel.resize' used" in caplog.text
+
+
 def test_panel_move_focus_close_show_commands_share_dispatch_path(tmp_path: Path) -> None:
     service = _service_with_panel(tmp_path)
 
     move_result = service.run(
         CommandEnvelope(
-            command="ui.panel.move",
+            command="workspace.panel.move",
             target={"workspace_id": "default", "panel_id": "samples"},
             args={
                 "position": "bottom",
@@ -89,7 +109,7 @@ def test_panel_move_focus_close_show_commands_share_dispatch_path(tmp_path: Path
 
     focus_result = service.run(
         CommandEnvelope(
-            command="ui.panel.focus",
+            command="workspace.panel.focus",
             target={"workspace_id": "default", "panel_id": "samples"},
         )
     )
@@ -99,7 +119,7 @@ def test_panel_move_focus_close_show_commands_share_dispatch_path(tmp_path: Path
 
     close_result = service.run(
         CommandEnvelope(
-            command="ui.panel.close",
+            command="workspace.panel.close",
             target={"workspace_id": "default", "panel_id": "samples"},
         )
     )
@@ -110,7 +130,7 @@ def test_panel_move_focus_close_show_commands_share_dispatch_path(tmp_path: Path
 
     show_result = service.run(
         CommandEnvelope(
-            command="ui.panel.show",
+            command="workspace.panel.show",
             target={"workspace_id": "default", "panel_id": "samples"},
         )
     )
@@ -124,7 +144,7 @@ def test_panel_add_update_remove_commands_share_dispatch_path(tmp_path: Path) ->
 
     add_result = service.run(
         CommandEnvelope(
-            command="ui.panel.add",
+            command="workspace.panel.add",
             target={"workspace_id": "default"},
             args={
                 "panel_id": "samples",
@@ -143,7 +163,7 @@ def test_panel_add_update_remove_commands_share_dispatch_path(tmp_path: Path) ->
 
     update_result = service.run(
         CommandEnvelope(
-            command="ui.panel.update",
+            command="workspace.panel.update",
             target={"workspace_id": "default", "panel_id": "samples"},
             args={
                 "title": "Sample Browser",
@@ -161,7 +181,7 @@ def test_panel_add_update_remove_commands_share_dispatch_path(tmp_path: Path) ->
 
     remove_result = service.run(
         CommandEnvelope(
-            command="ui.panel.remove",
+            command="workspace.panel.remove",
             target={"workspace_id": "default", "panel_id": "samples"},
         )
     )
@@ -175,7 +195,7 @@ def test_panel_command_errors_are_machine_readable(tmp_path: Path) -> None:
 
     missing_panel = service.run(
         CommandEnvelope(
-            command="ui.panel.resize",
+            command="workspace.panel.resize",
             target={"workspace_id": "default", "panel_id": "missing"},
             args={"width": 420},
         )
@@ -186,7 +206,7 @@ def test_panel_command_errors_are_machine_readable(tmp_path: Path) -> None:
 
     invalid_resize = service.run(
         CommandEnvelope(
-            command="ui.panel.resize",
+            command="workspace.panel.resize",
             target={"workspace_id": "default", "panel_id": "samples"},
         )
     )
@@ -196,7 +216,7 @@ def test_panel_command_errors_are_machine_readable(tmp_path: Path) -> None:
 
     unknown = service.run(
         CommandEnvelope(
-            command="ui.panel.unknown",
+            command="workspace.panel.unknown",
             target={"workspace_id": "default", "panel_id": "samples"},
         )
     )
@@ -210,7 +230,7 @@ def test_panel_dimension_commands_reject_non_positive_values(tmp_path: Path) -> 
 
     resize_result = service.run(
         CommandEnvelope(
-            command="ui.panel.resize",
+            command="workspace.panel.resize",
             target={"workspace_id": "default", "panel_id": "samples"},
             args={"width": 0},
         )
@@ -221,7 +241,7 @@ def test_panel_dimension_commands_reject_non_positive_values(tmp_path: Path) -> 
 
     add_result = service.run(
         CommandEnvelope(
-            command="ui.panel.add",
+            command="workspace.panel.add",
             target={"workspace_id": "default"},
             args={
                 "panel_id": "invalid",
@@ -241,7 +261,7 @@ def test_panel_state_commands_merge_patch_and_check_revision(tmp_path: Path) -> 
 
     initial = service.run(
         CommandEnvelope(
-            command="ui.panel.state.get",
+            command="workspace.panel.state.get",
             target={"workspace_id": "default", "panel_id": "samples"},
         )
     )
@@ -254,7 +274,7 @@ def test_panel_state_commands_merge_patch_and_check_revision(tmp_path: Path) -> 
 
     first_patch = service.run(
         CommandEnvelope(
-            command="ui.panel.state.patch",
+            command="workspace.panel.state.patch",
             target={"workspace_id": "default", "panel_id": "samples"},
             args={
                 "state": {
@@ -278,7 +298,7 @@ def test_panel_state_commands_merge_patch_and_check_revision(tmp_path: Path) -> 
 
     second_patch = service.run(
         CommandEnvelope(
-            command="ui.panel.state.patch",
+            command="workspace.panel.state.patch",
             target={"workspace_id": "default", "panel_id": "samples"},
             args={
                 "state": {
@@ -300,7 +320,7 @@ def test_panel_state_commands_merge_patch_and_check_revision(tmp_path: Path) -> 
 
     conflict = service.run(
         CommandEnvelope(
-            command="ui.panel.state.patch",
+            command="workspace.panel.state.patch",
             target={"workspace_id": "default", "panel_id": "samples"},
             args={
                 "state": {"settings": {"density": "loose"}},
@@ -318,7 +338,7 @@ def test_labels_filter_command_creates_filter_collection(tmp_path: Path) -> None
 
     result = service.run(
         CommandEnvelope(
-            command="panel.labels.filter",
+            command="collection.filter.set",
             target={"workspace_id": "default"},
             args={"value": "cat", "source": "test"},
         )
@@ -342,7 +362,7 @@ def test_labels_filter_command_creates_filter_collection(tmp_path: Path) -> None
 
     clear_result = service.run(
         CommandEnvelope(
-            command="panel.labels.filter",
+            command="collection.filter.set",
             target={"workspace_id": "default"},
             args={"clear": True},
         )
@@ -358,7 +378,7 @@ def test_samples_neighbors_command_creates_neighbors_collection(tmp_path: Path) 
 
     result = service.run(
         CommandEnvelope(
-            command="panel.samples.show-neighbors",
+            command="collection.neighbors.create",
             target={"workspace_id": "default"},
             args={"sample_id": "s0", "k": 2, "source": "test"},
         )
@@ -381,7 +401,7 @@ def test_samples_neighbors_command_creates_neighbors_collection(tmp_path: Path) 
     assert samples_state["collection"]["scores"] is None
     assert "layoutId" in samples_state["collection"]["query"]
     assert samples_state["retrieval"]["space_key"] == "test_space"
-    assert result.workspace["ui"]["similarity_query"] == samples_state["retrieval"]
+    assert "similarity_query" not in result.workspace["ui"]
 
 
 def test_labels_filter_clear_does_not_clear_neighbors_collection(tmp_path: Path) -> None:
@@ -389,7 +409,7 @@ def test_labels_filter_clear_does_not_clear_neighbors_collection(tmp_path: Path)
 
     neighbors = service.run(
         CommandEnvelope(
-            command="panel.samples.show-neighbors",
+            command="collection.neighbors.create",
             target={"workspace_id": "default"},
             args={"sample_id": "s0", "k": 2, "source": "test"},
         )
@@ -401,7 +421,7 @@ def test_labels_filter_clear_does_not_clear_neighbors_collection(tmp_path: Path)
 
     cleared_filter = service.run(
         CommandEnvelope(
-            command="panel.labels.filter",
+            command="collection.filter.set",
             target={"workspace_id": "default"},
             args={"clear": True},
         )
@@ -420,7 +440,7 @@ def test_retrieval_clear_does_not_clear_filter_collection(tmp_path: Path) -> Non
 
     filtered = service.run(
         CommandEnvelope(
-            command="panel.labels.filter",
+            command="collection.filter.set",
             target={"workspace_id": "default"},
             args={"value": "cat", "source": "test"},
         )
@@ -432,7 +452,7 @@ def test_retrieval_clear_does_not_clear_filter_collection(tmp_path: Path) -> Non
 
     cleared_retrieval = service.run(
         CommandEnvelope(
-            command="samples.retrieval.clear",
+            command="panel.samples.retrieval.clear",
             target={"workspace_id": "default"},
             args={},
         )
@@ -452,7 +472,7 @@ def test_samples_retrieval_commands_own_samples_panel_state(tmp_path: Path) -> N
 
     result = service.run(
         CommandEnvelope(
-            command="samples.retrieval.set-anchor",
+            command="panel.samples.retrieval.set-anchor",
             target={"workspace_id": "default"},
             args={"sample_id": "s0", "k": 2, "source": "test"},
         )
@@ -471,14 +491,14 @@ def test_samples_retrieval_commands_own_samples_panel_state(tmp_path: Path) -> N
     samples_state = result.workspace["ui"]["panels"]["samples"]["state"]
     assert samples_state["mode"] == "retrieval"
     assert samples_state["retrieval"] == expected_retrieval
-    assert result.workspace["ui"]["similarity_query"] == expected_retrieval
+    assert "similarity_query" not in result.workspace["ui"]
     assert samples_state["collection"]["kind"] == "neighbors"
     assert result.result["panel_id"] == "samples"
     assert result.result["collection_id"] == samples_state["collection_id"]
 
     set_k = service.run(
         CommandEnvelope(
-            command="samples.retrieval.set-k",
+            command="panel.samples.retrieval.set-k",
             target={"workspace_id": "default"},
             args={"k": 3},
         )
@@ -487,11 +507,11 @@ def test_samples_retrieval_commands_own_samples_panel_state(tmp_path: Path) -> N
     assert set_k.workspace is not None
     set_k_retrieval = set_k.workspace["ui"]["panels"]["samples"]["state"]["retrieval"]
     assert set_k_retrieval["k"] == 3
-    assert set_k.workspace["ui"]["similarity_query"] == set_k_retrieval
+    assert "similarity_query" not in set_k.workspace["ui"]
 
     clear = service.run(
         CommandEnvelope(
-            command="samples.retrieval.clear",
+            command="panel.samples.retrieval.clear",
             target={"workspace_id": "default"},
         )
     )
@@ -502,5 +522,5 @@ def test_samples_retrieval_commands_own_samples_panel_state(tmp_path: Path) -> N
         "collection_id": None,
         "collection": None,
     }
-    assert clear.workspace["ui"]["similarity_query"] is None
+    assert "similarity_query" not in clear.workspace["ui"]
     assert clear.workspace["ui"]["panels"]["samples"]["state"] == {}

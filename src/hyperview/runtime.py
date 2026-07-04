@@ -707,7 +707,6 @@ def _custom_panel_instance_payload(
 class WorkspaceUiState:
     active_layout_key: str | None = None
     selected_ids: list[str] = field(default_factory=list)
-    similarity_query: SimilarityQueryState | None = None
     custom_panels: list[CustomPanelSpec] = field(default_factory=list)
     panels: dict[str, PanelStateEntry] = field(default_factory=dict)
     has_explicit_view: bool = False
@@ -745,25 +744,23 @@ class WorkspaceUiState:
                 continue
             panels[panel_id] = PanelStateEntry.from_dict(entry)
 
-        legacy_similarity_query = SimilarityQueryState.from_dict(
-            data.get("similarity_query") or {}
-        )
+        # One-way migration reader for workspaces persisted before July 2026.
+        # Runtime state now lives in ui.panels["samples"].state["retrieval"].
+        legacy_similarity_query = SimilarityQueryState.from_dict(data.get("similarity_query") or {})
         selected_ids = list(data.get("selected_ids") or [])
-        similarity_query = _samples_panel_retrieval_query(panels)
-        if similarity_query is None and legacy_similarity_query is not None:
-            similarity_query = legacy_similarity_query
+        active_retrieval = _samples_panel_retrieval_query(panels)
+        if active_retrieval is None and legacy_similarity_query is not None:
             selected_ids = []
             panels.setdefault(
                 SAMPLES_PANEL_STATE_ID,
                 PanelStateEntry(state=_samples_retrieval_state(legacy_similarity_query)),
             )
-        elif similarity_query is not None:
+        elif active_retrieval is not None:
             selected_ids = []
 
         return cls(
             active_layout_key=data.get("active_layout_key"),
             selected_ids=selected_ids,
-            similarity_query=similarity_query,
             custom_panels=custom_panels,
             panels=panels,
             has_explicit_view=bool(data.get("has_explicit_view", False)),
@@ -773,13 +770,9 @@ class WorkspaceUiState:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        similarity_query = _samples_panel_retrieval_query(self.panels) or self.similarity_query
         return {
             "active_layout_key": self.active_layout_key,
             "selected_ids": list(self.selected_ids),
-            "similarity_query": (
-                similarity_query.to_dict() if similarity_query is not None else None
-            ),
             "custom_panels": [
                 _custom_panel_instance_payload(panel, self.panels)
                 for panel in self.custom_panels
@@ -1074,7 +1067,6 @@ class HyperViewRuntime:
             if previous_dataset_name != dataset.name:
                 workspace.ui.active_layout_key = None
                 workspace.ui.selected_ids = []
-                workspace.ui.similarity_query = None
                 workspace.ui.panels = {}
                 workspace.ui.layout_views = {}
                 workspace.collections = {}
@@ -1109,7 +1101,6 @@ class HyperViewRuntime:
             if previous_dataset_name != dataset_name:
                 workspace.ui.active_layout_key = None
                 workspace.ui.selected_ids = []
-                workspace.ui.similarity_query = None
                 workspace.ui.panels = {}
                 workspace.ui.layout_views = {}
                 workspace.collections = {}
@@ -1439,7 +1430,6 @@ class HyperViewRuntime:
                 source=source,
             )
             workspace.ui.selected_ids = []
-            workspace.ui.similarity_query = None
             self._set_samples_filter_locked(workspace, collection)
             self.workspace_registry.update_workspace(workspace)
             self._bump_version()
@@ -1469,7 +1459,6 @@ class HyperViewRuntime:
             if active_retrieval is not None and active_retrieval.query_text is None:
                 if active_retrieval.anchor_sample_id not in workspace.ui.selected_ids:
                     self._set_samples_retrieval_locked(workspace, None)
-                    workspace.ui.similarity_query = None
             self.workspace_registry.update_workspace(workspace)
             self._bump_version()
             return workspace
@@ -1480,7 +1469,7 @@ class HyperViewRuntime:
     ) -> SimilarityQueryState | None:
         with self._lock:
             workspace = self.get_workspace(workspace_id)
-            return _samples_panel_retrieval_query(workspace.ui.panels) or workspace.ui.similarity_query
+            return _samples_panel_retrieval_query(workspace.ui.panels)
 
     def set_samples_retrieval(
         self,
@@ -1495,10 +1484,6 @@ class HyperViewRuntime:
                     workspace.ui.selected_ids = []
                     changed = True
             changed = self._set_samples_retrieval_locked(workspace, query) or changed
-            legacy_query = _samples_panel_retrieval_query(workspace.ui.panels)
-            if workspace.ui.similarity_query != legacy_query:
-                workspace.ui.similarity_query = legacy_query
-                changed = True
             if changed:
                 self.workspace_registry.update_workspace(workspace)
                 self._bump_version()
@@ -1542,7 +1527,6 @@ class HyperViewRuntime:
                     not in workspace.ui.selected_ids
                 ):
                     self._set_samples_retrieval_locked(workspace, None)
-                    workspace.ui.similarity_query = None
                     changed = True
 
             if changed:
@@ -2568,10 +2552,6 @@ class HyperViewRuntime:
         with self._lock:
             self._sync_panel_module_revisions_locked()
             workspace = self.get_workspace(workspace_id)
-            similarity_query = (
-                _samples_panel_retrieval_query(workspace.ui.panels)
-                or workspace.ui.similarity_query
-            )
             return {
                 "runtime_id": self.runtime_id,
                 "version": self.version,
@@ -2601,9 +2581,6 @@ class HyperViewRuntime:
                     "ui": {
                         "active_layout_key": workspace.ui.active_layout_key,
                         "selected_ids": list(workspace.ui.selected_ids),
-                        "similarity_query": (
-                            similarity_query.to_dict() if similarity_query is not None else None
-                        ),
                         "layout_views": {
                             layout_key: view.to_dict()
                             for layout_key, view in sorted(workspace.ui.layout_views.items())

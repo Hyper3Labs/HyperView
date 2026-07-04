@@ -33,27 +33,27 @@ def test_control_commands_endpoint_lists_backend_panel_commands(tmp_path: Path) 
     assert response.status_code == 200
     command_ids = {command["id"] for command in response.json()["commands"]}
     assert {
-        "ui.panel.resize",
-        "ui.panel.move",
-        "ui.panel.close",
-        "ui.panel.show",
-        "ui.panel.focus",
-        "ui.panel.add",
-        "ui.panel.update",
-        "ui.panel.remove",
-        "ui.panel.state.get",
-        "ui.panel.state.patch",
-        "samples.retrieval.set-anchor",
-        "samples.retrieval.set-text-query",
-        "samples.retrieval.clear",
-        "samples.retrieval.set-k",
-        "panel.labels.filter",
-        "panel.samples.show-neighbors",
+        "workspace.panel.resize",
+        "workspace.panel.move",
+        "workspace.panel.close",
+        "workspace.panel.show",
+        "workspace.panel.focus",
+        "workspace.panel.add",
+        "workspace.panel.update",
+        "workspace.panel.remove",
+        "workspace.panel.state.get",
+        "workspace.panel.state.patch",
+        "panel.samples.retrieval.set-anchor",
+        "panel.samples.retrieval.set-text-query",
+        "panel.samples.retrieval.clear",
+        "panel.samples.retrieval.set-k",
+        "collection.filter.set",
+        "collection.neighbors.create",
     }.issubset(command_ids)
     commands = {command["id"]: command for command in response.json()["commands"]}
-    add_kind_schema = commands["ui.panel.add"]["args_schema"]["properties"]["kind"]
+    add_kind_schema = commands["workspace.panel.add"]["args_schema"]["properties"]["kind"]
     assert "module" not in add_kind_schema["enum"]
-    builtin_panel_schema = commands["ui.panel.add"]["args_schema"]["properties"][
+    builtin_panel_schema = commands["workspace.panel.add"]["args_schema"]["properties"][
         "builtin_panel"
     ]
     assert "samples" not in str(builtin_panel_schema.get("enum", ""))
@@ -65,7 +65,7 @@ def test_control_command_run_mutates_runtime_panel_state(tmp_path: Path) -> None
     resize_response = client.post(
         "/api/control/commands/run",
         json={
-            "command": "ui.panel.resize",
+            "command": "workspace.panel.resize",
             "target": {"workspace_id": "default", "panel_id": "samples"},
             "args": {"width": 420, "min_width": None},
         },
@@ -75,12 +75,14 @@ def test_control_command_run_mutates_runtime_panel_state(tmp_path: Path) -> None
     resize_payload = resize_response.json()
     assert resize_payload["ok"] is True
     assert resize_payload["workspace"]["ui"]["custom_panels"][0]["width"] == 420
+    assert resize_payload["snapshot"]["workspace"]["ui"]["custom_panels"][0]["width"] == 420
+    assert resize_payload["snapshot"]["panel_definitions"]
     assert resize_payload["workspace"]["ui"]["custom_panels"][0]["min_width"] is None
 
     focus_response = client.post(
         "/api/control/commands/run",
         json={
-            "command": "ui.panel.focus",
+            "command": "workspace.panel.focus",
             "target": {"workspace_id": "default", "panel_id": "samples"},
         },
     )
@@ -97,7 +99,7 @@ def test_control_command_run_returns_machine_readable_errors(tmp_path: Path) -> 
     response = client.post(
         "/api/control/commands/run",
         json={
-            "command": "ui.panel.resize",
+            "command": "workspace.panel.resize",
             "target": {"workspace_id": "default", "panel_id": "missing"},
             "args": {"width": 420},
         },

@@ -1,6 +1,10 @@
 """HyperView - Open-source dataset curation with hyperbolic embeddings visualization."""
 
 from . import _version as _version
+from ._compat import disable_blocked_datasets_torch_shared_memory
+
+disable_blocked_datasets_torch_shared_memory()
+
 from . import api as _api
 from . import ui as ui
 

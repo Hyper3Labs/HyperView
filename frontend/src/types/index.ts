@@ -188,7 +188,6 @@ export interface RuntimeWorkspaceState {
   ui: {
     active_layout_key: string | null;
     selected_ids: string[];
-    similarity_query: SimilarityQuery | null;
     panels: Record<string, RuntimePanelStateEntry>;
     layout_views: Record<
       string,

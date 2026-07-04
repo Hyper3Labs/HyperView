@@ -11,7 +11,7 @@ import type {
 } from "dockview-react";
 
 import { isDockviewUserClosablePanelId } from "@/lib/dockviewPanelPolicy";
-import type { DatasetInfo, RuntimePanelDefinition } from "@/types";
+import type { DatasetInfo } from "@/types";
 
 export type DockviewAddPanelOptions = Parameters<DockviewApi["addPanel"]>[0];
 export type DockviewPanelPosition = DockviewAddPanelOptions["position"];
@@ -28,7 +28,6 @@ export interface BuiltInCenterPanelDefinition<
   component: string;
   title: string;
   label: string;
-  contract: RuntimePanelDefinition;
   icon: HyperViewPanelIcon;
   tabComponent: string;
   Component: HyperViewDockviewPanelComponent<TParams>;
@@ -39,38 +38,6 @@ export interface BuiltInCenterPanelDefinition<
     datasetInfo: DatasetInfo | null;
     position?: DockviewPanelPosition;
   }) => DockviewAddPanelOptions;
-}
-
-export function createBuiltInPanelContract(args: {
-  panelType: string;
-  label: string;
-  title?: string;
-  defaultProps?: Record<string, unknown>;
-  defaultState?: Record<string, unknown>;
-  commands?: string[];
-  queries?: string[];
-  defaultLayout?: Record<string, unknown>;
-  icon?: string;
-  category?: string;
-}): RuntimePanelDefinition {
-  return {
-    panel_type: args.panelType,
-    label: args.label,
-    title: args.title ?? args.label,
-    source: "builtin",
-    extension: null,
-    default_props: args.defaultProps ?? {},
-    default_state: args.defaultState ?? {},
-    props_schema: null,
-    state_schema: null,
-    commands: args.commands ?? [],
-    queries: args.queries ?? [],
-    lifecycle: {},
-    default_layout: args.defaultLayout ?? {},
-    allow_multiple: true,
-    icon: args.icon ?? null,
-    category: args.category ?? null,
-  };
 }
 
 function useDockviewTabTitle(api: DockviewPanelApi) {

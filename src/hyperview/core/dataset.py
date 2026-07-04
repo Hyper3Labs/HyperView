@@ -15,6 +15,7 @@ from typing import Any, cast
 import numpy as np
 from PIL import Image
 
+from hyperview._compat import disable_blocked_datasets_torch_shared_memory
 from hyperview.core.sample import Sample
 from hyperview.storage.backend import StorageBackend
 from hyperview.storage.schema import (
@@ -146,6 +147,7 @@ class Dataset:
         persist: bool = True,
         storage: StorageBackend | None = None,
     ):
+        disable_blocked_datasets_torch_shared_memory()
         self.name = name or f"dataset_{uuid.uuid4().hex[:8]}"
 
         if storage is not None:

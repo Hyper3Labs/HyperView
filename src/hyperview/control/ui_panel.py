@@ -437,11 +437,13 @@ def _get_panel_state(
     args: BaseModel,
 ) -> CommandExecution:
     panel_target = _panel_target(target)
+    workspace = runtime.get_workspace(panel_target.workspace_id)
     state_payload = runtime.get_panel_state(
         panel_target.workspace_id,
         panel_target.panel_id,
     )
     return CommandExecution(
+        workspace=workspace,
         result=state_payload,
         revision=int(state_payload.get("state_revision") or 0),
     )
@@ -589,7 +591,7 @@ def create_default_command_registry() -> CommandRegistry:
     registry = CommandRegistry()
     for spec in (
         CommandSpec(
-            id="ui.panel.add",
+            id="workspace.panel.add",
             owner="backend",
             summary="Add or replace a runtime-managed panel.",
             target_model=WorkspaceTarget,
@@ -597,7 +599,7 @@ def create_default_command_registry() -> CommandRegistry:
             handler=_add_panel,
         ),
         CommandSpec(
-            id="ui.panel.update",
+            id="workspace.panel.update",
             owner="backend",
             summary="Update durable runtime panel fields.",
             target_model=PanelTarget,
@@ -605,7 +607,7 @@ def create_default_command_registry() -> CommandRegistry:
             handler=_update_panel,
         ),
         CommandSpec(
-            id="ui.panel.remove",
+            id="workspace.panel.remove",
             owner="backend",
             summary="Remove a runtime-managed panel from the workspace view.",
             target_model=PanelTarget,
@@ -613,7 +615,7 @@ def create_default_command_registry() -> CommandRegistry:
             handler=_remove_panel,
         ),
         CommandSpec(
-            id="ui.panel.resize",
+            id="workspace.panel.resize",
             owner="backend",
             summary="Resize a runtime-managed panel.",
             target_model=PanelTarget,
@@ -621,7 +623,7 @@ def create_default_command_registry() -> CommandRegistry:
             handler=_resize_panel,
         ),
         CommandSpec(
-            id="ui.panel.move",
+            id="workspace.panel.move",
             owner="backend",
             summary="Move a runtime-managed panel.",
             target_model=PanelTarget,
@@ -629,7 +631,7 @@ def create_default_command_registry() -> CommandRegistry:
             handler=_move_panel,
         ),
         CommandSpec(
-            id="ui.panel.focus",
+            id="workspace.panel.focus",
             owner="backend",
             summary="Focus a runtime-managed panel.",
             target_model=PanelTarget,
@@ -637,7 +639,7 @@ def create_default_command_registry() -> CommandRegistry:
             handler=_focus_panel,
         ),
         CommandSpec(
-            id="ui.panel.close",
+            id="workspace.panel.close",
             owner="backend",
             summary="Hide a runtime-managed panel without removing it.",
             target_model=PanelTarget,
@@ -645,7 +647,7 @@ def create_default_command_registry() -> CommandRegistry:
             handler=_close_panel,
         ),
         CommandSpec(
-            id="ui.panel.show",
+            id="workspace.panel.show",
             owner="backend",
             summary="Show a hidden runtime-managed panel.",
             target_model=PanelTarget,
@@ -653,7 +655,7 @@ def create_default_command_registry() -> CommandRegistry:
             handler=_show_panel,
         ),
         CommandSpec(
-            id="ui.panel.update-props",
+            id="workspace.panel.update-props",
             owner="backend",
             summary="Replace documented props for a runtime-managed panel.",
             target_model=PanelTarget,
@@ -661,7 +663,7 @@ def create_default_command_registry() -> CommandRegistry:
             handler=_update_panel_props,
         ),
         CommandSpec(
-            id="ui.panel.state.get",
+            id="workspace.panel.state.get",
             owner="backend",
             summary="Read durable runtime-managed state for a panel.",
             target_model=PanelTarget,
@@ -669,7 +671,7 @@ def create_default_command_registry() -> CommandRegistry:
             handler=_get_panel_state,
         ),
         CommandSpec(
-            id="ui.panel.state.patch",
+            id="workspace.panel.state.patch",
             owner="backend",
             summary="Patch durable runtime-managed state for a panel.",
             target_model=PanelTarget,
@@ -677,7 +679,7 @@ def create_default_command_registry() -> CommandRegistry:
             handler=_patch_panel_state,
         ),
         CommandSpec(
-            id="samples.retrieval.set-anchor",
+            id="panel.samples.retrieval.set-anchor",
             owner="backend",
             summary="Set Samples panel retrieval anchor state.",
             target_model=WorkspaceTarget,
@@ -685,7 +687,7 @@ def create_default_command_registry() -> CommandRegistry:
             handler=_set_samples_retrieval_anchor,
         ),
         CommandSpec(
-            id="samples.retrieval.clear",
+            id="panel.samples.retrieval.clear",
             owner="backend",
             summary="Clear Samples panel retrieval state.",
             target_model=WorkspaceTarget,
@@ -693,7 +695,7 @@ def create_default_command_registry() -> CommandRegistry:
             handler=_clear_samples_retrieval,
         ),
         CommandSpec(
-            id="samples.retrieval.set-k",
+            id="panel.samples.retrieval.set-k",
             owner="backend",
             summary="Set Samples panel retrieval result count.",
             target_model=WorkspaceTarget,
@@ -701,7 +703,7 @@ def create_default_command_registry() -> CommandRegistry:
             handler=_set_samples_retrieval_k,
         ),
         CommandSpec(
-            id="samples.retrieval.set-text-query",
+            id="panel.samples.retrieval.set-text-query",
             owner="backend",
             summary="Set Samples panel text retrieval query state.",
             target_model=WorkspaceTarget,
@@ -709,7 +711,7 @@ def create_default_command_registry() -> CommandRegistry:
             handler=_set_samples_text_retrieval,
         ),
         CommandSpec(
-            id="panel.samples.show-neighbors",
+            id="collection.neighbors.create",
             owner="backend",
             summary="Create a nearest-neighbor collection for the Samples panel.",
             target_model=WorkspaceTarget,
@@ -717,7 +719,7 @@ def create_default_command_registry() -> CommandRegistry:
             handler=_set_samples_retrieval_anchor,
         ),
         CommandSpec(
-            id="panel.labels.filter",
+            id="collection.filter.set",
             owner="backend",
             summary="Create or clear a label filter collection for the Samples panel.",
             target_model=WorkspaceTarget,
