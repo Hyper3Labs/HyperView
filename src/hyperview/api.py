@@ -22,8 +22,16 @@ from hyperview.control import CommandEnvelope, ControlService, create_default_co
 from hyperview.core.dataset import Dataset
 from hyperview.runtime import HyperViewRuntime, ProviderRegistry
 from hyperview.server.app import create_app, set_runtime
+from hyperview.static_export import export_runtime_workspace, export_workspace
 
-__all__ = ["Dataset", "launch", "Session", "register_provider", "unregister_provider"]
+__all__ = [
+    "Dataset",
+    "launch",
+    "Session",
+    "export_workspace",
+    "register_provider",
+    "unregister_provider",
+]
 
 
 @dataclass(frozen=True)
@@ -297,6 +305,16 @@ class Session:
     def open_browser(self):
         """Open the visualizer in a browser window."""
         webbrowser.open(self.url)
+
+    def export(
+        self,
+        out: str | os.PathLike[str],
+        *,
+        workspace_id: str = "default",
+    ) -> dict[str, Any]:
+        """Export a read-only static bundle for a workspace in this session."""
+
+        return export_runtime_workspace(self.runtime, workspace_id, out).to_dict()
 
 
 class SessionControlController:

@@ -6,7 +6,9 @@ import { useDockviewContext } from "@/components/DockviewContext";
 import { usePanelInstance } from "@/components/PanelHostContext";
 import {
   apiUrl,
+  fetchRuntimeState,
   getRuntimeClientId,
+  isStaticBundle,
   runControlCommand,
   runtimeSnapshotFromCommandResult,
   type ControlCommandResult,
@@ -185,6 +187,7 @@ export function useSelection() {
   const selectedIds = useStore((state) => state.selectedIds);
   const selectionSource = useStore((state) => state.selectionSource);
   const clearLassoSelection = useStore((state) => state.clearLassoSelection);
+  const setSelectedIds = useStore((state) => state.setSelectedIds);
 
   const persistSelection = useCallback(
     async (ids: string[]) => {
@@ -193,6 +196,10 @@ export function useSelection() {
       }
       const sampleIds = Array.from(new Set(ids));
       clearLassoSelection();
+      if (isStaticBundle()) {
+        setSelectedIds(new Set(sampleIds), "panel");
+        return fetchRuntimeState(activeWorkspaceId);
+      }
       await fetchJson(apiUrl("/control/ui/selection"), {
         method: "POST",
         body: JSON.stringify({
@@ -206,7 +213,7 @@ export function useSelection() {
       applyRuntimeSnapshot(snapshot);
       return snapshot;
     },
-    [activeWorkspaceId, applyRuntimeSnapshot, clearLassoSelection]
+    [activeWorkspaceId, applyRuntimeSnapshot, clearLassoSelection, setSelectedIds]
   );
 
   return useMemo(

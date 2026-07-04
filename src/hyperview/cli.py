@@ -16,6 +16,7 @@ from hyperview.api import Session
 from hyperview.core.selection import OrbitViewState3D
 from hyperview.figures import FigureRenderOptions, render_layout_figure
 from hyperview.runtime import HyperViewRuntime, ProviderRegistry, WorkspaceRegistry
+from hyperview.static_export import export_workspace
 from hyperview.storage.schema import parse_layout_dimension
 
 
@@ -252,6 +253,11 @@ def _build_control_parser() -> argparse.ArgumentParser:
     status_parser = subparsers.add_parser("status")
     _add_server_flags(status_parser)
     _add_json_flag(status_parser)
+
+    export_parser = subparsers.add_parser("export")
+    export_parser.add_argument("workspace_id")
+    export_parser.add_argument("--out", required=True)
+    _add_json_flag(export_parser)
 
     dataset_parser = subparsers.add_parser("dataset")
     dataset_subparsers = dataset_parser.add_subparsers(dest="dataset_command", required=True)
@@ -691,6 +697,18 @@ def _run_server_command(args: argparse.Namespace) -> None:
 def _run_status_command(args: argparse.Namespace) -> None:
     payload = _http_get_json(f"{_server_base_url(args.host, args.port)}/__hyperview__/health")
     _print_output(payload, as_json=args.json)
+
+
+def _run_export_command(args: argparse.Namespace) -> None:
+    result = export_workspace(args.workspace_id, args.out)
+    payload = {"export": result.to_dict()}
+    if args.json:
+        _print_output(payload, as_json=True)
+        return
+    print(
+        f"Wrote static HyperView bundle to {result.output_dir} "
+        f"({result.num_samples} samples, {result.num_layouts} layouts)"
+    )
 
 
 def _run_dataset_command(args: argparse.Namespace) -> None:
@@ -1395,6 +1413,9 @@ def main(argv: list[str] | None = None):
         return
     if args.command == "status":
         _run_status_command(args)
+        return
+    if args.command == "export":
+        _run_export_command(args)
         return
     if args.command == "dataset":
         _run_dataset_command(args)

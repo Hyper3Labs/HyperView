@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { fetchRuntimeState, getRuntimeEventsUrl } from "@/lib/api";
+import { fetchRuntimeState, getRuntimeEventsUrl, isStaticBundle } from "@/lib/api";
 import { useStore } from "@/store/useStore";
 import type { RuntimeSnapshot } from "@/types";
 
@@ -53,6 +53,12 @@ export function useRuntimeSync(
     };
 
     void bootstrap();
+
+    if (isStaticBundle()) {
+      return () => {
+        cancelled = true;
+      };
+    }
 
     const events = new EventSource(getRuntimeEventsUrl());
     events.onmessage = (event) => {

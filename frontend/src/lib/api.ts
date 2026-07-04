@@ -14,8 +14,15 @@ const API_BASE =
   process.env.NEXT_PUBLIC_HYPERVIEW_API_BASE ??
   (process.env.NODE_ENV === "development" ? "http://127.0.0.1:6262" : "");
 const MISSING_LABEL_SENTINEL = "undefined";
+const READ_ONLY_DEMO_NOTICE = "Read-only demo — pip install hyperview for the full workbench";
 const RUNTIME_CLIENT_ID = `hv-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`;
 const SAMPLE_BATCH_SIZE = 1000;
+
+declare global {
+  interface Window {
+    __HYPERVIEW_STATIC__?: boolean;
+  }
+}
 
 export function apiUrl(path: string): string {
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
@@ -25,8 +32,37 @@ export function apiUrl(path: string): string {
 export function backendUrl(pathOrUrl: string | null | undefined): string | null {
   if (!pathOrUrl) return null;
   if (/^https?:\/\//.test(pathOrUrl)) return pathOrUrl;
+  if (isStaticBundle() && pathOrUrl.startsWith("/api/")) {
+    return staticAssetUrl(pathOrUrl.slice(1).split("?")[0]);
+  }
   if (pathOrUrl.startsWith("/api/")) return `${API_BASE}${pathOrUrl}`;
   return pathOrUrl;
+}
+
+export function isStaticBundle(): boolean {
+  return typeof window !== "undefined" && window.__HYPERVIEW_STATIC__ === true;
+}
+
+export function showReadOnlyNotice(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent("hyperview-readonly-notice", {
+      detail: { message: READ_ONLY_DEMO_NOTICE },
+    })
+  );
+}
+
+function staticAssetUrl(path: string): string {
+  const normalized = path.replace(/^\/+/, "");
+  return new URL(normalized, window.location.href).toString();
+}
+
+async function fetchStaticJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const res = await fetch(staticAssetUrl(path), signal ? { signal } : undefined);
+  if (!res.ok) {
+    await throwApiError(res, `Failed to fetch static asset ${path}`);
+  }
+  return (await res.json()) as T;
 }
 
 function toApiLabel(label: string | null | undefined): string | null {
@@ -118,6 +154,9 @@ export async function runControlCommand(args: {
   target?: Record<string, unknown>;
   args?: Record<string, unknown>;
 }): Promise<ControlCommandResult> {
+  if (isStaticBundle()) {
+    return runStaticControlCommand(args);
+  }
   const res = await fetch(apiUrl("/control/commands/run"), {
     method: "POST",
     headers: {
@@ -150,6 +189,9 @@ export function runtimeSnapshotFromCommandResult(
 }
 
 export async function fetchDataset(signal?: AbortSignal): Promise<DatasetInfo> {
+  if (isStaticBundle()) {
+    return fetchStaticJson<DatasetInfo>("api/dataset.json", signal);
+  }
   const res = await fetch(apiUrl("/dataset"), signal ? { signal } : undefined);
   if (!res.ok) {
     await throwApiError(res, "Failed to fetch dataset");
@@ -158,6 +200,11 @@ export async function fetchDataset(signal?: AbortSignal): Promise<DatasetInfo> {
 }
 
 export async function fetchRuntimeState(workspaceId?: string | null): Promise<RuntimeSnapshot> {
+  if (isStaticBundle()) {
+    const snapshot = await fetchStaticJson<RuntimeSnapshot>("api/runtime.json");
+    staticRuntimeSnapshot = snapshot;
+    return snapshot;
+  }
   const params = new URLSearchParams();
   if (workspaceId) {
     params.set("workspace_id", workspaceId);
@@ -189,6 +236,10 @@ export async function setLabelFilterCollection(args: {
 }
 
 export async function setActiveWorkspace(workspaceId: string): Promise<RuntimeSnapshot> {
+  if (isStaticBundle()) {
+    showReadOnlyNotice();
+    return fetchRuntimeState(workspaceId);
+  }
   const res = await fetch(apiUrl("/control/workspaces/set-active"), {
     method: "POST",
     headers: {
@@ -271,6 +322,21 @@ export async function fetchSamples(
   signal?: AbortSignal,
   includeThumbnails: boolean = false
 ): Promise<SamplesResponse> {
+  if (isStaticBundle()) {
+    const allSamples = await loadStaticSamples(signal);
+    const apiLabel = toApiLabel(label);
+    const filtered = allSamples.filter((sample) => {
+      if (isMissingLabelFilter(label)) return sample.label === null || sample.label === undefined;
+      if (apiLabel !== null) return sample.label === apiLabel;
+      return true;
+    });
+    return {
+      total: filtered.length,
+      offset,
+      limit,
+      samples: filtered.slice(offset, offset + limit),
+    };
+  }
   const apiLabel = toApiLabel(label);
   const params = new URLSearchParams({
     offset: offset.toString(),
@@ -291,6 +357,12 @@ export async function fetchSamples(
 }
 
 export async function fetchEmbeddings(layoutKey?: string): Promise<EmbeddingsData> {
+  if (isStaticBundle()) {
+    const file = layoutKey
+      ? `api/embeddings/${encodeURIComponent(layoutKey)}.json`
+      : "api/embeddings/default.json";
+    return fetchStaticJson<EmbeddingsData>(file);
+  }
   const params = new URLSearchParams();
   if (layoutKey) {
     params.set("layout_key", layoutKey);
@@ -311,6 +383,11 @@ export async function fetchSamplesBatch(
   } = {}
 ): Promise<Sample[]> {
   if (sampleIds.length === 0) return [];
+  if (isStaticBundle()) {
+    const allSamples = await loadStaticSamples();
+    const byId = new Map(allSamples.map((sample) => [sample.id, sample]));
+    return sampleIds.map((id) => byId.get(id)).filter((sample): sample is Sample => Boolean(sample));
+  }
 
   const samples: Sample[] = [];
   for (let offset = 0; offset < sampleIds.length; offset += SAMPLE_BATCH_SIZE) {
@@ -349,6 +426,22 @@ export async function fetchSimilarSamples(
     signal?: AbortSignal;
   } = {}
 ): Promise<SimilaritySearchResponse> {
+  if (isStaticBundle()) {
+    const dataset = await fetchDataset(args.signal);
+    let spaceKey = args.spaceKey ?? null;
+    if (args.layoutKey) {
+      const layout = dataset.layouts.find((item) => item.layout_key === args.layoutKey);
+      if (layout) spaceKey = layout.space_key;
+    }
+    const file = `api/search/similar/${encodeURIComponent(sampleId)}/${encodeURIComponent(spaceKey ?? "default")}.json`;
+    const payload = await fetchStaticJson<SimilaritySearchResponse>(file, args.signal);
+    const k = args.k ?? 10;
+    return {
+      ...payload,
+      k,
+      results: payload.results.slice(0, k),
+    };
+  }
   const params = new URLSearchParams({
     k: String(args.k ?? 10),
   });
@@ -384,6 +477,9 @@ export async function fetchTextSimilarSamples(
     signal?: AbortSignal;
   } = {}
 ): Promise<SimilaritySearchResponse> {
+  if (isStaticBundle()) {
+    throw new ApiError("Text search is not available in read-only static demos", 400, null);
+  }
   const res = await fetch(apiUrl("/search/text"), {
     method: "POST",
     headers: {
@@ -427,6 +523,9 @@ export async function setLayoutView(args: {
   layoutKey: string;
   camera3d?: OrbitView3DRequest | null;
 }): Promise<void> {
+  if (isStaticBundle()) {
+    return;
+  }
   const res = await fetch(apiUrl("/control/ui/layout-view"), {
     method: "POST",
     headers: {
@@ -455,6 +554,9 @@ export async function fetchLassoSelection(args: {
   includeThumbnails?: boolean;
   signal?: AbortSignal;
 }): Promise<LassoSelectionResponse> {
+  if (isStaticBundle()) {
+    return fetchStaticLassoSelection(args);
+  }
   const res = await fetch(apiUrl("/selection/lasso"), {
     method: "POST",
     headers: {
@@ -478,4 +580,177 @@ export async function fetchLassoSelection(args: {
     await throwApiError(res, "Failed to fetch lasso selection");
   }
   return res.json();
+}
+
+let staticRuntimeSnapshot: RuntimeSnapshot | null = null;
+let staticSamplesCache: Sample[] | null = null;
+
+interface StaticSamplesIndex {
+  total: number;
+  shard_size: number;
+  shards: string[];
+}
+
+async function loadStaticSamples(signal?: AbortSignal): Promise<Sample[]> {
+  if (staticSamplesCache) return staticSamplesCache;
+  const index = await fetchStaticJson<StaticSamplesIndex>("api/samples/index.json", signal);
+  const shards = await Promise.all(
+    index.shards.map((shard) =>
+      fetchStaticJson<SamplesResponse>(`api/samples/${shard}`, signal)
+    )
+  );
+  staticSamplesCache = shards.flatMap((shard) => shard.samples);
+  return staticSamplesCache;
+}
+
+function mergePatch(
+  current: Record<string, unknown>,
+  patch: Record<string, unknown>
+): Record<string, unknown> {
+  const next: Record<string, unknown> = { ...current };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) {
+      delete next[key];
+    } else if (
+      typeof value === "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      typeof next[key] === "object" &&
+      next[key] !== null &&
+      !Array.isArray(next[key])
+    ) {
+      next[key] = mergePatch(next[key] as Record<string, unknown>, value as Record<string, unknown>);
+    } else {
+      next[key] = value;
+    }
+  }
+  return next;
+}
+
+async function getStaticSnapshot(): Promise<RuntimeSnapshot> {
+  if (staticRuntimeSnapshot) return staticRuntimeSnapshot;
+  return fetchRuntimeState();
+}
+
+async function runStaticControlCommand(args: {
+  command: string;
+  target?: Record<string, unknown>;
+  args?: Record<string, unknown>;
+}): Promise<ControlCommandResult> {
+  const snapshot = await getStaticSnapshot();
+  if (args.command === "workspace.panel.state.patch") {
+    const panelId = typeof args.target?.panel_id === "string" ? args.target.panel_id : null;
+    const patch = args.args?.state;
+    if (panelId && patch && typeof patch === "object" && !Array.isArray(patch)) {
+      const panels = { ...(snapshot.workspace.ui.panels ?? {}) };
+      const current = panels[panelId] ?? { state: {}, state_revision: 0 };
+      const replaceState = args.args?.replace_state === true;
+      const nextState = replaceState
+        ? { ...(patch as Record<string, unknown>) }
+        : mergePatch(current.state ?? {}, patch as Record<string, unknown>);
+      const nextEntry = {
+        state: nextState,
+        state_revision: (current.state_revision ?? 0) + 1,
+      };
+      panels[panelId] = nextEntry;
+      const customPanels = snapshot.workspace.ui.custom_panels.map((panel) =>
+        panel.id === panelId
+          ? { ...panel, state: nextState, state_revision: nextEntry.state_revision }
+          : panel
+      );
+      staticRuntimeSnapshot = {
+        ...snapshot,
+        version: snapshot.version + 1,
+        workspace: {
+          ...snapshot.workspace,
+          ui: {
+            ...snapshot.workspace.ui,
+            panels,
+            custom_panels: customPanels,
+          },
+        },
+      };
+      return {
+        ok: true,
+        command: args.command,
+        result: nextEntry,
+        snapshot: staticRuntimeSnapshot,
+        workspace: staticRuntimeSnapshot.workspace,
+        revision: nextEntry.state_revision,
+      };
+    }
+  }
+
+  showReadOnlyNotice();
+  return {
+    ok: true,
+    command: args.command,
+    result: {},
+    snapshot,
+    workspace: snapshot.workspace,
+    revision: snapshot.workspace.ui.view_revision,
+  };
+}
+
+async function fetchStaticLassoSelection(args: {
+  layoutKey: string;
+  polygon: ArrayLike<number>;
+  labelFilter?: string;
+  view3d?: OrbitView3DRequest | null;
+  viewportWidth?: number | null;
+  viewportHeight?: number | null;
+  offset?: number;
+  limit?: number;
+  includeThumbnails?: boolean;
+  signal?: AbortSignal;
+}): Promise<LassoSelectionResponse> {
+  const embeddings = await fetchEmbeddings(args.layoutKey);
+  if (embeddings.coords[0]?.length !== 2) {
+    return {
+      total: 0,
+      offset: args.offset ?? 0,
+      limit: args.limit ?? 100,
+      sample_ids: [],
+      samples: [],
+    };
+  }
+  const polygon = Array.from(args.polygon);
+  const selectedIds: string[] = [];
+  for (let index = 0; index < embeddings.ids.length; index += 1) {
+    const coord = embeddings.coords[index];
+    const label = embeddings.labels[index];
+    if (isMissingLabelFilter(args.labelFilter)) {
+      if (label !== null && label !== undefined) continue;
+    } else {
+      const apiLabel = toApiLabel(args.labelFilter);
+      if (apiLabel !== null && label !== apiLabel) continue;
+    }
+    if (pointInPolygon(coord[0], coord[1], polygon)) {
+      selectedIds.push(embeddings.ids[index]);
+    }
+  }
+  const offset = args.offset ?? 0;
+  const limit = args.limit ?? 100;
+  const pageIds = selectedIds.slice(offset, offset + limit);
+  const samples = await fetchSamplesBatch(pageIds, { includeThumbnails: args.includeThumbnails });
+  return {
+    total: selectedIds.length,
+    offset,
+    limit,
+    sample_ids: pageIds,
+    samples,
+  };
+}
+
+function pointInPolygon(x: number, y: number, polygon: number[]): boolean {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 2; i < polygon.length; j = i, i += 2) {
+    const xi = polygon[i];
+    const yi = polygon[i + 1];
+    const xj = polygon[j];
+    const yj = polygon[j + 1];
+    const intersects = yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi;
+    if (intersects) inside = !inside;
+  }
+  return inside;
 }

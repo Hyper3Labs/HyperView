@@ -44,9 +44,9 @@ import {
   Search,
   Github,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
-import { setActiveWorkspace } from "@/lib/api";
+import { isStaticBundle, setActiveWorkspace } from "@/lib/api";
 import { isLabelColorMapId } from "@/lib/labelColors";
 import {
   LABEL_COLOR_MAP_OPTIONS,
@@ -78,6 +78,9 @@ export function Header() {
   const openPanels = useDockviewOpenPanelIds(viewMenuPanelIds);
   const openEdgeZones = useDockviewOpenEdgeZones(EDGE_ZONE_IDS);
   const [datasetPickerOpen, setDatasetPickerOpen] = useState(false);
+  const [readOnlyNotice, setReadOnlyNotice] = useState<string | null>(() =>
+    isStaticBundle() ? "Read-only demo — pip install hyperview for the full workbench" : null
+  );
   const labelColorMapId = useColorSettings((state) => state.labelColorMapId);
   const setLabelColorMapId = useColorSettings((state) => state.setLabelColorMapId);
   const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null;
@@ -96,6 +99,19 @@ export function Header() {
     }
     dockview.addPanel(panelId);
   };
+
+  useEffect(() => {
+    const handleNotice = (event: Event) => {
+      const message =
+        event instanceof CustomEvent && typeof event.detail?.message === "string"
+          ? event.detail.message
+          : "Read-only demo — pip install hyperview for the full workbench";
+      setReadOnlyNotice(message);
+    };
+    window.addEventListener("hyperview-readonly-notice", handleNotice);
+    return () => window.removeEventListener("hyperview-readonly-notice", handleNotice);
+  }, []);
+
   return (
     <header className="h-7 min-h-[28px] bg-card border-b border-border flex items-center justify-between px-2">
         {/* Left side: Logo + View menu */}
@@ -213,6 +229,12 @@ export function Header() {
 
         {/* Right side: GitHub + Discord + Panel toggles + Settings */}
         <div className="flex items-center gap-0.5">
+          {readOnlyNotice && (
+            <div className="hidden lg:flex h-5 items-center rounded-sm border border-amber-500/40 bg-amber-500/10 px-2 text-[11px] leading-none text-amber-200">
+              {readOnlyNotice}
+            </div>
+          )}
+
           {/* GitHub link */}
           <a
             href={GITHUB_URL}
