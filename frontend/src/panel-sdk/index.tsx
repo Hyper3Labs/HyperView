@@ -6,8 +6,10 @@ import { useDockviewContext } from "@/components/DockviewContext";
 import { usePanelInstance } from "@/components/PanelHostContext";
 import {
   apiUrl,
+  fetchCollectionItems,
   fetchRuntimeState,
   getRuntimeClientId,
+  isAbortError,
   isStaticBundle,
   runControlCommand,
   runtimeSnapshotFromCommandResult,
@@ -245,25 +247,167 @@ function sampleMatchesCollection(sample: Sample, collection: RuntimeCollection |
   return sample.label === (typeof value === "string" ? value : null);
 }
 
-export function useSamples(collectionId?: string | null) {
+// Kinds the server can materialize via GET /api/collections/{id}/items.
+// Everything else (selection, lasso, tool_result, extension) stays on the
+// legacy client-side filter over the loaded sample page.
+const MATERIALIZABLE_COLLECTION_KINDS = new Set(["all", "filter", "neighbors", "search"]);
+const DEFAULT_COLLECTION_PAGE_SIZE = 60;
+
+interface CollectionSamplesState {
+  key: string | null;
+  samples: Sample[];
+  scores: Record<string, number> | null;
+  total: number;
+  hasMore: boolean;
+}
+
+const EMPTY_COLLECTION_SAMPLES: CollectionSamplesState = {
+  key: null,
+  samples: [],
+  scores: null,
+  total: 0,
+  hasMore: false,
+};
+
+export function useSamples(
+  collectionId?: string | null,
+  options?: { pageSize?: number }
+) {
   const collection = useCollection(collectionId);
-  const samples = useStore((state) => state.samples);
+  const activeWorkspaceId = useStore((state) => state.activeWorkspaceId);
+  const storeSamples = useStore((state) => state.samples);
   const totalSamples = useStore((state) => state.totalSamples);
-  const isLoading = useStore((state) => state.isLoading);
-  const error = useStore((state) => state.error);
+  const storeLoading = useStore((state) => state.isLoading);
+  const storeError = useStore((state) => state.error);
+
+  const pageSize = Math.max(1, options?.pageSize ?? DEFAULT_COLLECTION_PAGE_SIZE);
+  const materialized = Boolean(
+    collection && MATERIALIZABLE_COLLECTION_KINDS.has(collection.kind)
+  );
+  // created_at is part of the identity: replacing a collection under the same
+  // id (e.g. a new search) must invalidate the loaded pages.
+  const collectionKey = collection
+    ? `${collection.id}:${collection.created_at}`
+    : null;
+
+  const [remote, setRemote] = React.useState<CollectionSamplesState>(
+    EMPTY_COLLECTION_SAMPLES
+  );
+  const [remoteLoading, setRemoteLoading] = React.useState(false);
+  const [remoteError, setRemoteError] = React.useState<string | null>(null);
+  const abortRef = React.useRef<AbortController | null>(null);
+
+  const fetchPage = React.useCallback(
+    async (offset: number, append: boolean) => {
+      if (!materialized || !collection || !collectionKey) return;
+      abortRef.current?.abort();
+      const abort = new AbortController();
+      abortRef.current = abort;
+      setRemoteLoading(true);
+      setRemoteError(null);
+      try {
+        const page = await fetchCollectionItems(collection.id, {
+          workspaceId: activeWorkspaceId,
+          offset,
+          limit: pageSize,
+          signal: abort.signal,
+        });
+        if (abort.signal.aborted) return;
+        setRemote((current) => {
+          const scores: Record<string, number> = {
+            ...(append && current.key === collectionKey ? current.scores : null),
+          };
+          let hasScores = Object.keys(scores).length > 0;
+          for (const item of page.items) {
+            if (item.score !== null) {
+              scores[item.sample.id] = item.score;
+              hasScores = true;
+            }
+          }
+          const previous =
+            append && current.key === collectionKey ? current.samples : [];
+          return {
+            key: collectionKey,
+            samples: [...previous, ...page.items.map((item) => item.sample)],
+            scores: hasScores ? scores : null,
+            total: page.total,
+            hasMore: page.hasMore,
+          };
+        });
+      } catch (error) {
+        if (abort.signal.aborted || isAbortError(error)) return;
+        setRemoteError(
+          error instanceof Error ? error.message : "Failed to load collection items"
+        );
+      } finally {
+        if (!abort.signal.aborted) {
+          setRemoteLoading(false);
+        }
+      }
+    },
+    [activeWorkspaceId, collection, collectionKey, materialized, pageSize]
+  );
+
+  React.useEffect(() => {
+    if (!materialized) {
+      abortRef.current?.abort();
+      setRemote(EMPTY_COLLECTION_SAMPLES);
+      setRemoteLoading(false);
+      setRemoteError(null);
+      return;
+    }
+    void fetchPage(0, false);
+    return () => {
+      abortRef.current?.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [materialized, collectionKey, pageSize, activeWorkspaceId]);
+
+  const loadMore = React.useCallback(() => {
+    if (!materialized || remoteLoading || !remote.hasMore) return;
+    void fetchPage(remote.samples.length, true);
+  }, [fetchPage, materialized, remote.hasMore, remote.samples.length, remoteLoading]);
 
   return useMemo(() => {
-    const filteredSamples = samples.filter((sample) =>
+    if (materialized) {
+      return {
+        collection,
+        samples: remote.key === collectionKey ? remote.samples : [],
+        scores: remote.key === collectionKey ? remote.scores : null,
+        total: remote.key === collectionKey ? remote.total : 0,
+        loading: remoteLoading,
+        error: remoteError,
+        hasMore: remote.key === collectionKey ? remote.hasMore : false,
+        loadMore,
+      };
+    }
+
+    const filteredSamples = storeSamples.filter((sample) =>
       sampleMatchesCollection(sample, collection)
     );
     return {
       collection,
       samples: filteredSamples,
+      scores: null,
       total: collection ? filteredSamples.length : totalSamples,
-      loading: isLoading,
-      error,
+      loading: storeLoading,
+      error: storeError,
+      hasMore: false,
+      loadMore: () => {},
     };
-  }, [collection, error, isLoading, samples, totalSamples]);
+  }, [
+    collection,
+    collectionKey,
+    loadMore,
+    materialized,
+    remote,
+    remoteError,
+    remoteLoading,
+    storeError,
+    storeLoading,
+    storeSamples,
+    totalSamples,
+  ]);
 }
 
 export function useHostAdapter() {

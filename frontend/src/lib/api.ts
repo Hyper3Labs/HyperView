@@ -416,6 +416,92 @@ export async function fetchSamplesBatch(
   return samples;
 }
 
+export interface CollectionItem {
+  sample: Sample;
+  score: number | null;
+}
+
+export interface CollectionItemsPage {
+  collectionId: string;
+  offset: number;
+  limit: number;
+  total: number;
+  hasMore: boolean;
+  items: CollectionItem[];
+}
+
+interface StaticCollectionItemsFile {
+  collection_id: string;
+  total: number;
+  items: Array<{
+    sample_id: string;
+    rank: number;
+    score: number | null;
+    sample: Sample;
+  }>;
+}
+
+export async function fetchCollectionItems(
+  collectionId: string,
+  args: {
+    workspaceId?: string | null;
+    offset?: number;
+    limit?: number;
+    includeThumbnails?: boolean;
+    signal?: AbortSignal;
+  } = {}
+): Promise<CollectionItemsPage> {
+  const offset = args.offset ?? 0;
+  const limit = args.limit ?? 100;
+
+  if (isStaticBundle()) {
+    const payload = await fetchStaticJson<StaticCollectionItemsFile>(
+      `api/collections/${encodeURIComponent(collectionId)}/items.json`,
+      args.signal
+    );
+    const rows = payload.items.slice(offset, offset + limit);
+    return {
+      collectionId: payload.collection_id,
+      offset,
+      limit,
+      total: payload.total,
+      hasMore: offset + limit < payload.total,
+      items: rows.map((row) => ({ sample: row.sample, score: row.score ?? null })),
+    };
+  }
+
+  const params = new URLSearchParams({
+    offset: offset.toString(),
+    limit: limit.toString(),
+    include_thumbnails: String(args.includeThumbnails ?? false),
+  });
+  if (args.workspaceId) {
+    params.set("workspace_id", args.workspaceId);
+  }
+  const res = await fetch(
+    `${apiUrl(`/collections/${encodeURIComponent(collectionId)}/items`)}?${params}`,
+    args.signal ? { signal: args.signal } : undefined
+  );
+  if (!res.ok) {
+    await throwApiError(res, "Failed to fetch collection items");
+  }
+  const data = await res.json();
+  return {
+    collectionId: data.collection_id,
+    offset: data.offset,
+    limit: data.limit,
+    total: data.total,
+    hasMore: Boolean(data.has_more),
+    items: (data.items as Array<Record<string, unknown>>).map((item) => {
+      const { score, ...sample } = item;
+      return {
+        sample: sample as unknown as Sample,
+        score: typeof score === "number" ? score : null,
+      };
+    }),
+  };
+}
+
 export async function fetchSimilarSamples(
   sampleId: string,
   args: {
