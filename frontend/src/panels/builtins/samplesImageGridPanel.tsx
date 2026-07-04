@@ -7,23 +7,22 @@ import { Grid3X3, Settings2, Undo2 } from "lucide-react";
 import { SampleCollectionState } from "@/components/SampleCollectionState";
 import { SampleDerivedSpace } from "@/components/SampleDerivedSpace";
 import { SampleGridView } from "@/components/SampleGridView";
+import { Panel } from "@/components/Panel";
+import {
+  PanelToolbar,
+  PanelToolbarButton,
+  PanelToolbarMenu,
+  type PanelToolbarItem,
+} from "@/components/PanelToolbar";
 import {
   fetchSamplesBatch,
   fetchSimilarSamples,
   fetchTextSimilarSamples,
   isAbortError,
+  runControlCommand,
+  runtimeSnapshotFromCommandResult,
 } from "@/lib/api";
 import { findLayoutByKey } from "@/lib/layouts";
-import {
-  Panel,
-  PanelToolbar,
-  PanelToolbarButton,
-  PanelToolbarMenu,
-  usePanelCommands,
-  usePanelSamplesView,
-  usePanelUiState,
-  type PanelToolbarItem,
-} from "@/panel-sdk";
 import {
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
@@ -33,6 +32,7 @@ import {
 import {
   defineBuiltInCenterPanel,
 } from "@/panels/definitions";
+import { useHyperViewSamplesView } from "@/panels/runtime";
 import { useStore } from "@/store/useStore";
 import type { Sample, SimilarSample } from "@/types";
 
@@ -72,6 +72,56 @@ function sourceLabel(source: "dataset" | "lasso") {
 function normalizeRankLimit(value: unknown) {
   if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_RANK_LIMIT;
   return Math.max(1, Math.min(MAX_RANK_LIMIT, Math.round(value)));
+}
+
+function useSamplesPanelCommands() {
+  const activeWorkspaceId = useStore((state) => state.activeWorkspaceId);
+  const applyRuntimeSnapshot = useStore((state) => state.applyRuntimeSnapshot);
+  const clearLassoSelection = useStore((state) => state.clearLassoSelection);
+
+  const searchByText = React.useCallback(
+    async (options: { queryText: string; source?: string | null }) => {
+      if (!activeWorkspaceId) {
+        throw new Error("No active workspace");
+      }
+      clearLassoSelection();
+      const payload = await runControlCommand({
+        command: "panel.samples.retrieval.set-text-query",
+        target: { workspace_id: activeWorkspaceId },
+        args: {
+          query_text: options.queryText,
+          source: options.source ?? "samples-panel",
+        },
+      });
+      const snapshot = runtimeSnapshotFromCommandResult(payload);
+      applyRuntimeSnapshot(snapshot);
+      return snapshot;
+    },
+    [activeWorkspaceId, applyRuntimeSnapshot, clearLassoSelection]
+  );
+
+  const clearQueryContext = React.useCallback(async () => {
+    if (!activeWorkspaceId) {
+      throw new Error("No active workspace");
+    }
+    clearLassoSelection();
+    const payload = await runControlCommand({
+      command: "panel.samples.retrieval.clear",
+      target: { workspace_id: activeWorkspaceId },
+    });
+    const snapshot = runtimeSnapshotFromCommandResult(payload);
+    applyRuntimeSnapshot(snapshot);
+    return snapshot;
+  }, [activeWorkspaceId, applyRuntimeSnapshot, clearLassoSelection]);
+
+  return React.useMemo(
+    () => ({
+      searchByText,
+      clearQueryContext,
+      clearLassoSelection,
+    }),
+    [clearLassoSelection, clearQueryContext, searchByText]
+  );
 }
 
 function getRankAnchorFromSelection(selectedIds: Set<string>) {
@@ -222,7 +272,7 @@ function useRankedSamplesPanel(rank: SamplesPanelRankParams | undefined, enabled
 }
 
 function SamplesTextSearchBar() {
-  const { searchByText, clearQueryContext } = usePanelCommands();
+  const { searchByText, clearQueryContext } = useSamplesPanelCommands();
   const [query, setQuery] = React.useState("");
   const [submitting, setSubmitting] = React.useState(false);
 
@@ -280,9 +330,10 @@ function SamplesTextSearchBar() {
 export const SamplesImageGridPanel = React.memo(function SamplesImageGridPanel(
   props: IDockviewPanelProps<SamplesPanelParams>
 ) {
-  const { collection, derivedSpace } = usePanelSamplesView();
-  const { clearLassoSelection } = usePanelCommands();
-  const { sampleGridSize, setSampleGridSize } = usePanelUiState();
+  const { collection, derivedSpace } = useHyperViewSamplesView();
+  const { clearLassoSelection } = useSamplesPanelCommands();
+  const sampleGridSize = useStore((state) => state.sampleGridSize);
+  const setSampleGridSize = useStore((state) => state.setSampleGridSize);
   const panelMode = props.params?.mode ?? "auto";
   const showRankedPanel = panelMode === "ranked";
   const rankedPanel = useRankedSamplesPanel(props.params?.rank, showRankedPanel);

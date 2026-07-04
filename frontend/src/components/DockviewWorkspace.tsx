@@ -52,8 +52,7 @@ import { Button } from "./ui/button";
 import { DockviewContext, useDockviewContext } from "./DockviewContext";
 import { ExplorerPanel } from "./ExplorerPanel";
 import { HyperViewLogo } from "./icons";
-import { RuntimeBuiltInPanel } from "./RuntimeBuiltInPanel";
-import { RuntimeModulePanel } from "./RuntimeModulePanel";
+import { PanelHost } from "./PanelHost";
 
 const LAYOUT_STORAGE_KEY = "hyperview:dockview-layout:v10";
 const DEFAULT_CONTAINER_WIDTH = 1200;
@@ -336,9 +335,7 @@ function isClosableDockPanel(panelId: string) {
 }
 
 function getExpectedRuntimePanelComponent(panel: RuntimePanel) {
-  if (panel.kind === "scatter") return "scatter";
-  if (panel.kind === "builtin") return "runtimeBuiltInPanel";
-  return "runtimeModulePanel";
+  return "panelHost";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -382,13 +379,24 @@ function getRuntimeSamplesPanelParams(panel: RuntimePanel) {
   };
 }
 
-function getRuntimeBuiltInPanelParams(panel: RuntimePanel) {
+function getRuntimePanelHostParams(panel: RuntimePanel) {
   const baseParams = {
     ...(panel.props ?? {}),
     panelId: panel.id,
     builtinPanelType: panel.builtin_panel ?? panel.panel_type,
     runtimePlacementKey: getRuntimePanelPlacementKey(panel),
   };
+
+  if (panel.kind === "scatter") {
+    const layoutDimension = panel.layout_dimension === 3 ? 3 : 2;
+    return {
+      ...baseParams,
+      layoutKey: panel.layout_key ?? undefined,
+      geometry: (panel.geometry ?? undefined) as Geometry | undefined,
+      layoutDimension,
+      pinnedLayout: true,
+    };
+  }
 
   if (panel.builtin_panel === "samples" || panel.panel_type === "samples") {
     return {
@@ -583,8 +591,7 @@ const Watermark = React.memo(function Watermark(_props: IWatermarkPanelProps) {
 const COMPONENTS = {
   ...CENTER_PANEL_COMPONENTS,
   explorer: ExplorerDockPanel,
-  runtimeBuiltInPanel: RuntimeBuiltInPanel,
-  runtimeModulePanel: RuntimeModulePanel,
+  panelHost: PanelHost,
 };
 
 const TAB_COMPONENTS = CENTER_PANEL_TAB_COMPONENTS;
@@ -852,87 +859,41 @@ export function DockviewWorkspace() {
           existingPanel = undefined;
         } else {
           existingPanel.api.setTitle(panel.title);
-          if (panel.kind === "scatter") {
-            const layoutDimension = panel.layout_dimension === 3 ? 3 : 2;
-            existingPanel.api.updateParameters({
-              layoutKey: panel.layout_key ?? undefined,
-              geometry: (panel.geometry ?? undefined) as Geometry | undefined,
-              layoutDimension,
-              pinnedLayout: true,
-              runtimePlacementKey: placementKey,
-            });
-          } else if (panel.kind === "builtin") {
-            existingPanel.api.updateParameters(getRuntimeBuiltInPanelParams(panel));
-          } else {
-            existingPanel.api.updateParameters({
-              panelId: panel.id,
-              runtimePlacementKey: placementKey,
-            });
-          }
+          existingPanel.api.updateParameters(getRuntimePanelHostParams(panel));
           continue;
         }
       }
 
-      if (panel.kind === "scatter") {
-        const layoutDimension = panel.layout_dimension === 3 ? 3 : 2;
-        const layout = getRuntimePanelAddLayout(panel);
-        api.addPanel({
-          id: runtimePanelId,
-          component: "scatter",
-          title: panel.title,
-          tabComponent: getScatterTabComponent({
-            geometry: panel.geometry,
-            layoutDimension,
-          }),
-          params: {
-            layoutKey: panel.layout_key ?? undefined,
-            geometry: (panel.geometry ?? undefined) as Geometry | undefined,
-            layoutDimension,
-            pinnedLayout: true,
-            runtimePlacementKey: getRuntimePanelPlacementKey(panel),
-          },
-          position: getRuntimePanelPosition(api, panel.position, panel),
-          ...layout,
-        });
-        continue;
-      }
-
-      if (panel.kind === "builtin") {
-        const panelType = panel.builtin_panel ?? panel.panel_type;
-        const definition = getBuiltInCenterPanelDefinitionForPanelType(panelType);
-        if (!definition) continue;
-        const layout = getRuntimePanelAddLayout(panel);
-
-        const options = definition.buildAddPanelOptions({
-          api,
-          datasetInfo,
-          position: getRuntimePanelPosition(api, panel.position, panel),
-        });
-
-        api.addPanel({
-          ...options,
-          id: runtimePanelId,
-          component: "runtimeBuiltInPanel",
-          title: panel.title,
-          params: {
-            ...(options.params ?? {}),
-            ...getRuntimeBuiltInPanelParams(panel),
-          },
-          ...layout,
-        });
-        continue;
-      }
-
+      const builtInPanelType = panel.builtin_panel ?? panel.panel_type;
+      const definition =
+        panel.kind === "module"
+          ? null
+          : getBuiltInCenterPanelDefinitionForPanelType(builtInPanelType);
+      const builtInOptions = definition?.buildAddPanelOptions({
+        api,
+        datasetInfo,
+        position: getRuntimePanelPosition(api, panel.position, panel),
+      });
       const layout = getRuntimePanelAddLayout(panel);
+      const layoutDimension = panel.layout_dimension === 3 ? 3 : 2;
       api.addPanel({
         id: runtimePanelId,
-        component: "runtimeModulePanel",
+        component: "panelHost",
         title: panel.title,
+        tabComponent:
+          panel.kind === "scatter"
+            ? getScatterTabComponent({
+                geometry: panel.geometry,
+                layoutDimension,
+              })
+            : builtInOptions?.tabComponent,
         params: {
-          panelId: panel.id,
-          runtimePlacementKey: getRuntimePanelPlacementKey(panel),
+          ...(builtInOptions?.params ?? {}),
+          ...getRuntimePanelHostParams(panel),
         },
-        position: getRuntimePanelPosition(api, panel.position, panel),
+        position:
+          builtInOptions?.position ??
+          getRuntimePanelPosition(api, panel.position, panel),
         initialWidth:
           layout.initialWidth ??
           (panel.position === "right" ? getDefaultRightPanelWidth(getContainerWidth(api)) : undefined),
