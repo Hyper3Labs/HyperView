@@ -107,63 +107,48 @@ Panel modules must be browser-loadable JavaScript modules. They export a default
 const sdk = globalThis.HyperViewPanelSDK;
 if (!sdk) throw new Error("HyperViewPanelSDK is not available on window.");
 
-const { React, components, hooks } = sdk;
-const { Panel, PanelToolbar, PanelToolbarButton } = components;
-const { usePanelSelection, useTool } = hooks;
+const { React, hooks } = sdk;
+const { useSelection, usePanelState } = hooks;
 
 export default function SelectionProfilePanel() {
-  const { selectedIds } = usePanelSelection();
-  const profile = useTool("selection_profile.summarize");
+  const { selectedIds } = useSelection();
+  const { state, patchState } = usePanelState();
   const selectionKey = selectedIds.join("|");
 
   React.useEffect(() => {
-    profile.run({ sample_ids: selectedIds });
-  }, [profile.run, selectionKey]);
-
-  const result = profile.result;
+    patchState({ last_selection: selectedIds });
+  }, [patchState, selectionKey]);
 
   return React.createElement(
-    Panel,
-    { className: "h-full" },
-    React.createElement(PanelToolbar, {
-      items: [
-        { id: "selection", label: "Selection", value: String(selectedIds.length) },
-        { id: "status", label: "Status", value: profile.loading ? "running" : result ? "ready" : "idle" },
-      ],
-      actions: React.createElement(PanelToolbarButton, { onClick: () => profile.run({ sample_ids: selectedIds }) }, "Refresh"),
-    }),
-    React.createElement("pre", { style: { padding: 12, overflow: "auto" } }, JSON.stringify(result, null, 2))
+    "main",
+    { style: { padding: 12, font: "12px system-ui" } },
+    React.createElement("div", null, `Selected: ${selectedIds.length}`),
+    React.createElement("pre", null, JSON.stringify(state, null, 2))
   );
 }
 ```
 
-Available SDK hooks include `usePanelRuntimeState`, `usePanelHostState`, `usePanelDatasetInfo`, `usePanelSamplesView`, `usePanelSelectedSamples`, `usePanelSelection`, `usePanelHover`, `usePanelLayouts`, `usePanelLayoutView`, `usePanelCommands`, `usePanelState`, `usePanelUiState`, `usePanelClient`, and `useTool`.
+Available SDK hooks are intentionally thin: `useCommandClient`, `usePanelState`,
+`useSelection`, `useCollection`, `useSamples`, and `useHostAdapter`.
 
-For dataset-wide panel behavior, prefer `usePanelClient().querySamples(...)`,
-`aggregateSamples(...)`, `selectSamples(...)`, `getSamplesByIds(...)`,
-`searchSimilar(...)`, or an extension tool over scanning a fixed
-`listSamples({ limit: ... })` page or hand-building API URLs in the browser.
-Sample reads default to `includeThumbnails: false`; use each sample's
-`thumbnail_url` for images, and request inline thumbnails only when a panel
-explicitly needs base64 data.
+For dataset-wide panel behavior, prefer runtime collections and
+`useSamples(collectionId)` over scanning a fixed page or hand-building API URLs
+in the browser. When a panel needs a new filtered or nearest-neighbor result
+set, run `collection.filter.set`, `collection.neighbors.create`, or
+`panel.samples.retrieval.*` through `useCommandClient()`.
 
-Use `usePanelHostState()` for synchronized host state. Use narrower hooks such as `usePanelSelection()`,
-`usePanelSelectedSamples()`, `usePanelHover()`, `usePanelLayouts()`, and
-`usePanelLayoutView()` when the panel only needs one part of that state. Use
-`usePanelCommands()` for host writes. Selection and active-layout changes
-update host state immediately and persist to runtime UI state in the
-background by default. Pass `{ persist: true }` only when the caller must wait
-for durable runtime state, and pass `{ persist: false }` for local transient UI
-changes. Samples retrieval and query-context commands are durable panel state
-commands and do not support `{ persist: false }`.
+Use `useSelection()` for synchronized selection state. Use `usePanelState()` for
+panel-owned props/state. Use `useHostAdapter()` only for transient host actions
+such as focus; durable layout/state changes should go through `workspace.*`
+commands. In static exports, mutating commands are disabled, while selection and
+panel state patches remain client-side and ephemeral.
 
 Do not use browser globals such as `window.dispatchEvent` to synchronize panels,
 and use SDK commands for control-plane writes. Use `usePanelState()` for durable
-panel-owned state, `commands.clearQueryContext(...)` to reset selection plus
-nearest-neighbor context, and `commands.updatePanelProps(panelId, props)` when a
-panel needs to update another runtime panel instance's documented props.
-
-`useTool(uri)` returns `{ run, result, loading, error, reset }`. Call `run(params)` to invoke the tool; `result` holds the last successful return value, `loading` is true while a call is in flight, and `error` is the last failure message (or `null`). See [panel-modules.md](panel-modules.md#hook-return-shapes) for the full hook return shape table.
+panel-owned state. Run `workspace.panel.update` when a panel needs to update
+another runtime panel instance's documented props. Python tools are invoked from
+the CLI/API with `hyperview tools run` or by higher-level extension flows; do not
+assume a browser `useTool` hook is present in the thin SDK.
 
 ## CLI Workflow
 

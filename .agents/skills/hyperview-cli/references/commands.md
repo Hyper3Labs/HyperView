@@ -215,6 +215,40 @@ hyperview figure export figures/embedding-panel-a.png \
   --title "ArcFace spherical embeddings"
 ```
 
+## Static Demo Bundles
+
+Export a read-only, self-contained bundle for a workspace:
+
+```bash
+hyperview export research --out dist/research-demo
+```
+
+The bundle contains the packaged static frontend, `api/runtime.json`,
+`api/dataset.json`, sample shards under `api/samples/`, media and thumbnails,
+layout coordinate JSON under `api/embeddings/`, materialized collection items
+under `api/collections/`, and extension panel modules under
+`api/panels/content/`.
+
+The generated `index.html` sets `window.__HYPERVIEW_STATIC__ = true`. In this
+mode the frontend reads JSON files from the bundle, keeps selection and panel
+state changes client-side, and disables mutations with the visible notice
+`Read-only demo — pip install hyperview for the full workbench`.
+
+Python launch/session code can export the same bundle:
+
+```python
+session = hv.launch(dataset, block=False)
+session.export("dist/research-demo", workspace_id="research")
+```
+
+For persisted workspaces, use the top-level API:
+
+```python
+import hyperview as hv
+
+hv.export_workspace("research", "dist/research-demo")
+```
+
 ## Runtime UI
 
 Discover an existing layout key and sample IDs before mutating runtime state:
@@ -225,6 +259,17 @@ curl --max-time 2 'http://127.0.0.1:6262/api/embeddings?workspace_id=research' |
 ```
 
 If no layout exists yet (`active_layout_key` is `null` and `/api/embeddings` returns nothing), create one with `hyperview embeddings compute ... --layout euclidean:2d` (creates embeddings + layout) or `hyperview layouts compute ... --space-key <space-key> --layout euclidean:2d` (adds a layout to an existing embedding space).
+
+Runtime command ids are namespaced:
+
+- `workspace.*` for workspace/view/panel placement and panel-owned state storage
+- `panel.<type>.*` for panel-owned transitions such as Samples retrieval
+- `collection.*` for materialized filters, neighbors, and query result sets
+
+Every control command returns a `CommandResult` envelope with `ok`, `command`,
+`result`, `workspace`, `snapshot`, `revision`, and optional `error`. Apply the
+returned `snapshot` when present. Do not issue an immediate `/api/runtime`
+refetch unless a legacy endpoint did not return a snapshot.
 
 Switch the live UI to a layout and selection:
 
@@ -391,7 +436,9 @@ Clear the explicit Samples retrieval context:
 hyperview ui samples retrieval clear --workspace research
 ```
 
-Use `hyperview ui samples retrieval ...` for new nearest-neighbor workflows.
+Use `hyperview ui samples retrieval ...` for compatibility with existing CLI
+flows. Raw commands should use the canonical `panel.samples.retrieval.*`
+command ids.
 
 Use panel collection shortcuts when the desired outcome is a Samples panel collection:
 
