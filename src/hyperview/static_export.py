@@ -20,7 +20,7 @@ from hyperview.server.app import (
     serialize_sample_for_response,
 )
 from hyperview.storage.metrics import distance_metric_for_space
-from hyperview.storage.schema import parse_layout_dimension
+from hyperview.storage.schema import parse_layout_dimension, space_key_from_index_ref
 
 SAMPLE_SHARD_SIZE = 500
 SIMILARITY_EXPORT_K = 100
@@ -185,7 +185,7 @@ def _resolve_collection_ids(dataset: Dataset, collection: CollectionState) -> tu
     if collection.kind in {"neighbors", "search"}:
         anchor = query.get("anchor")
         k = int(query.get("k") or SIMILARITY_EXPORT_K)
-        space_key = query.get("spaceKey")
+        space_key = query.get("spaceKey") or space_key_from_index_ref(query.get("indexId"))
         layout_key = query.get("layoutId")
         if isinstance(anchor, dict):
             sample_id = str(anchor.get("entityId") or anchor.get("entity_id") or "")

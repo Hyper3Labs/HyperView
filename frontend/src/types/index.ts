@@ -34,11 +34,33 @@ export interface LayoutInfo {
   params: Record<string, unknown> | null;
 }
 
+export interface RepresentationInfo {
+  id: string;
+  entity_set_id: string;
+  field_path: string;
+  kind: string;
+  shape: number[];
+  model_id: string;
+  provider: string;
+  modality: string;
+  geometry: Geometry | string;
+  count: number;
+}
+
+export interface IndexInfo {
+  id: string;
+  representation_id: string;
+  query_modes: string[];
+  scorer: string;
+}
+
 export interface DatasetInfo {
   name: string;
   num_samples: number;
   labels: string[];
   spaces: SpaceInfo[];
+  representations?: RepresentationInfo[];
+  indexes?: IndexInfo[];
   layouts: LayoutInfo[];
 }
 

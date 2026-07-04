@@ -31,7 +31,7 @@ from hyperview.runtime import (
     LayoutViewState,
 )
 from hyperview.storage.metrics import distance_metric_for_space
-from hyperview.storage.schema import parse_layout_dimension
+from hyperview.storage.schema import parse_layout_dimension, space_key_from_index_ref
 
 # Extensions whose content is handed off to esbuild for JSX transformation.
 _JSX_SUFFIXES = {".jsx"}
@@ -229,6 +229,30 @@ class SpaceInfoResponse(BaseModel):
     config: dict[str, Any] | None
 
 
+class RepresentationInfoResponse(BaseModel):
+    """A derived vector field, independent of how it is searched."""
+
+    id: str
+    entity_set_id: str
+    field_path: str
+    kind: str
+    shape: list[int]
+    model_id: str
+    provider: str
+    modality: str
+    geometry: str
+    count: int
+
+
+class IndexInfoResponse(BaseModel):
+    """A searchable access path over a representation."""
+
+    id: str
+    representation_id: str
+    query_modes: list[str]
+    scorer: str
+
+
 class DatasetResponse(BaseModel):
     """Response model for dataset info."""
 
@@ -236,6 +260,8 @@ class DatasetResponse(BaseModel):
     num_samples: int
     labels: list[str]
     spaces: list[SpaceInfoResponse]
+    representations: list[RepresentationInfoResponse] = []
+    indexes: list[IndexInfoResponse] = []
     layouts: list[LayoutInfoResponse]
 
 
@@ -271,6 +297,7 @@ class TextSearchRequest(BaseModel):
     query_text: str
     k: int = 10
     space_key: str | None = None
+    index_id: str | None = None
     layout_key: str | None = None
     include_thumbnails: bool = False
 
@@ -366,7 +393,8 @@ def _resolve_collection_items(
         if not sample_id:
             raise ValueError("Neighbors collection is missing an anchor entity id")
         k = int(query.get("k") or 18)
-        results = ds.find_similar(sample_id, k=k, space_key=query.get("spaceKey"))
+        space_key = query.get("spaceKey") or space_key_from_index_ref(query.get("indexId"))
+        results = ds.find_similar(sample_id, k=k, space_key=space_key)
         total = len(results)
         page = results[offset : offset + limit]
         return (
@@ -380,7 +408,8 @@ def _resolve_collection_items(
         if not query_text:
             raise ValueError("Search collection is missing queryText")
         k = int(query.get("k") or 18)
-        results = ds.find_similar_by_text(query_text, k=k, space_key=query.get("spaceKey"))
+        space_key = query.get("spaceKey") or space_key_from_index_ref(query.get("indexId"))
+        results = ds.find_similar_by_text(query_text, k=k, space_key=space_key)
         total = len(results)
         page = results[offset : offset + limit]
         return (
@@ -848,6 +877,8 @@ def create_app(
             num_samples=len(ds),
             labels=ds.labels,
             spaces=space_dicts,
+            representations=[s.to_representation_dict() for s in spaces],
+            indexes=[s.to_index_dict() for s in spaces],
             layouts=layout_dicts,
         )
 
@@ -1297,11 +1328,12 @@ def create_app(
         ds: Dataset = Depends(get_dataset),
         k: int = Query(10, ge=1, le=100),
         space_key: str | None = None,
+        index_id: str | None = None,
         layout_key: str | None = None,
         include_thumbnails: bool = Query(False),
     ):
         """Return k nearest neighbors for a given sample."""
-        resolved_space_key = space_key
+        resolved_space_key = space_key or space_key_from_index_ref(index_id)
         if layout_key is not None:
             layout = next((item for item in ds.list_layouts() if item.layout_key == layout_key), None)
             if layout is None:
@@ -1365,7 +1397,7 @@ def create_app(
         if not query_text:
             raise HTTPException(status_code=400, detail="query_text must be a non-empty string")
 
-        resolved_space_key = request.space_key
+        resolved_space_key = request.space_key or space_key_from_index_ref(request.index_id)
         if request.layout_key is not None:
             layout = next(
                 (item for item in ds.list_layouts() if item.layout_key == request.layout_key),
