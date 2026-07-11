@@ -23,12 +23,17 @@ pass before the next wave starts.
 | W3b | Multimodal M0: `media_type`/`duration_s` columns, nullable `filepath`, typed `Field` registry, static-export media guards | multimodal M0 | **done** (Wave 4) |
 | W4a | Scatter built-in on SDK (`useQuery` for embeddings/layouts) | refactor Phase 6 | **done** (Wave 3) |
 | W4b | Phase 7: one backend panel registry (explorer definition, scatter presets), Dockview layout into runtime state | refactor Phase 7 | **done** (Wave 4) |
-| Later | SSE wakeup + delta encoding, thumbnail path consolidation, jobs persistence, god-module splits, repo boundaries | arch review #2,#4,#5,#6,#8 | deferred |
+| W5a | Multimodal M1: `add_texts` + HF/CLI `--text-key`, provider image/text capability split, mixed-modality spaces, hybrid vector+FTS text search | multimodal M1 | **done** (Wave 5) |
+| W5b | Multimodal M2 (core): tile renderer dispatch (text/video/metadata), null-dimension aspect bucket | multimodal M2/D4 | **done** (Wave 5) |
+| W5c | SSE event-driven wakeup; jobs persistence + FIFO worker + `jobs.cancel` command | arch review #2a, #4 | **done** (Wave 5) |
+| Later | SSE delta encoding (#2c), thumbnail path consolidation (#5), god-module splits (#6), repo boundaries (#8), M2 extension renderers, M3 video | arch review + multimodal plan | deferred |
 
-All four waves landed 2026-07-11 (commits `1a3beb7`, `a4b9e8b`, `8824e15`, and the
-Wave 4 commit). Wave 4 note: both minions hit codex credit exhaustion mid-run; the
-orchestrator finished the DockviewWorkspace refactor, the CLI test double, and the
-Phase 7 test suite (`tests/test_workspace_layout_and_registry.py`) by hand.
+Waves 1–4 landed 2026-07-11 (`1a3beb7`, `a4b9e8b`, `8824e15`, `f69e947`); Wave 5
+landed 2026-07-12 (`dad8eeb`). Wave 4 note: both minions hit codex credit exhaustion
+mid-run; the orchestrator finished the DockviewWorkspace refactor, the CLI test
+double, and the Phase 7 test suite by hand. Wave 5 orchestrator additions: 3.10
+`asyncio.TimeoutError` compat fix in `wait_for_version`, and the `jobs.cancel`
+control command + test (the minion left `cancel_job` unwired).
 
 ## Waves
 
