@@ -8,7 +8,10 @@ import type {
 } from "dockview-react";
 import { Circle, Disc, Globe2 } from "lucide-react";
 
-import { ScatterPanel } from "@/components/ScatterPanel";
+import {
+  ScatterPanel,
+  type ScatterPanelParams,
+} from "@/panels/builtins/scatterPanel";
 import {
   defineBuiltInCenterPanel,
   type BuiltInCenterPanelDefinition,
@@ -28,29 +31,6 @@ const PANEL = {
   SCATTER_SPHERICAL_3D: "scatter-spherical-3d",
   SCATTER_DEFAULT: "scatter-default",
 } as const;
-
-type ScatterPanelParams = {
-  layoutKey?: string;
-  geometry?: Geometry;
-  layoutDimension?: 2 | 3;
-  pinnedLayout?: boolean;
-};
-
-const ScatterDockPanel = React.memo(function ScatterDockPanel(
-  props: IDockviewPanelProps<ScatterPanelParams>
-) {
-  const params = props.params ?? {};
-
-  return (
-    <ScatterPanel
-      className="h-full"
-      layoutKey={params.layoutKey}
-      geometry={params.geometry}
-      layoutDimension={params.layoutDimension}
-      pinnedLayout={params.pinnedLayout}
-    />
-  );
-});
 
 function getResolvedScatterLayout(args: {
   datasetInfo: DatasetInfo | null;
@@ -87,7 +67,7 @@ function createScatterPanelDefinition(args: {
     label,
     icon,
     tabComponent,
-    Component: ScatterDockPanel,
+    Component: ScatterPanel,
     buildAddPanelOptions: ({ datasetInfo, position }) => {
       const resolvedLayout = getResolvedScatterLayout({
         datasetInfo,
@@ -169,7 +149,7 @@ const fallbackScatterBuiltInPanel = defineBuiltInCenterPanel<ScatterPanelParams>
   label: "Embeddings",
   icon: Circle,
   tabComponent: "embeddingsTab",
-  Component: ScatterDockPanel,
+  Component: ScatterPanel,
   visibleInViewMenu: false,
   buildAddPanelOptions: ({ datasetInfo, position }) => {
     const layouts = datasetInfo?.layouts ?? [];
@@ -233,7 +213,7 @@ export const CENTER_PANEL_DEFS = BUILT_IN_CENTER_PANELS.filter(
 
 export const CENTER_PANEL_COMPONENTS = {
   [samplesImageGridBuiltInPanel.component]: samplesImageGridBuiltInPanel.Component,
-  scatter: ScatterDockPanel,
+  scatter: ScatterPanel,
 } satisfies Record<string, React.ComponentType<IDockviewPanelProps>>;
 
 export const CENTER_PANEL_TAB_COMPONENTS = Object.fromEntries(

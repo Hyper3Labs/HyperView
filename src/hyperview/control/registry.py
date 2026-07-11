@@ -28,6 +28,7 @@ class CommandExecution:
     workspace: WorkspaceState | None = None
     result: dict[str, object] | None = None
     revision: int | None = None
+    messages: tuple[str, ...] = ()
 
 
 CommandHandler = Callable[

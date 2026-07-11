@@ -105,8 +105,8 @@ interface UseHyperScatterArgs {
   selectedIds: Set<string>;
   highlightedIds?: Set<string>;
   hoveredId: string | null;
-  setSelectedIds: (ids: Set<string>, source?: "scatter" | "grid") => void;
-  beginLassoSelection: (query: {
+  onSelectionChange: (ids: Set<string>, source?: "scatter" | "grid") => void;
+  onLassoSelection: (query: {
     layoutKey: string;
     polygon: number[];
     labelFilter: string | null;
@@ -122,7 +122,7 @@ interface UseHyperScatterArgs {
     viewportWidth: number | null;
     viewportHeight: number | null;
   }) => void;
-  setHoveredId: (id: string | null) => void;
+  onHoverChange: (id: string | null) => void;
   onView3DChange?: (view: {
     yaw: number;
     pitch: number;
@@ -203,9 +203,9 @@ export function useHyperScatter({
   selectedIds,
   highlightedIds,
   hoveredId,
-  setSelectedIds,
-  beginLassoSelection,
-  setHoveredId,
+  onSelectionChange,
+  onLassoSelection,
+  onHoverChange,
   onView3DChange,
 }: UseHyperScatterArgs) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -738,14 +738,14 @@ export function useHyperScatter({
 
       if (!embeddings) return;
       if (nextIndex >= 0 && nextIndex < embeddings.ids.length) {
-        setHoveredId(embeddings.ids[nextIndex]);
+        onHoverChange(embeddings.ids[nextIndex]);
       } else {
-        setHoveredId(null);
+        onHoverChange(null);
       }
 
       requestRender();
     },
-    [embeddings, getCanvasPos, requestRender, setHoveredId]
+    [embeddings, getCanvasPos, onHoverChange, requestRender]
   );
 
   const handlePointerUp = useCallback(
@@ -802,7 +802,7 @@ export function useHyperScatter({
               const polygon = capInterleavedXY(pts, MAX_LASSO_VERTS);
               if (polygon.length < 6) return;
 
-              beginLassoSelection({
+              onLassoSelection({
                 layoutKey: embeddings.layout_key,
                 polygon,
                 labelFilter: labelFilter ?? null,
@@ -827,7 +827,7 @@ export function useHyperScatter({
               const polygon = capInterleavedXY(dataCoords, MAX_LASSO_VERTS);
               if (polygon.length < 6) return;
 
-              beginLassoSelection({
+              onLassoSelection({
                 layoutKey: embeddings.layout_key,
                 polygon,
                 labelFilter: labelFilter ?? null,
@@ -864,16 +864,16 @@ export function useHyperScatter({
             const next = new Set(selectedIds);
             if (next.has(id)) next.delete(id);
             else next.add(id);
-            setSelectedIds(next, "scatter");
+            onSelectionChange(next, "scatter");
           } else {
             if (selectedIds.size === 1 && selectedIds.has(id)) {
-              setSelectedIds(new Set<string>(), "scatter");
+              onSelectionChange(new Set<string>(), "scatter");
             } else {
-              setSelectedIds(new Set([id]), "scatter");
+              onSelectionChange(new Set([id]), "scatter");
             }
           }
         } else if (selectedIds.size > 0) {
-          setSelectedIds(new Set<string>(), "scatter");
+          onSelectionChange(new Set<string>(), "scatter");
         }
       }
 
@@ -884,12 +884,12 @@ export function useHyperScatter({
       requestRender();
     },
     [
-      beginLassoSelection,
       embeddings,
       getCanvasPos,
+      onLassoSelection,
+      onSelectionChange,
       requestRender,
       selectedIds,
-      setSelectedIds,
       stopInteraction,
       layoutDimension,
       labelFilter,
@@ -902,13 +902,13 @@ export function useHyperScatter({
       const renderer = rendererRef.current;
       if (renderer) {
         hoveredIndexRef.current = -1;
-        setHoveredId(null);
+        onHoverChange(null);
         renderer.setHovered(-1);
         requestRender();
       }
       stopInteraction();
     },
-    [requestRender, setHoveredId, stopInteraction]
+    [onHoverChange, requestRender, stopInteraction]
   );
 
   const handleDoubleClick = useCallback(
@@ -920,11 +920,11 @@ export function useHyperScatter({
 
       renderer.setSelection(new Set());
       renderer.setHighlight(new Set());
-      setSelectedIds(new Set<string>(), "scatter");
+      onSelectionChange(new Set<string>(), "scatter");
 
       requestRender();
     },
-    [clearPersistentLasso, requestRender, setSelectedIds, stopInteraction]
+    [clearPersistentLasso, onSelectionChange, requestRender, stopInteraction]
   );
 
   return {

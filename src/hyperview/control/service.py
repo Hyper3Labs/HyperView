@@ -47,6 +47,7 @@ class ControlService:
                 request.args,
             )
             execution = spec.handler(self.runtime, target, args)
+            messages.extend(execution.messages)
             workspace = execution.workspace.to_dict() if execution.workspace is not None else None
             snapshot = (
                 self.runtime.snapshot(execution.workspace.id)

@@ -140,15 +140,19 @@ class SpaceInfo:
     def index_id(self) -> str:
         return index_id_for_space_key(self.space_key)
 
+    @property
+    def representation_id(self) -> str:
+        return representation_id_for_space_key(self.space_key)
+
     def to_representation_dict(self) -> dict[str, Any]:
         """Representation view of this space (architecture.md vocabulary).
 
         The representation is the derived vector field itself, independent of
-        how it is searched; `space_key` doubles as the representation id until
-        storage keys the two separately.
+        how it is searched. ``space_key`` remains as a legacy storage reference.
         """
         return {
-            "id": self.space_key,
+            "id": self.representation_id,
+            "space_key": self.space_key,
             "entity_set_id": "samples",
             "field_path": f"embeddings.{self.space_key}",
             "kind": "vector",
@@ -171,7 +175,8 @@ class SpaceInfo:
             query_modes.append("text")
         return {
             "id": self.index_id,
-            "representation_id": self.space_key,
+            "representation_id": self.representation_id,
+            "space_key": self.space_key,
             "query_modes": query_modes,
             "scorer": distance_metric_for_space(self),
         }
@@ -283,7 +288,13 @@ class LayoutInfo:
         )
 
 
+REPRESENTATION_ID_PREFIX = "representation:"
 INDEX_ID_PREFIX = "space:"
+
+
+def representation_id_for_space_key(space_key: str) -> str:
+    """Return the stable public representation id for a storage space."""
+    return f"{REPRESENTATION_ID_PREFIX}{space_key}"
 
 
 def index_id_for_space_key(space_key: str) -> str:

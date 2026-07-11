@@ -9,17 +9,29 @@ import {
   apiUrl,
   fetchCollectionItems,
   fetchDataset,
+  fetchEmbeddings,
+  fetchLassoSelection,
   fetchRuntimeState,
   getRuntimeClientId,
   isAbortError,
   isStaticBundle,
   runControlCommand,
   runtimeSnapshotFromCommandResult,
+  setLayoutView,
   type ControlCommandResult,
+  type OrbitView3DRequest,
 } from "@/lib/api";
 import { RUNTIME_PANEL_PREFIX } from "@/lib/dockviewPanelPolicy";
+import { useColorSettings } from "@/store/useColorSettings";
 import { useStore } from "@/store/useStore";
-import type { DatasetInfo, RuntimeCollection, RuntimeSnapshot, Sample } from "@/types";
+import type {
+  DatasetInfo,
+  EmbeddingsData,
+  LayoutInfo,
+  RuntimeCollection,
+  RuntimeSnapshot,
+  Sample,
+} from "@/types";
 
 interface CommandEnvelope {
   target?: Record<string, unknown>;
@@ -40,6 +52,11 @@ export interface HyperViewCommandClient {
     command: string,
     envelope?: CommandEnvelope
   ) => Promise<ControlCommandResult>;
+  setActiveLayout: (layoutKey: string | null) => Promise<RuntimeSnapshot>;
+  setLayoutView: (
+    layoutKey: string,
+    camera3d: OrbitView3DRequest | null
+  ) => Promise<RuntimeSnapshot>;
 }
 
 export interface PanelResizeOptions {
@@ -173,12 +190,34 @@ export function createHyperViewPanelClient(workspaceId: string | null): HyperVie
         args: envelope?.args ?? {},
       });
     },
+    async setActiveLayout(layoutKey) {
+      if (!workspaceId) throw new Error("No active workspace");
+      if (!isStaticBundle()) {
+        await fetchJson(apiUrl("/control/ui/state"), {
+          method: "PATCH",
+          body: JSON.stringify({
+            workspace_id: workspaceId,
+            set_active_layout: true,
+            active_layout_key: layoutKey,
+            client_id: getRuntimeClientId(),
+          }),
+        });
+      }
+      return fetchRuntimeState(workspaceId);
+    },
+    async setLayoutView(layoutKey, camera3d) {
+      if (!workspaceId) throw new Error("No active workspace");
+      await setLayoutView({ workspaceId, layoutKey, camera3d });
+      return fetchRuntimeState(workspaceId);
+    },
   };
 }
 
 export function useCommandClient(): HyperViewCommandClient {
   const workspaceId = useStore((state) => state.activeWorkspaceId);
   const applyRuntimeSnapshot = useStore((state) => state.applyRuntimeSnapshot);
+  const setActiveLayoutKey = useStore((state) => state.setActiveLayoutKey);
+  const setLayoutViewCamera = useStore((state) => state.setLayoutViewCamera);
 
   return useMemo(() => {
     const client = createHyperViewPanelClient(workspaceId);
@@ -191,8 +230,110 @@ export function useCommandClient(): HyperViewCommandClient {
         }
         return payload;
       },
+      setActiveLayout: async (layoutKey: string | null) => {
+        setActiveLayoutKey(layoutKey);
+        const snapshot = await client.setActiveLayout(layoutKey);
+        if (!isStaticBundle()) applyRuntimeSnapshot(snapshot);
+        return snapshot;
+      },
+      setLayoutView: async (layoutKey: string, camera3d: OrbitView3DRequest | null) => {
+        setLayoutViewCamera(layoutKey, camera3d);
+        const snapshot = await client.setLayoutView(layoutKey, camera3d);
+        if (!isStaticBundle()) applyRuntimeSnapshot(snapshot);
+        return snapshot;
+      },
     };
-  }, [applyRuntimeSnapshot, workspaceId]);
+  }, [applyRuntimeSnapshot, setActiveLayoutKey, setLayoutViewCamera, workspaceId]);
+}
+
+export interface QueryResult<T> {
+  data: T | null;
+  loading: boolean;
+  error: string | null;
+  refetch: () => void;
+}
+
+export interface EmbeddingsQueryArgs {
+  layoutKey?: string | null;
+  layout_key?: string | null;
+}
+
+export type PanelQueryId = "embeddings" | "layouts";
+
+export function useQuery(
+  queryId: "embeddings",
+  args?: EmbeddingsQueryArgs
+): QueryResult<EmbeddingsData>;
+export function useQuery(queryId: "layouts", args?: Record<string, never>): QueryResult<LayoutInfo[]>;
+export function useQuery(
+  queryId: PanelQueryId,
+  args?: EmbeddingsQueryArgs | Record<string, never>
+): QueryResult<EmbeddingsData | LayoutInfo[]> {
+  const layoutKey =
+    queryId === "embeddings"
+      ? ((args as EmbeddingsQueryArgs | undefined)?.layoutKey ??
+        (args as EmbeddingsQueryArgs | undefined)?.layout_key ??
+        null)
+      : null;
+  const cachedDataset = useStore((state) => state.datasetInfo);
+  const cachedEmbeddings = useStore((state) =>
+    layoutKey ? state.embeddingsByLayoutKey[layoutKey] ?? null : null
+  );
+  const setDatasetInfo = useStore((state) => state.setDatasetInfo);
+  const setEmbeddingsForLayout = useStore((state) => state.setEmbeddingsForLayout);
+  const [revision, setRevision] = React.useState(0);
+  const initialData =
+    queryId === "layouts"
+      ? cachedDataset?.layouts ?? null
+      : cachedEmbeddings;
+  const [remote, setRemote] = React.useState<{
+    key: string;
+    data: EmbeddingsData | LayoutInfo[] | null;
+    loading: boolean;
+    error: string | null;
+  }>({ key: "", data: null, loading: initialData === null, error: null });
+  const queryKey = `${queryId}:${layoutKey ?? "default"}:${revision}`;
+
+  React.useEffect(() => {
+    const abort = new AbortController();
+    setRemote({ key: queryKey, data: null, loading: true, error: null });
+
+    const pending =
+      queryId === "layouts"
+        ? fetchDataset(abort.signal).then((dataset) => {
+            setDatasetInfo(dataset);
+            return dataset.layouts;
+          })
+        : fetchEmbeddings(layoutKey ?? undefined).then((embeddings) => {
+            setEmbeddingsForLayout(embeddings.layout_key, embeddings);
+            return embeddings;
+          });
+
+    void pending
+      .then((data) => {
+        if (!abort.signal.aborted) {
+          setRemote({ key: queryKey, data, loading: false, error: null });
+        }
+      })
+      .catch((reason) => {
+        if (abort.signal.aborted || isAbortError(reason)) return;
+        setRemote({
+          key: queryKey,
+          data: null,
+          loading: false,
+          error: reason instanceof Error ? reason.message : `Failed to run ${queryId} query`,
+        });
+      });
+
+    return () => abort.abort();
+  }, [layoutKey, queryId, queryKey, setDatasetInfo, setEmbeddingsForLayout]);
+
+  const data = remote.key === queryKey ? remote.data : initialData;
+  const loading = remote.key === queryKey ? remote.loading : data === null;
+  const error = remote.key === queryKey ? remote.error : null;
+  const refetch = useCallback(() => setRevision((current) => current + 1), []);
+
+  return useMemo(() => ({ data, loading, error, refetch }), [data, error, loading, refetch]);
 }
 
 export function usePanelState(panelIdOverride?: string) {
@@ -266,6 +407,8 @@ export function useSelection() {
   const selectionSource = useStore((state) => state.selectionSource);
   const clearLassoSelection = useStore((state) => state.clearLassoSelection);
   const setSelectedIds = useStore((state) => state.setSelectedIds);
+  const [lassoLoading, setLassoLoading] = React.useState(false);
+  const [lassoError, setLassoError] = React.useState<string | null>(null);
 
   const persistSelection = useCallback(
     async (ids: string[]) => {
@@ -294,14 +437,111 @@ export function useSelection() {
     [activeWorkspaceId, applyRuntimeSnapshot, clearLassoSelection, setSelectedIds]
   );
 
+  const selectLasso = useCallback(
+    async (query: {
+      layoutKey: string;
+      polygon: ArrayLike<number>;
+      labelFilter?: string | null;
+      view3d?: OrbitView3DRequest | null;
+      viewportWidth?: number | null;
+      viewportHeight?: number | null;
+    }) => {
+      setLassoLoading(true);
+      setLassoError(null);
+      try {
+        const pageSize = 2000;
+        const ids: string[] = [];
+        let offset = 0;
+        let total = 0;
+        do {
+          const page = await fetchLassoSelection({
+            ...query,
+            labelFilter: query.labelFilter ?? undefined,
+            offset,
+            limit: pageSize,
+          });
+          ids.push(...page.sample_ids);
+          total = page.total;
+          offset += page.sample_ids.length;
+          if (page.sample_ids.length === 0) break;
+        } while (offset < total);
+        await persistSelection(ids);
+        return ids;
+      } catch (reason) {
+        const message = reason instanceof Error ? reason.message : "Lasso selection failed";
+        setLassoError(message);
+        throw reason;
+      } finally {
+        setLassoLoading(false);
+      }
+    },
+    [persistSelection]
+  );
+
   return useMemo(
     () => ({
       selectedIds: Array.from(selectedIds),
       selectionSource,
       setSelection: persistSelection,
       clearSelection: () => persistSelection([]),
+      selectLasso,
+      lassoLoading,
+      lassoError,
     }),
-    [persistSelection, selectedIds, selectionSource]
+    [lassoError, lassoLoading, persistSelection, selectLasso, selectedIds, selectionSource]
+  );
+}
+
+export function useActiveLayout() {
+  const activeLayoutKey = useStore((state) => state.activeLayoutKey);
+  const requestedLayoutKey = useStore((state) => state.requestedLayoutKey);
+  const layoutViews = useStore((state) => state.layoutViews);
+  const commandClient = useCommandClient();
+
+  return useMemo(
+    () => ({
+      activeLayoutKey,
+      requestedLayoutKey,
+      layoutViews,
+      setActiveLayout: commandClient.setActiveLayout,
+      setLayoutView: commandClient.setLayoutView,
+    }),
+    [activeLayoutKey, commandClient.setActiveLayout, commandClient.setLayoutView, layoutViews, requestedLayoutKey]
+  );
+}
+
+export function usePanelInteractions() {
+  const hoveredId = useStore((state) => state.hoveredId);
+  const setHoveredId = useStore((state) => state.setHoveredId);
+  const labelFilter = useStore((state) => state.labelFilter);
+  const neighborsResults = useStore((state) => state.neighborsResults);
+  const scatterLabelOverlayMode = useStore((state) => state.scatterLabelOverlayMode);
+  const setScatterLabelOverlayMode = useStore((state) => state.setScatterLabelOverlayMode);
+  const labelColorMapId = useColorSettings((state) => state.labelColorMapId);
+  const highlightedIds = useMemo(
+    () => new Set(neighborsResults.map((sample) => sample.id)),
+    [neighborsResults]
+  );
+
+  return useMemo(
+    () => ({
+      hoveredId,
+      setHoveredId,
+      labelFilter,
+      highlightedIds,
+      labelColorMapId,
+      scatterLabelOverlayMode,
+      setScatterLabelOverlayMode,
+    }),
+    [
+      highlightedIds,
+      hoveredId,
+      labelColorMapId,
+      labelFilter,
+      scatterLabelOverlayMode,
+      setHoveredId,
+      setScatterLabelOverlayMode,
+    ]
   );
 }
 
@@ -514,8 +754,11 @@ export interface HyperViewPanelSdkGlobal {
   React: typeof React;
   hooks: {
     useCommandClient: typeof useCommandClient;
+    useQuery: typeof useQuery;
     usePanelState: typeof usePanelState;
     useSelection: typeof useSelection;
+    useActiveLayout: typeof useActiveLayout;
+    usePanelInteractions: typeof usePanelInteractions;
     useCollection: typeof useCollection;
     useSamples: typeof useSamples;
     useDatasetInfo: typeof useDatasetInfo;
@@ -538,8 +781,11 @@ export function installHyperViewPanelSdkGlobal() {
     React,
     hooks: {
       useCommandClient,
+      useQuery,
       usePanelState,
       useSelection,
+      useActiveLayout,
+      usePanelInteractions,
       useCollection,
       useSamples,
       useDatasetInfo,

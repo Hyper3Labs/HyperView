@@ -488,6 +488,7 @@ def test_samples_retrieval_commands_own_samples_panel_state(tmp_path: Path) -> N
     expected_retrieval = {
         "anchor_sample_id": "s0",
         "layout_key": None,
+        "index_id": "space:test_space",
         "space_key": "test_space",
         "k": 2,
         "source": "test",

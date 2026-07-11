@@ -235,6 +235,7 @@ class RepresentationInfoResponse(BaseModel):
     """A derived vector field, independent of how it is searched."""
 
     id: str
+    space_key: str
     entity_set_id: str
     field_path: str
     kind: str
@@ -251,6 +252,7 @@ class IndexInfoResponse(BaseModel):
 
     id: str
     representation_id: str
+    space_key: str
     query_modes: list[str]
     scorer: str
 
@@ -1157,7 +1159,12 @@ def create_app(
         }
 
     @app.get("/api/embeddings", response_model=EmbeddingsResponse)
-    async def get_embeddings(ds: Dataset = Depends(get_dataset), layout_key: str | None = None):
+    async def get_embeddings(
+        ds: Dataset = Depends(get_dataset),
+        layout_key: str | None = None,
+        index_id: str | None = None,
+        space_key: str | None = None,
+    ):
         """Get embedding coordinates for visualization."""
         layouts = ds.list_layouts()
         if not layouts:
@@ -1165,18 +1172,46 @@ def create_app(
                 status_code=400, detail="No layouts computed. Call compute_visualization() first."
             )
 
+        indexed_space_key = space_key_from_index_ref(index_id)
+        if index_id is not None and indexed_space_key is None:
+            raise HTTPException(status_code=400, detail="index_id must identify an index")
+        if space_key is not None and indexed_space_key is not None and space_key != indexed_space_key:
+            raise HTTPException(
+                status_code=400,
+                detail="space_key does not match the requested index_id",
+            )
+        resolved_space_key = indexed_space_key or space_key
+
         # Find the requested layout
         layout_info = None
         if layout_key is None:
+            candidate_layouts = [
+                layout for layout in layouts
+                if resolved_space_key is None or layout.space_key == resolved_space_key
+            ]
+            if not candidate_layouts:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No layout found for index: {index_id or space_key}",
+                )
             layout_info = next(
-                (layout for layout in layouts if parse_layout_dimension(layout.layout_key) == 2),
-                layouts[0],
+                (
+                    layout
+                    for layout in candidate_layouts
+                    if parse_layout_dimension(layout.layout_key) == 2
+                ),
+                candidate_layouts[0],
             )
             layout_key = layout_info.layout_key
         else:
             layout_info = next((layout for layout in layouts if layout.layout_key == layout_key), None)
             if layout_info is None:
                 raise HTTPException(status_code=404, detail=f"Layout not found: {layout_key}")
+            if resolved_space_key is not None and resolved_space_key != layout_info.space_key:
+                raise HTTPException(
+                    status_code=400,
+                    detail="index_id does not match the requested layout_key",
+                )
 
         ids, labels, coords = ds.get_visualization_data(layout_key)
 
@@ -1384,7 +1419,14 @@ def create_app(
         include_thumbnails: bool = Query(False),
     ):
         """Return k nearest neighbors for a given sample."""
-        resolved_space_key = space_key or space_key_from_index_ref(index_id)
+        indexed_space_key = space_key_from_index_ref(index_id)
+        if index_id is not None and indexed_space_key is None:
+            raise HTTPException(status_code=400, detail="index_id must identify an index")
+        if space_key is not None and indexed_space_key is not None and space_key != indexed_space_key:
+            raise HTTPException(
+                status_code=400, detail="space_key does not match the requested index_id"
+            )
+        resolved_space_key = indexed_space_key or space_key
         if layout_key is not None:
             layout = next((item for item in ds.list_layouts() if item.layout_key == layout_key), None)
             if layout is None:
@@ -1448,7 +1490,18 @@ def create_app(
         if not query_text:
             raise HTTPException(status_code=400, detail="query_text must be a non-empty string")
 
-        resolved_space_key = request.space_key or space_key_from_index_ref(request.index_id)
+        indexed_space_key = space_key_from_index_ref(request.index_id)
+        if request.index_id is not None and indexed_space_key is None:
+            raise HTTPException(status_code=400, detail="index_id must identify an index")
+        if (
+            request.space_key is not None
+            and indexed_space_key is not None
+            and request.space_key != indexed_space_key
+        ):
+            raise HTTPException(
+                status_code=400, detail="space_key does not match the requested index_id"
+            )
+        resolved_space_key = indexed_space_key or request.space_key
         if request.layout_key is not None:
             layout = next(
                 (item for item in ds.list_layouts() if item.layout_key == request.layout_key),

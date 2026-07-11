@@ -121,6 +121,7 @@ class SamplesRetrievalSetArgs(BaseModel):
 
     sample_id: str
     layout_key: str | None = None
+    index_id: str | None = None
     space_key: str | None = None
     k: int = 18
     source: str | None = None
@@ -149,6 +150,7 @@ class SamplesRetrievalSetTextArgs(BaseModel):
 
     query_text: str
     layout_key: str | None = None
+    index_id: str | None = None
     space_key: str | None = None
     k: int = 18
     source: str | None = None
@@ -267,6 +269,12 @@ def _samples_panel_collection_result(workspace) -> dict[str, object]:
         "collection_id": collection_id if isinstance(collection_id, str) else None,
         "collection": collection if isinstance(collection, dict) else None,
     }
+
+
+def _space_key_deprecation_messages(args: BaseModel) -> tuple[str, ...]:
+    if "space_key" not in args.model_fields_set:
+        return ()
+    return ("Deprecated argument 'space_key'; use 'index_id' instead.",)
 
 
 def _add_panel(
@@ -488,6 +496,7 @@ def _set_samples_retrieval_anchor(
         workspace_target.workspace_id,
         retrieval_args.sample_id,
         layout_key=retrieval_args.layout_key,
+        index_id=retrieval_args.index_id,
         space_key=retrieval_args.space_key,
         k=retrieval_args.k,
         source=retrieval_args.source,
@@ -497,6 +506,7 @@ def _set_samples_retrieval_anchor(
         workspace=workspace,
         result=_samples_panel_collection_result(workspace),
         revision=workspace.ui.view_revision,
+        messages=_space_key_deprecation_messages(retrieval_args),
     )
 
 
@@ -552,6 +562,7 @@ def _set_samples_text_retrieval(
         workspace_target.workspace_id,
         retrieval_args.query_text,
         layout_key=retrieval_args.layout_key,
+        index_id=retrieval_args.index_id,
         space_key=retrieval_args.space_key,
         k=retrieval_args.k,
         source=retrieval_args.source,
@@ -561,6 +572,7 @@ def _set_samples_text_retrieval(
         workspace=workspace,
         result=_samples_panel_collection_result(workspace),
         revision=workspace.ui.view_revision,
+        messages=_space_key_deprecation_messages(retrieval_args),
     )
 
 
@@ -717,6 +729,14 @@ def create_default_command_registry() -> CommandRegistry:
             target_model=WorkspaceTarget,
             args_model=SamplesRetrievalSetArgs,
             handler=_set_samples_retrieval_anchor,
+        ),
+        CommandSpec(
+            id="collection.search.create",
+            owner="backend",
+            summary="Create a text-search collection for the Samples panel.",
+            target_model=WorkspaceTarget,
+            args_model=SamplesRetrievalSetTextArgs,
+            handler=_set_samples_text_retrieval,
         ),
         CommandSpec(
             id="collection.filter.set",

@@ -28,7 +28,11 @@ from hyperview.panel_definitions import (
     merge_default_props,
 )
 from hyperview.storage.config import StorageConfig
-from hyperview.storage.schema import parse_layout_dimension, space_key_from_index_ref
+from hyperview.storage.schema import (
+    index_id_for_space_key,
+    parse_layout_dimension,
+    space_key_from_index_ref,
+)
 from hyperview.tools import RunContext, ToolRegistry
 
 
@@ -535,6 +539,7 @@ class SimilarityQueryState:
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "layout_key": self.layout_key,
+            "index_id": index_id_for_space_key(self.space_key) if self.space_key else None,
             "space_key": self.space_key,
             "k": self.k,
             "source": self.source,
@@ -768,18 +773,9 @@ class WorkspaceUiState:
                 continue
             panels[panel_id] = PanelStateEntry.from_dict(entry)
 
-        # One-way migration reader for workspaces persisted before July 2026.
-        # Runtime state now lives in ui.panels["samples"].state["retrieval"].
-        legacy_similarity_query = SimilarityQueryState.from_dict(data.get("similarity_query") or {})
         selected_ids = list(data.get("selected_ids") or [])
         active_retrieval = _samples_panel_retrieval_query(panels)
-        if active_retrieval is None and legacy_similarity_query is not None:
-            selected_ids = []
-            panels.setdefault(
-                SAMPLES_PANEL_STATE_ID,
-                PanelStateEntry(state=_samples_retrieval_state(legacy_similarity_query)),
-            )
-        elif active_retrieval is not None:
+        if active_retrieval is not None:
             selected_ids = []
 
         return cls(
@@ -1318,7 +1314,7 @@ class HyperViewRuntime:
         if query.query_text:
             collection_query: dict[str, Any] = {
                 "queryText": query.query_text,
-                "indexId": f"space:{query.space_key}" if query.space_key else None,
+                "indexId": index_id_for_space_key(query.space_key) if query.space_key else None,
                 "layoutId": query.layout_key,
                 "spaceKey": query.space_key,
                 "k": query.k,
@@ -1344,7 +1340,7 @@ class HyperViewRuntime:
         )
         collection_query = {
             "anchor": anchor.to_dict(),
-            "indexId": f"space:{query.space_key}" if query.space_key else None,
+            "indexId": index_id_for_space_key(query.space_key) if query.space_key else None,
             "layoutId": query.layout_key,
             "spaceKey": query.space_key,
             "k": query.k,
@@ -1564,6 +1560,7 @@ class HyperViewRuntime:
         sample_id: str,
         *,
         layout_key: str | None = None,
+        index_id: str | None = None,
         space_key: str | None = None,
         k: int = 18,
         source: str | None = None,
@@ -1577,6 +1574,7 @@ class HyperViewRuntime:
         resolved_layout_key, resolved_space_key = self._resolve_retrieval_context(
             workspace_id=workspace_id,
             layout_key=layout_key,
+            index_id=index_id,
             space_key=space_key,
         )
 
@@ -1599,6 +1597,7 @@ class HyperViewRuntime:
         query_text: str,
         *,
         layout_key: str | None = None,
+        index_id: str | None = None,
         space_key: str | None = None,
         k: int = 18,
         source: str | None = None,
@@ -1610,6 +1609,7 @@ class HyperViewRuntime:
         resolved_layout_key, resolved_space_key = self._resolve_retrieval_context(
             workspace_id=workspace_id,
             layout_key=layout_key,
+            index_id=index_id,
             space_key=space_key,
         )
 
@@ -1631,9 +1631,15 @@ class HyperViewRuntime:
         *,
         workspace_id: str,
         layout_key: str | None,
+        index_id: str | None,
         space_key: str | None,
     ) -> tuple[str | None, str | None]:
-        resolved_space_key = space_key
+        indexed_space_key = space_key_from_index_ref(index_id)
+        if index_id is not None and indexed_space_key is None:
+            raise ValueError("index_id must identify an index")
+        if space_key is not None and indexed_space_key is not None and space_key != indexed_space_key:
+            raise ValueError("space_key does not match the requested index_id")
+        resolved_space_key = indexed_space_key or space_key
         resolved_layout_key = layout_key
         if layout_key is not None:
             dataset = self.get_dataset(workspace_id=workspace_id)

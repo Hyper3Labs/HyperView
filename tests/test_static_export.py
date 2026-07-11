@@ -14,6 +14,7 @@ from hyperview.control import CommandEnvelope, ControlService, create_default_co
 from hyperview.core.sample import Sample
 from hyperview.runtime import HyperViewRuntime, ProviderRegistry, WorkspaceRegistry
 from hyperview.static_export import export_runtime_workspace
+from hyperview.storage.schema import representation_id_for_space_key
 
 
 def _write_extension(folder: Path) -> None:
@@ -138,9 +139,14 @@ def test_static_export_writes_bundle_snapshot_samples_media_and_flag(tmp_path: P
         index["representation_id"]: index for index in dataset_payload["indexes"]
     }
     expected_space = next(space for space in dataset.list_spaces() if space.space_key == space_key)
-    assert representations_by_id[space_key] == expected_space.to_representation_dict()
-    assert indexes_by_representation[space_key] == expected_space.to_index_dict()
-    assert spaces_by_id.keys() == representations_by_id.keys() == indexes_by_representation.keys()
+    representation_id = representation_id_for_space_key(space_key)
+    assert representations_by_id[representation_id] == expected_space.to_representation_dict()
+    assert indexes_by_representation[representation_id] == expected_space.to_index_dict()
+    expected_representation_ids = {
+        representation_id_for_space_key(key) for key in spaces_by_id
+    }
+    assert representations_by_id.keys() == expected_representation_ids
+    assert indexes_by_representation.keys() == expected_representation_ids
 
     samples_index = json.loads((out_dir / "api" / "samples" / "index.json").read_text(encoding="utf-8"))
     assert samples_index["total"] == 3

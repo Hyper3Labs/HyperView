@@ -905,6 +905,7 @@ def test_ui_similarity_query_is_explicit_and_cleared_with_selection(tmp_path: Pa
     expected_retrieval = {
         "anchor_sample_id": "sample-2",
         "layout_key": layout_key,
+        "index_id": f"space:{space_key}",
         "space_key": space_key,
         "k": 12,
         "source": "test",
@@ -933,7 +934,7 @@ def test_ui_similarity_query_is_explicit_and_cleared_with_selection(tmp_path: Pa
     assert "similarity_query" not in clear_response.json()["workspace"]["ui"]
 
 
-def test_workspace_load_drops_legacy_similarity_anchor_selection(tmp_path: Path) -> None:
+def test_workspace_load_ignores_legacy_similarity_query(tmp_path: Path) -> None:
     registry_path = tmp_path / "workspaces.json"
     registry_path.write_text(
         json.dumps(
@@ -963,13 +964,9 @@ def test_workspace_load_drops_legacy_similarity_anchor_selection(tmp_path: Path)
     workspace = registry.get("default")
 
     assert workspace is not None
-    assert workspace.ui.selected_ids == []
-    samples_retrieval = workspace.ui.panels["samples"].state["retrieval"]
-    assert samples_retrieval["anchor_sample_id"] == "sample-2"
-    assert workspace.ui.panels["samples"].state == {
-        "mode": "retrieval",
-        "retrieval": samples_retrieval,
-    }
+    assert workspace.ui.selected_ids == ["sample-2"]
+    assert "samples" not in workspace.ui.panels
+    assert "similarity_query" not in workspace.ui.to_dict()
 
 
 def test_ui_similarity_query_rejects_mismatched_layout_and_space() -> None:

@@ -11,6 +11,7 @@ from hyperview.runtime import SimilarityQueryState
 from hyperview.server.app import _resolve_collection_items, create_app
 from hyperview.storage.schema import (
     index_id_for_space_key,
+    representation_id_for_space_key,
     space_key_from_index_ref,
 )
 
@@ -47,8 +48,29 @@ def _make_dataset() -> tuple[Dataset, str]:
             dtype=np.float32,
         ),
     )
+    layout_key = f"{space_key}__umap__2d"
+    dataset._storage.ensure_layout(
+        layout_key=layout_key,
+        space_key=space_key,
+        method="umap",
+        geometry="euclidean",
+        params=None,
+    )
+    dataset._storage.add_layout_coords(
+        layout_key,
+        ids,
+        np.asarray([[0.0, 0.0], [1.0, 0.5], [2.0, 1.0]], dtype=np.float32),
+    )
 
     return dataset, space_key
+
+
+def _client(dataset: Dataset) -> TestClient:
+    app = create_app(dataset)
+    return TestClient(
+        app,
+        headers={"Authorization": f"Bearer {app.state.api_token}"},
+    )
 
 
 def test_space_key_from_index_ref_accepts_index_id_and_bare_key() -> None:
@@ -63,7 +85,7 @@ def test_space_key_from_index_ref_accepts_index_id_and_bare_key() -> None:
 
 def test_dataset_info_exposes_representations_and_indexes() -> None:
     dataset, space_key = _make_dataset()
-    client = TestClient(create_app(dataset))
+    client = _client(dataset)
 
     response = client.get("/api/dataset")
 
@@ -73,7 +95,9 @@ def test_dataset_info_exposes_representations_and_indexes() -> None:
     representations = payload["representations"]
     assert len(representations) == 1
     representation = representations[0]
-    assert representation["id"] == space_key
+    assert representation["id"] == representation_id_for_space_key(space_key)
+    assert representation["id"] != index_id_for_space_key(space_key)
+    assert representation["space_key"] == space_key
     assert representation["entity_set_id"] == "samples"
     assert representation["field_path"] == f"embeddings.{space_key}"
     assert representation["kind"] == "vector"
@@ -86,7 +110,8 @@ def test_dataset_info_exposes_representations_and_indexes() -> None:
     assert len(indexes) == 1
     index = indexes[0]
     assert index["id"] == index_id_for_space_key(space_key)
-    assert index["representation_id"] == space_key
+    assert index["representation_id"] == representation["id"]
+    assert index["space_key"] == space_key
     assert index["query_modes"] == ["nearest", "text"]
     assert index["scorer"] == "cosine"
 
@@ -100,7 +125,7 @@ def test_image_only_space_index_has_no_text_query_mode() -> None:
         config={"provider": "test", "geometry": "euclidean", "modality": "image"},
         space_key="image_space",
     )
-    client = TestClient(create_app(dataset))
+    client = _client(dataset)
 
     payload = client.get("/api/dataset").json()
 
@@ -109,7 +134,7 @@ def test_image_only_space_index_has_no_text_query_mode() -> None:
 
 def test_similarity_endpoint_accepts_index_id() -> None:
     dataset, space_key = _make_dataset()
-    client = TestClient(create_app(dataset))
+    client = _client(dataset)
 
     by_space_key = client.get(
         "/api/search/similar/s0", params={"k": 2, "space_key": space_key}
@@ -124,6 +149,83 @@ def test_similarity_endpoint_accepts_index_id() -> None:
     assert by_index_id.json()["space_key"] == space_key
     assert [item["id"] for item in by_index_id.json()["results"]] == [
         item["id"] for item in by_space_key.json()["results"]
+    ]
+
+
+def test_text_search_endpoint_accepts_index_id(monkeypatch) -> None:
+    dataset, space_key = _make_dataset()
+    monkeypatch.setattr(
+        dataset,
+        "find_similar_by_text",
+        lambda _query, *, k, space_key, layout_key=None: dataset.find_similar(
+            "s0", k=k, space_key=space_key
+        ),
+    )
+    client = _client(dataset)
+
+    response = client.post(
+        "/api/search/text",
+        json={
+            "query_text": "a cat",
+            "k": 2,
+            "index_id": index_id_for_space_key(space_key),
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["space_key"] == space_key
+
+
+def test_embeddings_endpoint_accepts_index_id() -> None:
+    dataset, space_key = _make_dataset()
+    client = _client(dataset)
+
+    response = client.get(
+        "/api/embeddings",
+        params={"index_id": index_id_for_space_key(space_key)},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["layout_key"] == f"{space_key}__umap__2d"
+
+
+def test_retrieval_commands_accept_index_id_and_warn_for_space_key() -> None:
+    dataset, space_key = _make_dataset()
+    client = _client(dataset)
+    index_id = index_id_for_space_key(space_key)
+
+    for command, args in (
+        ("panel.samples.retrieval.set-anchor", {"sample_id": "s0", "index_id": index_id}),
+        ("collection.neighbors.create", {"sample_id": "s0", "index_id": index_id}),
+        (
+            "panel.samples.retrieval.set-text-query",
+            {"query_text": "a cat", "index_id": index_id},
+        ),
+        ("collection.search.create", {"query_text": "a cat", "index_id": index_id}),
+    ):
+        response = client.post(
+            "/api/control/commands/run",
+            json={"command": command, "target": {"workspace_id": "default"}, "args": args},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["ok"] is True
+        assert "messages" not in payload
+        collection = payload["result"]["collection"]
+        assert collection["query"]["indexId"] == index_id
+        assert collection["query"]["spaceKey"] == space_key
+
+    deprecated = client.post(
+        "/api/control/commands/run",
+        json={
+            "command": "collection.neighbors.create",
+            "target": {"workspace_id": "default"},
+            "args": {"sample_id": "s0", "space_key": space_key},
+        },
+    ).json()
+    assert deprecated["ok"] is True
+    assert deprecated["messages"] == [
+        "Deprecated argument 'space_key'; use 'index_id' instead."
     ]
 
 

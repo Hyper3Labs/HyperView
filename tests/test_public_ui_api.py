@@ -451,6 +451,7 @@ def test_public_ui_show_similar_resolves_layout_context() -> None:
     expected_retrieval = {
         "anchor_sample_id": "sample-2",
         "layout_key": layout_key,
+        "index_id": f"space:{space_key}",
         "space_key": space_key,
         "k": 100,
         "source": "test",
