@@ -92,11 +92,14 @@ def _inject_static_flag(index_path: Path) -> None:
 
 
 def _dataset_payload(dataset: Dataset) -> dict[str, Any]:
+    spaces = dataset.list_spaces()
     return {
         "name": dataset.name,
         "num_samples": len(dataset),
         "labels": dataset.labels,
-        "spaces": [space.to_api_dict() for space in dataset.list_spaces()],
+        "spaces": [space.to_api_dict() for space in spaces],
+        "representations": [space.to_representation_dict() for space in spaces],
+        "indexes": [space.to_index_dict() for space in spaces],
         "layouts": [layout.to_api_dict() for layout in dataset.list_layouts()],
     }
 

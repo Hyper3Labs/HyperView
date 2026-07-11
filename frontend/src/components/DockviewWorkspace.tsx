@@ -41,7 +41,12 @@ import {
 } from "@/panels/registry";
 import { installHyperViewPanelSdkGlobal } from "@/panel-sdk";
 import { useStore } from "@/store/useStore";
-import type { DatasetInfo, Geometry, RuntimePanel } from "@/types";
+import type {
+  DatasetInfo,
+  Geometry,
+  RuntimePanel,
+  RuntimePanelStateEntry,
+} from "@/types";
 import { cn } from "@/lib/utils";
 import {
   isDockviewUserClosablePanelId,
@@ -342,8 +347,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function getSamplesRankFromPanelState(panel: RuntimePanel) {
-  const retrieval = panel.state?.retrieval;
+function getSamplesRankFromPanelState(panelState?: RuntimePanelStateEntry) {
+  const retrieval = panelState?.state.retrieval;
   if (!isRecord(retrieval)) return null;
   const anchorSampleId = retrieval.anchor_sample_id;
   const queryText = retrieval.query_text;
@@ -364,10 +369,13 @@ function getSamplesRankFromPanelState(panel: RuntimePanel) {
   };
 }
 
-function getRuntimeSamplesPanelParams(panel: RuntimePanel) {
-  const stateMode = panel.state?.mode;
+function getRuntimeSamplesPanelParams(
+  panel: RuntimePanel,
+  panelState?: RuntimePanelStateEntry
+) {
+  const stateMode = panelState?.state.mode;
   const mode = stateMode === "retrieval" ? "ranked" : panel.props?.mode;
-  const rank = getSamplesRankFromPanelState(panel) ?? panel.props?.rank;
+  const rank = getSamplesRankFromPanelState(panelState) ?? panel.props?.rank;
   return {
     panelId: panel.id,
     runtimePlacementKey: getRuntimePanelPlacementKey(panel),
@@ -379,7 +387,10 @@ function getRuntimeSamplesPanelParams(panel: RuntimePanel) {
   };
 }
 
-function getRuntimePanelHostParams(panel: RuntimePanel) {
+function getRuntimePanelHostParams(
+  panel: RuntimePanel,
+  panelState?: RuntimePanelStateEntry
+) {
   const baseParams = {
     ...(panel.props ?? {}),
     panelId: panel.id,
@@ -387,7 +398,7 @@ function getRuntimePanelHostParams(panel: RuntimePanel) {
     runtimePlacementKey: getRuntimePanelPlacementKey(panel),
   };
 
-  if (panel.kind === "scatter") {
+  if (panel.panel_type === "scatter") {
     const layoutDimension = panel.layout_dimension === 3 ? 3 : 2;
     return {
       ...baseParams,
@@ -401,7 +412,7 @@ function getRuntimePanelHostParams(panel: RuntimePanel) {
   if (panel.builtin_panel === "samples" || panel.panel_type === "samples") {
     return {
       ...baseParams,
-      ...getRuntimeSamplesPanelParams(panel),
+      ...getRuntimeSamplesPanelParams(panel, panelState),
     };
   }
 
@@ -428,7 +439,11 @@ function DockviewPanelActions(props: IDockviewHeaderActionsProps) {
         panelId: nextPanelId,
         title: sourcePanel.title,
         kind:
-          sourcePanel.kind === "module" ? "extension" : sourcePanel.kind,
+          sourcePanel.kind === "module"
+            ? "extension"
+            : sourcePanel.panel_type === "scatter"
+              ? "scatter"
+              : "builtin",
         builtinPanel: sourcePanel.builtin_panel,
         extension: sourcePanel.extension,
         extensionPanel: sourcePanel.extension_panel,
@@ -650,6 +665,7 @@ export function DockviewWorkspace() {
   const ctx = useDockviewContext();
   const datasetInfo = useStore((state) => state.datasetInfo);
   const customPanels = useStore((state) => state.customPanels);
+  const panelStates = useStore((state) => state.panelStates);
   const activePanelId = useStore((state) => state.activePanelId);
   const activeWorkspaceId = useStore((state) => state.activeWorkspaceId);
   const viewRevision = useStore((state) => state.viewRevision);
@@ -859,7 +875,9 @@ export function DockviewWorkspace() {
           existingPanel = undefined;
         } else {
           existingPanel.api.setTitle(panel.title);
-          existingPanel.api.updateParameters(getRuntimePanelHostParams(panel));
+          existingPanel.api.updateParameters(
+            getRuntimePanelHostParams(panel, panelStates[panel.id])
+          );
           continue;
         }
       }
@@ -881,7 +899,7 @@ export function DockviewWorkspace() {
         component: "panelHost",
         title: panel.title,
         tabComponent:
-          panel.kind === "scatter"
+          panel.panel_type === "scatter"
             ? getScatterTabComponent({
                 geometry: panel.geometry,
                 layoutDimension,
@@ -889,7 +907,7 @@ export function DockviewWorkspace() {
             : builtInOptions?.tabComponent,
         params: {
           ...(builtInOptions?.params ?? {}),
-          ...getRuntimePanelHostParams(panel),
+          ...getRuntimePanelHostParams(panel, panelStates[panel.id]),
         },
         position:
           builtInOptions?.position ??
@@ -909,7 +927,7 @@ export function DockviewWorkspace() {
       });
     }
 
-  }, [ctx.api, customPanels, datasetInfo, hasExplicitView]);
+  }, [ctx.api, customPanels, datasetInfo, hasExplicitView, panelStates]);
 
   useEffect(() => {
     const api = ctx.api;

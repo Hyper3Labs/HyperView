@@ -299,7 +299,7 @@ class CustomPanelSpec:
     id: str
     title: str
     module_file: str | None = None
-    kind: Literal["module", "scatter", "builtin"] = "module"
+    kind: Literal["module", "builtin"] = "module"
     panel_type: str | None = None
     source: str | None = None
     builtin_panel: str | None = None
@@ -320,15 +320,40 @@ class CustomPanelSpec:
     visible: bool = True
     props: dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        if self.kind == "scatter":
+            self.kind = "builtin"
+            self.builtin_panel = self.builtin_panel or "scatter"
+            self.panel_type = self.panel_type or "scatter"
+            self.source = self.source or "builtin"
+        elif self.kind == "extension":
+            self.kind = "module"
+        elif self.kind not in {"module", "builtin"}:
+            raise ValueError(
+                f"Unsupported panel kind '{self.kind}'; expected 'builtin' or 'module'"
+            )
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CustomPanelSpec:
-        kind = str(data.get("kind") or "module")
-        if kind not in {"module", "scatter", "builtin"}:
+        persisted_kind = str(data.get("kind") or "module")
+        kind = persisted_kind
+        # One-way migration for panel specs persisted before the two-kind
+        # runtime contract. Transport requests may still describe where a
+        # panel comes from, but snapshots only expose builtin or module.
+        if kind == "scatter":
+            kind = "builtin"
+        elif kind == "extension":
             kind = "module"
+        elif kind not in {"module", "builtin"}:
+            raise ValueError(
+                f"Unsupported panel kind '{kind}'; expected 'builtin' or 'module'"
+            )
 
         builtin_panel = data.get("builtin_panel")
         if builtin_panel is not None:
             builtin_panel = str(builtin_panel).strip() or None
+        if persisted_kind == "scatter" and builtin_panel is None:
+            builtin_panel = "scatter"
 
         position = str(data.get("position") or "right")
         if position not in {"center", "right", "bottom"}:
@@ -395,8 +420,6 @@ class CustomPanelSpec:
             return self.panel_type
         if self.kind == "builtin":
             return self.builtin_panel or "builtin"
-        if self.kind == "scatter":
-            return "scatter"
         if self.extension and self.extension_panel:
             return f"{self.extension}.{self.extension_panel}"
         return "module"
@@ -404,7 +427,7 @@ class CustomPanelSpec:
     def resolved_source(self) -> str:
         if self.source:
             return self.source
-        if self.kind in {"builtin", "scatter"}:
+        if self.kind == "builtin":
             return "builtin"
         if self.extension:
             return "extension"
@@ -697,7 +720,7 @@ def _custom_panel_instance_payload(
 ) -> dict[str, Any]:
     payload = {
         **panel.to_dict(),
-        **panel_states.get(panel.id, PanelStateEntry()).to_dict(),
+        "state_revision": panel_states.get(panel.id, PanelStateEntry()).state_revision,
     }
     if data is not None:
         payload["data"] = data
@@ -720,7 +743,7 @@ class WorkspaceUiState:
         custom_panels: list[CustomPanelSpec] = []
         for entry in list(data.get("custom_panels") or []):
             panel = CustomPanelSpec.from_dict(entry)
-            if panel.kind in {"scatter", "builtin"} or panel.module_file:
+            if panel.kind == "builtin" or panel.module_file:
                 custom_panels.append(panel)
 
         layout_views: dict[str, LayoutViewState] = {}
@@ -1826,9 +1849,10 @@ class HyperViewRuntime:
             return CustomPanelSpec(
                 id=panel_id,
                 title=title,
-                kind="scatter",
+                kind="builtin",
                 panel_type="scatter",
                 source="builtin",
+                builtin_panel="scatter",
                 layout_key=layout_key,
                 geometry=geometry,
                 layout_dimension=layout_dimension,
@@ -1840,7 +1864,10 @@ class HyperViewRuntime:
                 ),
             )
 
-        raise ValueError(f"Unsupported panel kind: {kind}")
+        raise ValueError(
+            f"Unsupported panel kind '{kind}'; expected one of: "
+            "builtin, extension, module, scatter"
+        )
 
     def add_runtime_panel(
         self,
@@ -2326,7 +2353,7 @@ class HyperViewRuntime:
         self,
         panel: CustomPanelSpec,
     ) -> PanelDefinition | None:
-        if panel.kind in {"builtin", "scatter"}:
+        if panel.kind == "builtin":
             return self._get_panel_definition_locked(
                 panel.resolved_panel_type(),
                 source="builtin",

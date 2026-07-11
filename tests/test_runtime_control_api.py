@@ -431,7 +431,7 @@ def test_runtime_control_api_supports_checkpoint_jobs_panels_and_ui_state(
         },
     }
     assert text_panel["data"]["module_src"].startswith("/api/panels/content/default/notes/panel.js")
-    assert scatter_panel["kind"] == "scatter"
+    assert scatter_panel["kind"] == "builtin"
     assert scatter_panel["layout_key"] == target_layout
     assert scatter_panel["geometry"] == "euclidean"
     assert scatter_panel["layout_dimension"] == 2
@@ -547,7 +547,7 @@ def test_runtime_snapshot_panel_contract_includes_state_and_layout(tmp_path: Pat
     assert panel["panel_type"] == "samples"
     assert panel["source"] == "builtin"
     assert panel["props"] == {"mode": "browse"}
-    assert panel["state"] == {"view": {"density": "compact"}}
+    assert "state" not in panel
     assert panel["state_revision"] == 1
     assert panel["layout"] == {
         "position": "right",
@@ -660,10 +660,7 @@ min_height = 180
         item["panel_type"]: item for item in snapshot["panel_definitions"]
     }
     assert {"samples", "scatter", "analysis.summary"}.issubset(definitions_by_type)
-    assert snapshot["workspace"]["ui"]["custom_panels"][0]["state"] == {
-        "collapsed": False,
-        "threshold": 0.75,
-    }
+    assert "state" not in snapshot["workspace"]["ui"]["custom_panels"][0]
 
     response = client.get("/api/panel-definitions")
     assert response.status_code == 200

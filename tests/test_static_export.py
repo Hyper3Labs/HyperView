@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import quote
@@ -127,6 +128,20 @@ def test_static_export_writes_bundle_snapshot_samples_media_and_flag(tmp_path: P
     assert panels["readout"]["data"]["static_compatible"] is True
     assert panels["server-readout"]["data"]["static_compatible"] is False
 
+    dataset_payload = json.loads((out_dir / "api" / "dataset.json").read_text(encoding="utf-8"))
+    spaces_by_id = {space["space_key"]: space for space in dataset_payload["spaces"]}
+    representations_by_id = {
+        representation["id"]: representation
+        for representation in dataset_payload["representations"]
+    }
+    indexes_by_representation = {
+        index["representation_id"]: index for index in dataset_payload["indexes"]
+    }
+    expected_space = next(space for space in dataset.list_spaces() if space.space_key == space_key)
+    assert representations_by_id[space_key] == expected_space.to_representation_dict()
+    assert indexes_by_representation[space_key] == expected_space.to_index_dict()
+    assert spaces_by_id.keys() == representations_by_id.keys() == indexes_by_representation.keys()
+
     samples_index = json.loads((out_dir / "api" / "samples" / "index.json").read_text(encoding="utf-8"))
     assert samples_index["total"] == 3
     shard_entry = samples_index["shards"][0]
@@ -225,3 +240,105 @@ def test_static_export_materializes_text_search_collections(tmp_path: Path) -> N
     assert payload["total"] == 2
     assert [item["sample_id"] for item in payload["items"]]
     assert all(item["score"] is not None for item in payload["items"])
+
+
+def test_static_ephemeral_filter_resolves_samples_without_collection_file_fetch() -> None:
+    script = r"""
+const fs = require("fs");
+const ts = require("./frontend/node_modules/typescript");
+const source = fs.readFileSync("./frontend/src/lib/api.ts", "utf8");
+const compiled = ts.transpileModule(source, {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  fileName: "api.ts",
+}).outputText;
+
+global.window = {
+  __HYPERVIEW_STATIC__: true,
+  location: { href: "https://example.test/index.html" },
+  dispatchEvent: () => {},
+};
+
+const requests = [];
+const payloads = {
+  "/api/runtime.json": {
+    version: 1,
+    workspace: {
+      id: "demo",
+      dataset_name: "static_export_dataset",
+      collections: [],
+      ui: { selected_ids: [], panels: {}, custom_panels: [] },
+    },
+  },
+  "/api/samples/index.json": {
+    total: 3,
+    shard_size: 500,
+    shards: [{
+      path: "shards/000000.json",
+      offset: 0,
+      count: 3,
+      sample_ids: ["sample-0", "sample-1", "sample-2"],
+    }],
+  },
+  "/api/samples/shards/000000.json": {
+    total: 3,
+    offset: 0,
+    limit: 500,
+    samples: [
+      { id: "sample-0", label: "cat" },
+      { id: "sample-1", label: "dog" },
+      { id: "sample-2", label: "cat" },
+    ],
+  },
+};
+global.fetch = async (url) => {
+  const path = new URL(url).pathname;
+  requests.push(path);
+  const payload = payloads[path];
+  return new Response(payload === undefined ? "missing" : JSON.stringify(payload), {
+    status: payload === undefined ? 404 : 200,
+    headers: { "content-type": payload === undefined ? "text/plain" : "application/json" },
+  });
+};
+
+const module = { exports: {} };
+new Function("exports", "require", "module", "__filename", "__dirname", compiled)(
+  module.exports,
+  require,
+  module,
+  "api.ts",
+  "."
+);
+
+(async () => {
+  const api = module.exports;
+  const result = await api.runControlCommand({
+    command: "collection.filter.set",
+    target: { workspace_id: "demo" },
+    args: { field: "label", value: "cat", source: "test" },
+  });
+  const collectionId = result.result.collection_id;
+  const page = await api.fetchCollectionItems(collectionId, { offset: 0, limit: 10 });
+  if (page.total !== 2 || page.items.map((item) => item.sample.id).join(",") !== "sample-0,sample-2") {
+    throw new Error(`unexpected page: ${JSON.stringify(page)}`);
+  }
+  if (requests.some((path) => path.startsWith("/api/collections/"))) {
+    throw new Error(`fetched an exported collection file: ${JSON.stringify(requests)}`);
+  }
+  process.stdout.write(JSON.stringify({ collectionId, requests }));
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+"""
+    completed = subprocess.run(
+        ["node", "-e", script],
+        cwd=Path(__file__).parents[1],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    result = json.loads(completed.stdout)
+
+    assert result["collectionId"].startswith("static-filter-")
+    assert "/api/samples/shards/000000.json" in result["requests"]
+    assert not any(path.startswith("/api/collections/") for path in result["requests"])

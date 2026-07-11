@@ -61,7 +61,6 @@ Current global SDK fields:
 - `React`
 - `hooks.useCommandClient()`
 - `hooks.usePanelState()`
-- `hooks.usePanelSamples()`
 - `hooks.useSelection()`
 - `hooks.useCollection(collectionId)`
 - `hooks.useSamples(collectionId)`

@@ -8,7 +8,7 @@ import { backendUrl, isStaticBundle } from "@/lib/api";
 import { getBuiltInCenterPanelDefinitionForPanelType } from "@/panels/registry";
 import { installHyperViewPanelSdkGlobal } from "@/panel-sdk";
 import { useStore } from "@/store/useStore";
-import type { RuntimePanel } from "@/types";
+import type { RuntimePanel, RuntimePanelStateEntry } from "@/types";
 
 import { Panel } from "./Panel";
 import { PanelHeader } from "./PanelHeader";
@@ -31,13 +31,13 @@ type RuntimePanelModuleExport =
       Component: ComponentType<RuntimePanelComponentProps>;
     };
 
-function panelInstanceValue(panel: RuntimePanel) {
+function panelInstanceValue(panel: RuntimePanel, panelState?: RuntimePanelStateEntry) {
   return {
     panel,
     panelId: panel.id,
     props: panel.props ?? {},
-    state: panel.state ?? {},
-    stateRevision: panel.state_revision ?? 0,
+    state: panelState?.state ?? {},
+    stateRevision: panelState?.state_revision ?? panel.state_revision ?? 0,
   };
 }
 
@@ -206,6 +206,7 @@ export function PanelHost(props: IDockviewPanelProps<PanelHostParams>) {
   const panel = useStore((state) =>
     state.customPanels.find((candidate) => candidate.id === panelId) ?? null
   );
+  const panelState = useStore((state) => state.panelStates[panelId]);
 
   if (!panel) {
     return <PanelUnavailable />;
@@ -216,7 +217,7 @@ export function PanelHost(props: IDockviewPanelProps<PanelHostParams>) {
   }
 
   return (
-    <PanelInstanceProvider value={panelInstanceValue(panel)}>
+    <PanelInstanceProvider value={panelInstanceValue(panel, panelState)}>
       {panel.kind === "module" ? (
         <ModulePanelHost panel={panel} />
       ) : (

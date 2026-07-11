@@ -145,7 +145,6 @@ export interface RuntimePanelDefinition {
   state_schema: Record<string, unknown> | null;
   commands: string[];
   queries: string[];
-  lifecycle: Record<string, unknown>;
   default_layout: Record<string, unknown>;
   allow_multiple: boolean;
   icon: string | null;
@@ -154,7 +153,7 @@ export interface RuntimePanelDefinition {
   static_reason: string | null;
 }
 
-export type RuntimePanelKind = "module" | "scatter" | "builtin";
+export type RuntimePanelKind = "module" | "builtin";
 
 export type RuntimePanelPosition = "center" | "right" | "bottom";
 
@@ -196,7 +195,6 @@ export interface RuntimePanel {
   max_height: number | null;
   visible: boolean;
   props: Record<string, unknown>;
-  state: Record<string, unknown>;
   state_revision: number;
   layout: RuntimePanelLayout;
   data: RuntimePanelData;

@@ -86,6 +86,10 @@ def test_deprecated_command_alias_dispatches_and_warns(tmp_path: Path, caplog) -
     assert result.command == "workspace.panel.resize"
     assert result.workspace is not None
     assert result.workspace["ui"]["custom_panels"][0]["width"] == 420
+    assert result.messages == [
+        "Deprecated command 'ui.panel.resize'; use 'workspace.panel.resize' instead. "
+        "This alias will be removed after 2026-10-01."
+    ]
     assert "Deprecated HyperView command 'ui.panel.resize' used" in caplog.text
 
 

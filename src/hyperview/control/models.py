@@ -59,6 +59,7 @@ class CommandResult(BaseModel):
     workspace: dict[str, Any] | None = None
     snapshot: dict[str, Any] | None = None
     revision: int | None = None
+    messages: list[str] | None = None
     error: CommandErrorPayload | None = None
 
     def to_dict(self) -> dict[str, Any]:

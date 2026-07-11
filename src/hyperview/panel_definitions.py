@@ -29,7 +29,6 @@ class PanelDefinition:
     state_schema: dict[str, Any] | None = None
     commands: list[str] = field(default_factory=list)
     queries: list[str] = field(default_factory=list)
-    lifecycle: dict[str, Any] = field(default_factory=dict)
     default_layout: dict[str, Any] = field(default_factory=dict)
     allow_multiple: bool = True
     icon: str | None = None
@@ -66,7 +65,6 @@ class PanelDefinition:
             ),
             "commands": list(self.commands),
             "queries": list(self.queries),
-            "lifecycle": _json_object_copy(self.lifecycle),
             "default_layout": _json_object_copy(self.default_layout),
             "allow_multiple": self.allow_multiple,
             "icon": self.icon,

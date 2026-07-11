@@ -441,6 +441,10 @@ export async function fetchCollectionItems(
   const limit = args.limit ?? 100;
 
   if (isStaticBundle()) {
+    const ephemeralCollection = await getStaticEphemeralCollection(collectionId);
+    if (ephemeralCollection) {
+      return fetchStaticEphemeralCollectionItems(ephemeralCollection, offset, limit, args.signal);
+    }
     const payload = await fetchStaticJson<StaticCollectionItemsFile>(
       `api/collections/${encodeURIComponent(collectionId)}/items.json`,
       args.signal
@@ -793,6 +797,59 @@ async function fetchStaticSamplesByIds(sampleIds: string[]): Promise<Sample[]> {
   const loaded = await Promise.all(selectedShards.map((shard) => getStaticSampleShard(shard.path)));
   const byId = new Map(loaded.flatMap((shard) => shard.samples).map((sample) => [sample.id, sample]));
   return sampleIds.map((sampleId) => byId.get(sampleId)).filter((sample): sample is Sample => Boolean(sample));
+}
+
+async function getStaticEphemeralCollection(
+  collectionId: string
+): Promise<RuntimeCollection | null> {
+  if (!collectionId.startsWith("static-filter-")) return null;
+  const snapshot = await getStaticSnapshot();
+  return (
+    snapshot.workspace.collections.find(
+      (collection) => collection.id === collectionId && collection.kind === "filter"
+    ) ?? null
+  );
+}
+
+function staticSampleFieldValue(sample: Sample, field: string): unknown {
+  let value: unknown = sample;
+  for (const segment of field.split(".")) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    value = (value as Record<string, unknown>)[segment];
+  }
+  return value;
+}
+
+function sampleMatchesStaticFilter(sample: Sample, collection: RuntimeCollection): boolean {
+  const { field, op, value } = collection.query;
+  if (typeof field !== "string" || op !== "eq") return false;
+  const sampleValue = staticSampleFieldValue(sample, field);
+  if (value === null) return sampleValue === null || sampleValue === undefined;
+  return sampleValue === value;
+}
+
+async function fetchStaticEphemeralCollectionItems(
+  collection: RuntimeCollection,
+  offset: number,
+  limit: number,
+  signal?: AbortSignal
+): Promise<CollectionItemsPage> {
+  signal?.throwIfAborted();
+  const index = await getStaticSamplesIndex();
+  const shards = normalizedStaticSampleShards(index);
+  const loaded = await Promise.all(shards.map((shard) => getStaticSampleShard(shard.path)));
+  signal?.throwIfAborted();
+  const matching = loaded
+    .flatMap((shard) => shard.samples)
+    .filter((sample) => sampleMatchesStaticFilter(sample, collection));
+  return {
+    collectionId: collection.id,
+    offset,
+    limit,
+    total: matching.length,
+    hasMore: offset + limit < matching.length,
+    items: matching.slice(offset, offset + limit).map((sample) => ({ sample, score: null })),
+  };
 }
 
 function getStaticSimilarityIndex(): Promise<StaticSimilarityIndex> {

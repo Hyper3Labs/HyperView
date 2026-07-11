@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pydantic import ValidationError
 
+from hyperview.control.aliases import command_alias_deprecation_message
 from hyperview.control.models import (
     CommandEnvelope,
     CommandError,
@@ -26,6 +27,13 @@ class ControlService:
         return [metadata.model_dump() for metadata in self.registry.list_metadata()]
 
     def run(self, envelope: CommandEnvelope | dict[str, object]) -> CommandResult:
+        request_command = (
+            envelope.command
+            if isinstance(envelope, CommandEnvelope)
+            else str(envelope.get("command", ""))
+        )
+        warning = command_alias_deprecation_message(request_command)
+        messages = [warning] if warning is not None else []
         try:
             request = (
                 envelope
@@ -55,30 +63,38 @@ class ControlService:
                 workspace=workspace,
                 snapshot=snapshot,
                 revision=revision,
+                messages=messages or None,
             )
         except ValidationError as exc:
             command = envelope.command if isinstance(envelope, CommandEnvelope) else ""
-            return self._error_result(command, "validation_error", str(exc))
+            return self._error_result(command, "validation_error", str(exc), messages)
         except CommandError as exc:
             command = envelope.command if isinstance(envelope, CommandEnvelope) else ""
             if not command and isinstance(envelope, dict):
                 command_value = envelope.get("command")
                 command = command_value if isinstance(command_value, str) else ""
-            return self._error_result(command, exc.code, exc.message)
+            return self._error_result(command, exc.code, exc.message, messages)
         except KeyError as exc:
             command = envelope.command if isinstance(envelope, CommandEnvelope) else str(envelope.get("command", ""))
             message = str(exc.args[0]) if exc.args else str(exc)
-            return self._error_result(command, "not_found", message)
+            return self._error_result(command, "not_found", message, messages)
         except LookupError as exc:
             command = envelope.command if isinstance(envelope, CommandEnvelope) else str(envelope.get("command", ""))
-            return self._error_result(command, "not_found", str(exc))
+            return self._error_result(command, "not_found", str(exc), messages)
         except ValueError as exc:
             command = envelope.command if isinstance(envelope, CommandEnvelope) else str(envelope.get("command", ""))
-            return self._error_result(command, "validation_error", str(exc))
+            return self._error_result(command, "validation_error", str(exc), messages)
 
-    def _error_result(self, command: str, code: CommandErrorCode, message: str) -> CommandResult:
+    def _error_result(
+        self,
+        command: str,
+        code: CommandErrorCode,
+        message: str,
+        messages: list[str] | None = None,
+    ) -> CommandResult:
         return CommandResult(
             ok=False,
             command=command,
+            messages=list(messages) if messages else None,
             error=CommandErrorPayload(code=code, message=message),
         )

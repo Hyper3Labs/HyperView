@@ -69,7 +69,6 @@ class PanelSpecEntry:
     state_schema: dict[str, object] | None = None
     commands: list[str] = field(default_factory=list)
     queries: list[str] = field(default_factory=list)
-    lifecycle: dict[str, object] = field(default_factory=dict)
     default_layout: dict[str, object] = field(default_factory=dict)
     allow_multiple: bool = True
     icon: str | None = None
@@ -94,7 +93,6 @@ class PanelSpecEntry:
             state_schema=dict(self.state_schema) if self.state_schema is not None else None,
             commands=list(self.commands),
             queries=list(self.queries),
-            lifecycle=dict(self.lifecycle),
             default_layout=dict(self.default_layout),
             allow_multiple=self.allow_multiple,
             icon=self.icon,
@@ -162,7 +160,6 @@ class ExtensionManifest:
                     state_schema=_optional_dict(entry.get("state_schema")),
                     commands=_string_list(entry.get("commands")),
                     queries=_string_list(entry.get("queries")),
-                    lifecycle=_dict_or_empty(entry.get("lifecycle")),
                     default_layout=_panel_default_layout(entry, position),
                     allow_multiple=bool(entry.get("allow_multiple", True)),
                     icon=_optional_str(entry.get("icon")),

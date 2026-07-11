@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 LOGGER = logging.getLogger(__name__)
+ALIAS_REMOVAL_DATE = "2026-10-01"
 
 DEPRECATED_COMMAND_ALIASES: dict[str, str] = {
     "ui.panel.add": "workspace.panel.add",
@@ -39,3 +40,15 @@ def resolve_command_alias(command_id: str) -> str:
         canonical_id,
     )
     return canonical_id
+
+
+def command_alias_deprecation_message(command_id: str) -> str | None:
+    """Return the caller-visible warning for a deprecated command alias."""
+
+    canonical_id = DEPRECATED_COMMAND_ALIASES.get(command_id)
+    if canonical_id is None:
+        return None
+    return (
+        f"Deprecated command '{command_id}'; use '{canonical_id}' instead. "
+        f"This alias will be removed after {ALIAS_REMOVAL_DATE}."
+    )

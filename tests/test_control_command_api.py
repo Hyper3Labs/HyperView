@@ -111,6 +111,27 @@ def test_control_command_run_returns_machine_readable_errors(tmp_path: Path) -> 
     assert payload["error"]["code"] == "not_found"
 
 
+def test_deprecated_alias_warning_is_returned_by_control_api(tmp_path: Path) -> None:
+    client = _client_with_panel(tmp_path)
+
+    response = client.post(
+        "/api/control/commands/run",
+        json={
+            "command": "ui.panel.resize",
+            "target": {"workspace_id": "default", "panel_id": "samples"},
+            "args": {"width": 420},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["command"] == "workspace.panel.resize"
+    assert payload["messages"] == [
+        "Deprecated command 'ui.panel.resize'; use 'workspace.panel.resize' instead. "
+        "This alias will be removed after 2026-10-01."
+    ]
+
+
 def test_panel_rest_adapter_routes_are_not_registered(tmp_path: Path) -> None:
     client = _client_with_panel(tmp_path)
 
