@@ -154,12 +154,21 @@ def test_similarity_endpoint_accepts_index_id() -> None:
 
 def test_text_search_endpoint_accepts_index_id(monkeypatch) -> None:
     dataset, space_key = _make_dataset()
+
+    def find_similar_by_text(
+        _query,
+        *,
+        k,
+        space_key,
+        layout_key=None,
+        _provider_registry=None,
+    ):
+        return dataset.find_similar("s0", k=k, space_key=space_key)
+
     monkeypatch.setattr(
         dataset,
         "find_similar_by_text",
-        lambda _query, *, k, space_key, layout_key=None: dataset.find_similar(
-            "s0", k=k, space_key=space_key
-        ),
+        find_similar_by_text,
     )
     client = _client(dataset)
 

@@ -223,7 +223,12 @@ def _write_samples(out_dir: Path, dataset: Dataset) -> tuple[list[dict[str, Any]
     return samples, len(shards), media_count
 
 
-def _resolve_collection_ids(dataset: Dataset, collection: CollectionState) -> tuple[list[str], dict[str, float] | None]:
+def _resolve_collection_ids(
+    dataset: Dataset,
+    collection: CollectionState,
+    *,
+    provider_registry: Any | None = None,
+) -> tuple[list[str], dict[str, float] | None]:
     query = collection.query or {}
     if collection.kind == "all":
         return [sample.id for sample in dataset.samples], None
@@ -254,28 +259,36 @@ def _resolve_collection_ids(dataset: Dataset, collection: CollectionState) -> tu
             scores = {sample.id: float(distance) for sample, distance in results}
             return [sample.id for sample, _distance in results], scores
         if query_text:
-            try:
-                results = dataset.find_similar_by_text(
-                    query_text,
-                    k=max(1, min(k, MAX_COLLECTION_EXPORT_K)),
-                    space_key=space_key if isinstance(space_key, str) else None,
-                    layout_key=layout_key if isinstance(layout_key, str) else None,
-                )
-            except Exception:
-                return [], None
+            results = dataset.find_similar_by_text(
+                query_text,
+                k=max(1, min(k, MAX_COLLECTION_EXPORT_K)),
+                space_key=space_key if isinstance(space_key, str) else None,
+                layout_key=layout_key if isinstance(layout_key, str) else None,
+                _provider_registry=provider_registry,
+            )
             scores = {sample.id: float(distance) for sample, distance in results}
             return [sample.id for sample, _distance in results], scores
     return [], collection.scores
 
 
-def _write_collections(out_dir: Path, dataset: Dataset, snapshot: dict[str, Any]) -> int:
+def _write_collections(
+    out_dir: Path,
+    dataset: Dataset,
+    snapshot: dict[str, Any],
+    *,
+    provider_registry: Any | None = None,
+) -> int:
     collections = [
         CollectionState.from_dict(item)
         for item in snapshot.get("workspace", {}).get("collections", [])
         if isinstance(item, dict)
     ]
     for collection in collections:
-        ids, scores = _resolve_collection_ids(dataset, collection)
+        ids, scores = _resolve_collection_ids(
+            dataset,
+            collection,
+            provider_registry=provider_registry,
+        )
         rows = [
             {
                 "sample_id": sample_id,
@@ -538,7 +551,12 @@ def export_runtime_workspace(
 
     _samples, num_shards, num_media_files = _write_samples(out_dir, dataset)
     num_layouts = _write_embeddings(out_dir, dataset)
-    num_collections = _write_collections(out_dir, dataset, snapshot)
+    num_collections = _write_collections(
+        out_dir,
+        dataset,
+        snapshot,
+        provider_registry=runtime.provider_registry,
+    )
     num_similarity_queries = _write_similarity(out_dir, dataset, k=similarity_k)
     _copy_panel_modules(out_dir, runtime, workspace_id, compatible_panel_ids)
     worker_name = _write_cloudflare_config(out_dir, workspace_id)

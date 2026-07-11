@@ -734,6 +734,7 @@ class SessionUiController:
             k=k,
             space_key=space_key,
             layout_key=layout_key,
+            _provider_registry=self._runtime().provider_registry,
         )
 
     def add_extension(

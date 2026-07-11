@@ -30,6 +30,31 @@ from hyperview.storage.schema import (
 DEFAULT_VISUALIZATION_LAYOUT = "euclidean"
 VALID_VISUALIZATION_GEOMETRIES = ("euclidean", "poincare", "spherical")
 
+# Persisted provider spellings from before provider-registry unification.
+# Add future read-compatible slug migrations here.
+LEGACY_PROVIDER_ALIASES = {
+    "embed_anything": "embed-anything",
+}
+
+# These are the multimodal model-id families HyperView's legacy
+# embed-anything examples and defaults produced before provider metadata was
+# persisted. They are intentionally bounded: an unknown provider must not be
+# guessed for an arbitrary model.
+LEGACY_EMBED_ANYTHING_MODEL_PREFIXES = (
+    "openai/clip-",
+    "google/siglip-",
+    "jinaai/jina-clip-",
+)
+
+
+def _normalize_provider_slug(provider: str) -> str:
+    return LEGACY_PROVIDER_ALIASES.get(provider, provider)
+
+
+def _is_legacy_embed_anything_model(model_id: str) -> bool:
+    normalized_model_id = model_id.strip().lower()
+    return normalized_model_id.startswith(LEGACY_EMBED_ANYTHING_MODEL_PREFIXES)
+
 
 def load_dataset(*args: Any, **kwargs: Any) -> Any:
     """Lazy wrapper for Hugging Face dataset loading."""
@@ -773,6 +798,7 @@ class Dataset:
                     provider = "hyper-models"
             except ImportError:
                 pass
+        provider = _normalize_provider_slug(provider)
         spec = EmbeddingSpec(
             provider=provider,
             model_id=model,
@@ -930,8 +956,20 @@ class Dataset:
             raise ValueError(f"Space not found: {space_key}")
 
         config = dict(space.config or {})
-        provider = str(config.get("provider") or space.provider or "embed-anything")
+        stored_provider = str(config.get("provider") or space.provider or "unknown")
         model_id = str(space.model_id)
+        if stored_provider == "unknown":
+            if _is_legacy_embed_anything_model(model_id):
+                provider = "embed-anything"
+            else:
+                raise ValueError(
+                    f"Embedding space '{space_key}' has stored provider "
+                    f"'{stored_provider}', and model '{model_id}' is not a recognized "
+                    "legacy CLIP signature. Migrate the space metadata to set an "
+                    "explicit provider before using text search."
+                )
+        else:
+            provider = _normalize_provider_slug(stored_provider)
         checkpoint = config.get("checkpoint")
         provider_kwargs = {
             key: value
@@ -955,6 +993,7 @@ class Dataset:
         *,
         layout_key: str | None = None,
         hybrid: bool = False,
+        _provider_registry: Any | None = None,
     ) -> list[tuple[Sample, float]]:
         """Find samples by text-vector similarity, optionally fused with FTS."""
         query = str(text or "").strip()
@@ -971,7 +1010,9 @@ class Dataset:
         from hyperview.embeddings.engine import get_engine
 
         spec = self._embedding_spec_for_space(resolved_space_key)
-        vector = get_engine().embed_texts([query], spec)[0]
+        vector = get_engine(provider_registry=_provider_registry).embed_texts(
+            [query], spec
+        )[0]
         candidate_k = max(k * 4, 20) if hybrid else k
         vector_results = self._storage.find_similar_by_text(
             query,

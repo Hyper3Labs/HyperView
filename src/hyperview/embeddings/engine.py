@@ -143,11 +143,30 @@ class EmbeddingEngine:
         Raises:
             ValueError: If provider not found in registry.
         """
+        custom_registration = self.provider_registry.get(spec.provider)
+        factory = None
+        if custom_registration is None:
+            from lancedb.embeddings import get_registry
+
+            registry = get_registry()
+
+            # Resolve the provider before consulting the instance cache. A
+            # stale cached instance must never make an unregistered provider
+            # appear resolvable.
+            try:
+                factory = registry.get(spec.provider)
+            except KeyError:
+                available = list_embedding_providers(
+                    provider_registry=self.provider_registry,
+                )
+                raise ValueError(
+                    f"Unknown provider: '{spec.provider}'. Available: {', '.join(sorted(available))}"
+                ) from None
+
         cache_key = spec.content_hash()
         if cache_key in self._cache:
             return self._cache[cache_key]
 
-        custom_registration = self.provider_registry.get(spec.provider)
         if custom_registration is not None:
             create_kwargs: dict[str, Any] = {}
             if spec.model_id:
@@ -159,21 +178,6 @@ class EmbeddingEngine:
             func = self.provider_registry.instantiate(spec.provider, **create_kwargs)
             self._cache[cache_key] = func
             return func
-
-        from lancedb.embeddings import get_registry
-
-        registry = get_registry()
-
-        # Get provider factory from registry
-        try:
-            factory = registry.get(spec.provider)
-        except KeyError:
-            available = list_embedding_providers(
-                provider_registry=self.provider_registry,
-            )
-            raise ValueError(
-                f"Unknown provider: '{spec.provider}'. Available: {', '.join(sorted(available))}"
-            ) from None
 
         create_kwargs: dict[str, Any] = {}
         if spec.model_id:

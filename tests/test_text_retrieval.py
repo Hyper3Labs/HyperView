@@ -1,15 +1,50 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import numpy as np
+import pytest
 
 from hyperview import Dataset
 from hyperview.control import CommandEnvelope, ControlService, create_default_command_registry
 from hyperview.core.sample import Sample
-from hyperview.runtime import HyperViewRuntime, ProviderRegistry, SimilarityQueryState, WorkspaceRegistry
+from hyperview.runtime import (
+    HyperViewRuntime,
+    ProviderRegistry,
+    SimilarityQueryState,
+    WorkspaceRegistry,
+)
 from hyperview.storage.schema import dict_to_sample, sample_to_dict
+
+
+class _CanonicalEmbedAnythingProvider:
+    supports = {"image", "text"}
+    geometry = "euclidean"
+
+    def compute_source_embeddings(self, inputs: list[str]) -> list[np.ndarray]:
+        return [
+            np.asarray([1.0, float(index)], dtype=np.float32)
+            for index, _ in enumerate(inputs)
+        ]
+
+    def compute_query_embeddings(self, _query: str) -> list[np.ndarray]:
+        return [np.asarray([1.0, 0.0], dtype=np.float32)]
+
+
+class _CanonicalProviderRegistry:
+    def __init__(self, provider: Any) -> None:
+        self.provider = provider
+        self.requested_aliases: list[str] = []
+
+    def get(self, alias: str) -> object | None:
+        self.requested_aliases.append(alias)
+        return object() if alias == "embed-anything" else None
+
+    def instantiate(self, alias: str, **_kwargs: Any) -> Any:
+        assert alias == "embed-anything"
+        return self.provider
 
 
 def _service(tmp_path: Path) -> ControlService:
@@ -114,3 +149,94 @@ def test_dataset_find_similar_by_text_uses_encoded_vector(tmp_path: Path) -> Non
 
     assert len(results) == 1
     assert results[0][0].id == "s0"
+
+
+def test_legacy_embed_anything_space_resolves_canonical_provider() -> None:
+    dataset = Dataset("legacy_provider_alias", persist=False)
+    dataset.add_sample(Sample(id="s0", filepath="/virtual/s0.png"))
+    dataset._storage.ensure_space(
+        model_id="openai/clip-vit-base-patch32",
+        dim=2,
+        config={"provider": "embed_anything", "geometry": "euclidean"},
+        space_key="legacy_alias_space",
+    )
+    dataset._storage.add_embeddings(
+        "legacy_alias_space",
+        ["s0"],
+        np.asarray([[1.0, 0.0]], dtype=np.float32),
+    )
+    registry = _CanonicalProviderRegistry(_CanonicalEmbedAnythingProvider())
+
+    results = dataset.find_similar_by_text(
+        "a sample",
+        space_key="legacy_alias_space",
+        _provider_registry=registry,
+    )
+
+    assert results[0][0].id == "s0"
+    assert registry.requested_aliases
+    assert set(registry.requested_aliases) == {"embed-anything"}
+
+
+def test_unknown_provider_legacy_clip_space_resolves_canonical_provider() -> None:
+    dataset = Dataset("legacy_unknown_clip", persist=False)
+    dataset.add_sample(Sample(id="s0", filepath="/virtual/s0.png"))
+    dataset._storage.ensure_space(
+        model_id="openai/clip-vit-base-patch32",
+        dim=2,
+        config=None,
+        space_key="legacy_unknown_space",
+    )
+    dataset._storage.add_embeddings(
+        "legacy_unknown_space",
+        ["s0"],
+        np.asarray([[1.0, 0.0]], dtype=np.float32),
+    )
+    registry = _CanonicalProviderRegistry(_CanonicalEmbedAnythingProvider())
+
+    results = dataset.find_similar_by_text(
+        "a sample",
+        space_key="legacy_unknown_space",
+        _provider_registry=registry,
+    )
+
+    assert results[0][0].id == "s0"
+    assert set(registry.requested_aliases) == {"embed-anything"}
+
+
+def test_unknown_provider_unrecognized_model_requires_metadata_migration() -> None:
+    dataset = Dataset("legacy_unknown_unrecognized", persist=False)
+    dataset._storage.ensure_space(
+        model_id="custom/image-model-v1",
+        dim=2,
+        config=None,
+        space_key="unrecognized_space",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"Embedding space 'unrecognized_space' has stored provider 'unknown'.*"
+            r"Migrate the space metadata"
+        ),
+    ):
+        dataset._embedding_spec_for_space("unrecognized_space")
+
+
+def test_compute_embeddings_persists_canonical_provider_for_legacy_alias() -> None:
+    dataset = Dataset("canonical_compute_provider", persist=False)
+    dataset.add_sample(Sample(id="s0", filepath="/virtual/s0.png"))
+    registry = _CanonicalProviderRegistry(_CanonicalEmbedAnythingProvider())
+
+    space_key = dataset.compute_embeddings(
+        model="openai/clip-vit-base-patch32",
+        provider="embed_anything",
+        show_progress=False,
+        _provider_registry=registry,
+    )
+
+    space = next(item for item in dataset.list_spaces() if item.space_key == space_key)
+    assert space_key.startswith("embed-anything__")
+    assert space.config is not None
+    assert space.config["provider"] == "embed-anything"
+    assert set(registry.requested_aliases) == {"embed-anything"}

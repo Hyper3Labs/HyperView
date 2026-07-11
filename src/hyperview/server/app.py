@@ -389,6 +389,7 @@ def _resolve_collection_items(
     *,
     offset: int,
     limit: int,
+    provider_registry: Any | None = None,
 ) -> tuple[list[tuple[Any, float | None]], int, bool]:
     """Materialize a page of a collection's members as (sample, score) pairs.
 
@@ -420,7 +421,12 @@ def _resolve_collection_items(
             raise ValueError("Search collection is missing queryText")
         k = int(query.get("k") or 18)
         space_key = query.get("spaceKey") or space_key_from_index_ref(query.get("indexId"))
-        results = ds.find_similar_by_text(query_text, k=k, space_key=space_key)
+        results = ds.find_similar_by_text(
+            query_text,
+            k=k,
+            space_key=space_key,
+            _provider_registry=provider_registry,
+        )
         total = len(results)
         page = results[offset : offset + limit]
         return (
@@ -1155,7 +1161,11 @@ def create_app(
 
         try:
             items, total, has_more = _resolve_collection_items(
-                ds, collection, offset=offset, limit=limit
+                ds,
+                collection,
+                offset=offset,
+                limit=limit,
+                provider_registry=runtime_dep.provider_registry,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1502,6 +1512,7 @@ def create_app(
     async def search_by_text(
         request: TextSearchRequest,
         ds: Dataset = Depends(get_dataset),
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
     ):
         """Return k nearest neighbors for a natural-language text query."""
         query_text = request.query_text.strip()
@@ -1550,7 +1561,11 @@ def create_app(
             }
             if request.hybrid:
                 search_kwargs["hybrid"] = True
-            similar = ds.find_similar_by_text(query_text, **search_kwargs)
+            similar = ds.find_similar_by_text(
+                query_text,
+                _provider_registry=runtime_dep.provider_registry,
+                **search_kwargs,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
