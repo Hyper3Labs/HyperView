@@ -11,8 +11,7 @@ import type {
 } from "@/types";
 
 const API_BASE =
-  process.env.NEXT_PUBLIC_HYPERVIEW_API_BASE ??
-  (process.env.NODE_ENV === "development" ? "http://127.0.0.1:6262" : "");
+  process.env.NEXT_PUBLIC_HYPERVIEW_API_BASE ?? "";
 const MISSING_LABEL_SENTINEL = "undefined";
 const READ_ONLY_DEMO_NOTICE = "Read-only demo — pip install hyperview for the full workbench";
 const RUNTIME_CLIENT_ID = `hv-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`;
@@ -201,6 +200,19 @@ export interface ControlCommandResult {
   };
 }
 
+export interface ToolMetadata {
+  uri: string;
+  description: string | null;
+  extension: string | null;
+  signature: Record<string, unknown>;
+}
+
+interface ToolRunResponse<T = unknown> {
+  ok: boolean;
+  result?: T;
+  error?: string;
+}
+
 export async function runControlCommand(args: {
   command: string;
   target?: Record<string, unknown>;
@@ -230,6 +242,60 @@ export async function runControlCommand(args: {
     throw new ApiError(`Command ${args.command} failed: ${code}: ${message}`, 400, message);
   }
   return payload;
+}
+
+export async function listTools(): Promise<ToolMetadata[]> {
+  if (isStaticBundle()) {
+    throw new ApiError(
+      "Tools require the HyperView server and are unavailable in static exports.",
+      400,
+      null
+    );
+  }
+  const res = await apiRequest(apiUrl("/tools"), {
+    headers: {
+      Accept: "application/json",
+    },
+  });
+  if (!res.ok) {
+    await throwApiError(res, "Failed to list tools");
+  }
+  const payload = (await res.json()) as { tools: ToolMetadata[] };
+  return payload.tools;
+}
+
+export async function runTool<T = unknown>(
+  tool: string,
+  workspaceId: string,
+  params: Record<string, unknown> = {}
+): Promise<T> {
+  if (isStaticBundle()) {
+    throw new ApiError(
+      "Tools require the HyperView server and are unavailable in static exports.",
+      400,
+      null
+    );
+  }
+  const res = await apiRequest(apiUrl("/tools/run"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      tool,
+      workspace_id: workspaceId,
+      params,
+    }),
+  });
+  if (!res.ok) {
+    await throwApiError(res, `Failed to run tool ${tool}`);
+  }
+  const payload = (await res.json()) as ToolRunResponse<T>;
+  if (payload.ok === false) {
+    const message = payload.error ?? "Tool execution failed.";
+    throw new ApiError(`Tool ${tool} failed: ${message}`, 400, message);
+  }
+  return payload.result as T;
 }
 
 export function runtimeSnapshotFromCommandResult(

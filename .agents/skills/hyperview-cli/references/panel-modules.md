@@ -39,11 +39,12 @@ Minimal example:
 ```js
 const sdk = globalThis.HyperViewPanelSDK;
 const { React, hooks } = sdk;
-const { usePanelState, useSamples } = hooks;
+const { usePanelState, useSamples, useTool } = hooks;
 
 export default function MyPanel() {
   const { panelId, props } = usePanelState();
   const { samples, total } = useSamples(props.collection_id);
+  const { runTool } = useTool();
 
   return React.createElement(
     "main",
@@ -64,6 +65,8 @@ Current global SDK fields:
 - `hooks.useSelection()`
 - `hooks.useCollection(collectionId)`
 - `hooks.useSamples(collectionId)`
+- `hooks.useTool()`
+- `hooks.listTools()`
 - `hooks.useHostAdapter()`
 - `createClient(workspaceId)`
 
@@ -73,6 +76,8 @@ Important distinction:
 - `usePanelState()` reads concrete panel props/state and patches panel-owned state through `workspace.panel.state.patch`.
 - `useSelection()` exposes current selection and selection setters.
 - `useCollection(collectionId)` reads runtime collection metadata. `useSamples(collectionId)` materializes `all`/`filter`/`neighbors`/`search` collections through the paged `GET /api/collections/{id}/items` endpoint (call `loadMore()` while `hasMore`); other kinds fall back to the host-loaded sample page. `scores` carries per-sample distances for neighbors/search collections.
+- `useTool()` runs registered Python tools through the authenticated HyperView server request path, resolving the active workspace from host state. Tools require a live server and fail fast in static exports.
+- `hooks.listTools()` lists registered Python tool metadata for discovery.
 - `useHostAdapter()` exposes host-only focus/resize helpers. Use `workspace.panel.*` commands for durable panel layout changes.
 
 ### Hook return shapes
@@ -84,6 +89,8 @@ Current hook return shapes:
 - `useSelection()` → `{ selectedIds: string[], selectionSource, setSelection(ids): Promise<RuntimeSnapshot>, clearSelection(): Promise<RuntimeSnapshot> }`
 - `useCollection(collectionId)` → `RuntimeCollection | null`
 - `useSamples(collectionId, { pageSize? })` → `{ collection, samples, scores, total, loading, error, hasMore, loadMore }`
+- `useTool()` → `{ listTools(): Promise<ToolMetadata[]>, runTool(tool, params?): Promise<unknown> }`
+- `hooks.listTools()` → `Promise<ToolMetadata[]>`
 - `useHostAdapter()` → `{ focusPanel(panelId): boolean, resizePanel(panelId, options): Promise<RuntimeSnapshot> }`
 
 Sample reads default to `includeThumbnails: false` and return `thumbnail_url`
@@ -91,6 +98,25 @@ for image rendering. Request inline thumbnails only when the panel specifically
 needs base64 thumbnail payloads.
 
 To clear the current selection from a panel, use `await useSelection().clearSelection()`. To create nearest-neighbor or filtered Samples state, run `collection.neighbors.create`, `collection.filter.set`, or `panel.samples.retrieval.*` through `useCommandClient().runCommand(...)`.
+
+To run an extension Python tool from a panel:
+
+```js
+const sdk = globalThis.HyperViewPanelSDK;
+const { React, hooks } = sdk;
+const { useTool } = hooks;
+
+export default function LabelCountsPanel() {
+  const { runTool } = useTool();
+  const [result, setResult] = React.useState(null);
+
+  React.useEffect(() => {
+    void runTool("label_counts.compute", { top_k: 10 }).then(setResult);
+  }, [runTool]);
+
+  return React.createElement("pre", null, JSON.stringify(result, null, 2));
+}
+```
 
 ## Placement
 
@@ -126,6 +152,7 @@ hyperview ui panel add \
 - Use `useSamples(collectionId)` for host-loaded samples and collection-backed display.
 - Use `useSelection()` for selection reads and selection changes.
 - Use `useCommandClient()` for control-plane writes and command discovery.
+- Use `useTool()` for registered Python tools; feature-detect `hooks.useTool` when supporting older HyperView hosts.
 - Run `collection.neighbors.create` or `panel.samples.retrieval.set-anchor` for nearest-neighbor UI state; pass the layout key and let HyperView resolve the associated embedding space.
 - Use `usePanelState()` for durable panel-owned state. Patch with `expectedRevision` when concurrent edits would lose user work.
 - Do not use browser storage, ad hoc events, or timers to coordinate startup state or cross-panel readiness; write durable intent through runtime commands or `usePanelState()`.

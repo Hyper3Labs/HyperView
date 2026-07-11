@@ -40,6 +40,26 @@ def test_mutating_api_route_requires_session_token() -> None:
     }
 
 
+def test_tool_run_route_requires_session_token() -> None:
+    app = create_app(runtime=_runtime(), api_token="secret-token")
+    client = TestClient(app)
+    payload = {
+        "tool": "missing.tool",
+        "workspace_id": "default",
+        "params": {},
+    }
+
+    unauthenticated_response = client.post("/api/tools/run", json=payload)
+    authenticated_response = client.post(
+        "/api/tools/run",
+        json=payload,
+        headers={"Authorization": "Bearer secret-token"},
+    )
+
+    assert unauthenticated_response.status_code == 401
+    assert authenticated_response.status_code == 404
+
+
 def test_mutating_api_route_accepts_bearer_or_query_token() -> None:
     app = create_app(runtime=_runtime(), api_token="secret-token")
     client = TestClient(app)

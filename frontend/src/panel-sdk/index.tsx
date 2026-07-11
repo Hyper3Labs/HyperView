@@ -15,11 +15,14 @@ import {
   getRuntimeClientId,
   isAbortError,
   isStaticBundle,
+  listTools as listRuntimeTools,
   runControlCommand,
+  runTool as runRuntimeTool,
   runtimeSnapshotFromCommandResult,
   setLayoutView,
   type ControlCommandResult,
   type OrbitView3DRequest,
+  type ToolMetadata,
 } from "@/lib/api";
 import { RUNTIME_PANEL_PREFIX } from "@/lib/dockviewPanelPolicy";
 import { useColorSettings } from "@/store/useColorSettings";
@@ -57,6 +60,14 @@ export interface HyperViewCommandClient {
     layoutKey: string,
     camera3d: OrbitView3DRequest | null
   ) => Promise<RuntimeSnapshot>;
+}
+
+export interface HyperViewToolClient {
+  listTools: () => Promise<ToolMetadata[]>;
+  runTool: <T = unknown>(
+    tool: string,
+    params?: Record<string, unknown>
+  ) => Promise<T>;
 }
 
 export interface PanelResizeOptions {
@@ -244,6 +255,36 @@ export function useCommandClient(): HyperViewCommandClient {
       },
     };
   }, [applyRuntimeSnapshot, setActiveLayoutKey, setLayoutViewCamera, workspaceId]);
+}
+
+const STATIC_TOOLS_UNAVAILABLE =
+  "Tools require the HyperView server and are unavailable in static exports.";
+
+function assertToolsAvailable(): void {
+  if (isStaticBundle()) {
+    throw new Error(STATIC_TOOLS_UNAVAILABLE);
+  }
+}
+
+export function useTool(): HyperViewToolClient {
+  const workspaceId = useStore((state) => state.activeWorkspaceId);
+
+  return useMemo(
+    () => ({
+      listTools: async () => {
+        assertToolsAvailable();
+        return listRuntimeTools();
+      },
+      runTool: async <T = unknown,>(
+        tool: string,
+        params?: Record<string, unknown>
+      ): Promise<T> => {
+        assertToolsAvailable();
+        return runRuntimeTool<T>(tool, workspaceId ?? "default", params ?? {});
+      },
+    }),
+    [workspaceId]
+  );
 }
 
 export interface QueryResult<T> {
@@ -514,13 +555,25 @@ export function usePanelInteractions() {
   const hoveredId = useStore((state) => state.hoveredId);
   const setHoveredId = useStore((state) => state.setHoveredId);
   const labelFilter = useStore((state) => state.labelFilter);
-  const neighborsResults = useStore((state) => state.neighborsResults);
+  const panelStates = useStore((state) => state.panelStates);
+  const runtimeCollections = useStore((state) => state.runtimeCollections);
   const scatterLabelOverlayMode = useStore((state) => state.scatterLabelOverlayMode);
   const setScatterLabelOverlayMode = useStore((state) => state.setScatterLabelOverlayMode);
   const labelColorMapId = useColorSettings((state) => state.labelColorMapId);
+  const samplesPanelState = panelStates.samples?.state ?? {};
+  const collectionId =
+    typeof samplesPanelState.collection_id === "string"
+      ? samplesPanelState.collection_id
+      : null;
+  const collection = runtimeCollections.find((item) => item.id === collectionId) ?? null;
+  const highlightedCollectionId =
+    collection?.kind === "neighbors" || collection?.kind === "search"
+      ? collection.id
+      : null;
+  const highlightedSamples = useSamples(highlightedCollectionId, { pageSize: 100 });
   const highlightedIds = useMemo(
-    () => new Set(neighborsResults.map((sample) => sample.id)),
-    [neighborsResults]
+    () => new Set(highlightedSamples.samples.map((sample) => sample.id)),
+    [highlightedSamples.samples]
   );
 
   return useMemo(
@@ -762,6 +815,8 @@ export interface HyperViewPanelSdkGlobal {
     useCollection: typeof useCollection;
     useSamples: typeof useSamples;
     useDatasetInfo: typeof useDatasetInfo;
+    useTool: typeof useTool;
+    listTools: typeof listRuntimeTools;
     useHostAdapter: typeof useHostAdapter;
   };
   createClient: typeof createHyperViewPanelClient;
@@ -789,6 +844,8 @@ export function installHyperViewPanelSdkGlobal() {
       useCollection,
       useSamples,
       useDatasetInfo,
+      useTool,
+      listTools: listRuntimeTools,
       useHostAdapter,
     },
     createClient: createHyperViewPanelClient,
