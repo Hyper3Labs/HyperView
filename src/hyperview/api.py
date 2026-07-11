@@ -22,7 +22,11 @@ from hyperview.control import CommandEnvelope, ControlService, create_default_co
 from hyperview.core.dataset import Dataset
 from hyperview.runtime import HyperViewRuntime, ProviderRegistry
 from hyperview.server.app import create_app, set_runtime
-from hyperview.static_export import export_runtime_workspace, export_workspace
+from hyperview.static_export import (
+    DEFAULT_SIMILARITY_EXPORT_K,
+    export_runtime_workspace,
+    export_workspace,
+)
 
 __all__ = [
     "Dataset",
@@ -311,10 +315,16 @@ class Session:
         out: str | os.PathLike[str],
         *,
         workspace_id: str = "default",
+        similarity_k: int = DEFAULT_SIMILARITY_EXPORT_K,
     ) -> dict[str, Any]:
         """Export a read-only static bundle for a workspace in this session."""
 
-        return export_runtime_workspace(self.runtime, workspace_id, out).to_dict()
+        return export_runtime_workspace(
+            self.runtime,
+            workspace_id,
+            out,
+            similarity_k=similarity_k,
+        ).to_dict()
 
 
 class SessionControlController:

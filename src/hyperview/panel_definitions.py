@@ -34,6 +34,8 @@ class PanelDefinition:
     allow_multiple: bool = True
     icon: str | None = None
     category: str | None = None
+    static_compatible: bool = True
+    static_reason: str | None = None
 
     def __post_init__(self) -> None:
         if not self.panel_type.strip():
@@ -69,6 +71,8 @@ class PanelDefinition:
             "allow_multiple": self.allow_multiple,
             "icon": self.icon,
             "category": self.category,
+            "static_compatible": self.static_compatible,
+            "static_reason": self.static_reason,
         }
 
 

@@ -28,7 +28,7 @@ from hyperview.panel_definitions import (
     merge_default_props,
 )
 from hyperview.storage.config import StorageConfig
-from hyperview.storage.schema import parse_layout_dimension
+from hyperview.storage.schema import parse_layout_dimension, space_key_from_index_ref
 from hyperview.tools import RunContext, ToolRegistry
 
 
@@ -503,7 +503,8 @@ class SimilarityQueryState:
             anchor_sample_id=anchor_sample_id,
             query_text=query_text,
             layout_key=data.get("layout_key"),
-            space_key=data.get("space_key"),
+            space_key=data.get("space_key")
+            or space_key_from_index_ref(data.get("index_id")),
             k=max(1, min(k, 100)),
             source=data.get("source"),
         )

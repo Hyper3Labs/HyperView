@@ -45,6 +45,15 @@ position = "right"
 file = "panel.jsx"
 ```
 
+Browser-only panels are static-compatible by default. A panel that requires a
+live API or Python tool must declare that requirement so static exports can keep
+the panel in the view without publishing an unusable module:
+
+```toml
+static_compatible = false
+static_reason = "Requires the selection_profile.summarize Python tool."
+```
+
 Valid panel positions are `right`, `bottom`, and `center`.
 
 Treat `position` as a weak default for where the panel usually belongs. Cross-panel

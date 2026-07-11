@@ -223,11 +223,25 @@ Export a read-only, self-contained bundle for a workspace:
 hyperview export research --out dist/research-demo
 ```
 
+Limit precomputed sample similarity, or omit it when the demo does not expose
+nearest-neighbor browsing:
+
+```bash
+hyperview export research --out dist/research-demo --similarity-k 25
+hyperview export research --out dist/research-demo --similarity-k 0
+```
+
 The bundle contains the packaged static frontend, `api/runtime.json`,
 `api/dataset.json`, sample shards under `api/samples/`, media and thumbnails,
 layout coordinate JSON under `api/embeddings/`, materialized collection items
 under `api/collections/`, and extension panel modules under
-`api/panels/content/`.
+`api/panels/content/`. It also writes a versioned `hyperview-static.json`
+manifest and a static-assets-only `wrangler.jsonc` configuration. Deploy the
+bundle to Cloudflare from its output directory with:
+
+```bash
+npx wrangler deploy --config wrangler.jsonc
+```
 
 The generated `index.html` sets `window.__HYPERVIEW_STATIC__ = true`. In this
 mode the frontend reads JSON files from the bundle, keeps selection and panel
@@ -238,7 +252,7 @@ Python launch/session code can export the same bundle:
 
 ```python
 session = hv.launch(dataset, block=False)
-session.export("dist/research-demo", workspace_id="research")
+session.export("dist/research-demo", workspace_id="research", similarity_k=25)
 ```
 
 For persisted workspaces, use the top-level API:

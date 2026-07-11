@@ -34,11 +34,33 @@ export interface LayoutInfo {
   params: Record<string, unknown> | null;
 }
 
+export interface RepresentationInfo {
+  id: string;
+  entity_set_id: string;
+  field_path: string;
+  kind: string;
+  shape: number[];
+  model_id: string;
+  provider: string;
+  modality: string;
+  geometry: Geometry | string;
+  count: number;
+}
+
+export interface IndexInfo {
+  id: string;
+  representation_id: string;
+  query_modes: string[];
+  scorer: string;
+}
+
 export interface DatasetInfo {
   name: string;
   num_samples: number;
   labels: string[];
   spaces: SpaceInfo[];
+  representations?: RepresentationInfo[];
+  indexes?: IndexInfo[];
   layouts: LayoutInfo[];
 }
 
@@ -107,6 +129,8 @@ export interface RuntimePanelStateEntry {
 
 export interface RuntimePanelData {
   module_src: string | null;
+  static_compatible?: boolean;
+  static_reason?: string | null;
 }
 
 export interface RuntimePanelDefinition {
@@ -126,6 +150,8 @@ export interface RuntimePanelDefinition {
   allow_multiple: boolean;
   icon: string | null;
   category: string | null;
+  static_compatible: boolean;
+  static_reason: string | null;
 }
 
 export type RuntimePanelKind = "module" | "scatter" | "builtin";

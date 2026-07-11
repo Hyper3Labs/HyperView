@@ -323,19 +323,7 @@ export async function fetchSamples(
   includeThumbnails: boolean = false
 ): Promise<SamplesResponse> {
   if (isStaticBundle()) {
-    const allSamples = await loadStaticSamples(signal);
-    const apiLabel = toApiLabel(label);
-    const filtered = allSamples.filter((sample) => {
-      if (isMissingLabelFilter(label)) return sample.label === null || sample.label === undefined;
-      if (apiLabel !== null) return sample.label === apiLabel;
-      return true;
-    });
-    return {
-      total: filtered.length,
-      offset,
-      limit,
-      samples: filtered.slice(offset, offset + limit),
-    };
+    return fetchStaticSamplesPage(offset, limit, label, signal);
   }
   const apiLabel = toApiLabel(label);
   const params = new URLSearchParams({
@@ -384,9 +372,7 @@ export async function fetchSamplesBatch(
 ): Promise<Sample[]> {
   if (sampleIds.length === 0) return [];
   if (isStaticBundle()) {
-    const allSamples = await loadStaticSamples();
-    const byId = new Map(allSamples.map((sample) => [sample.id, sample]));
-    return sampleIds.map((id) => byId.get(id)).filter((sample): sample is Sample => Boolean(sample));
+    return fetchStaticSamplesByIds(sampleIds);
   }
 
   const samples: Sample[] = [];
@@ -416,6 +402,92 @@ export async function fetchSamplesBatch(
   return samples;
 }
 
+export interface CollectionItem {
+  sample: Sample;
+  score: number | null;
+}
+
+export interface CollectionItemsPage {
+  collectionId: string;
+  offset: number;
+  limit: number;
+  total: number;
+  hasMore: boolean;
+  items: CollectionItem[];
+}
+
+interface StaticCollectionItemsFile {
+  collection_id: string;
+  total: number;
+  items: Array<{
+    sample_id: string;
+    rank: number;
+    score: number | null;
+    sample: Sample;
+  }>;
+}
+
+export async function fetchCollectionItems(
+  collectionId: string,
+  args: {
+    workspaceId?: string | null;
+    offset?: number;
+    limit?: number;
+    includeThumbnails?: boolean;
+    signal?: AbortSignal;
+  } = {}
+): Promise<CollectionItemsPage> {
+  const offset = args.offset ?? 0;
+  const limit = args.limit ?? 100;
+
+  if (isStaticBundle()) {
+    const payload = await fetchStaticJson<StaticCollectionItemsFile>(
+      `api/collections/${encodeURIComponent(collectionId)}/items.json`,
+      args.signal
+    );
+    const rows = payload.items.slice(offset, offset + limit);
+    return {
+      collectionId: payload.collection_id,
+      offset,
+      limit,
+      total: payload.total,
+      hasMore: offset + limit < payload.total,
+      items: rows.map((row) => ({ sample: row.sample, score: row.score ?? null })),
+    };
+  }
+
+  const params = new URLSearchParams({
+    offset: offset.toString(),
+    limit: limit.toString(),
+    include_thumbnails: String(args.includeThumbnails ?? false),
+  });
+  if (args.workspaceId) {
+    params.set("workspace_id", args.workspaceId);
+  }
+  const res = await fetch(
+    `${apiUrl(`/collections/${encodeURIComponent(collectionId)}/items`)}?${params}`,
+    args.signal ? { signal: args.signal } : undefined
+  );
+  if (!res.ok) {
+    await throwApiError(res, "Failed to fetch collection items");
+  }
+  const data = await res.json();
+  return {
+    collectionId: data.collection_id,
+    offset: data.offset,
+    limit: data.limit,
+    total: data.total,
+    hasMore: Boolean(data.has_more),
+    items: (data.items as Array<Record<string, unknown>>).map((item) => {
+      const { score, ...sample } = item;
+      return {
+        sample: sample as unknown as Sample,
+        score: typeof score === "number" ? score : null,
+      };
+    }),
+  };
+}
+
 export async function fetchSimilarSamples(
   sampleId: string,
   args: {
@@ -427,20 +499,7 @@ export async function fetchSimilarSamples(
   } = {}
 ): Promise<SimilaritySearchResponse> {
   if (isStaticBundle()) {
-    const dataset = await fetchDataset(args.signal);
-    let spaceKey = args.spaceKey ?? null;
-    if (args.layoutKey) {
-      const layout = dataset.layouts.find((item) => item.layout_key === args.layoutKey);
-      if (layout) spaceKey = layout.space_key;
-    }
-    const file = `api/search/similar/${encodeURIComponent(sampleId)}/${encodeURIComponent(spaceKey ?? "default")}.json`;
-    const payload = await fetchStaticJson<SimilaritySearchResponse>(file, args.signal);
-    const k = args.k ?? 10;
-    return {
-      ...payload,
-      k,
-      results: payload.results.slice(0, k),
-    };
+    return fetchStaticSimilarSamples(sampleId, args);
   }
   const params = new URLSearchParams({
     k: String(args.k ?? 10),
@@ -583,24 +642,233 @@ export async function fetchLassoSelection(args: {
 }
 
 let staticRuntimeSnapshot: RuntimeSnapshot | null = null;
-let staticSamplesCache: Sample[] | null = null;
 
-interface StaticSamplesIndex {
-  total: number;
-  shard_size: number;
-  shards: string[];
+interface StaticSampleLabelCount {
+  value: string | null;
+  count: number;
 }
 
-async function loadStaticSamples(signal?: AbortSignal): Promise<Sample[]> {
-  if (staticSamplesCache) return staticSamplesCache;
-  const index = await fetchStaticJson<StaticSamplesIndex>("api/samples/index.json", signal);
-  const shards = await Promise.all(
-    index.shards.map((shard) =>
-      fetchStaticJson<SamplesResponse>(`api/samples/${shard}`, signal)
-    )
+interface StaticSampleShard {
+  path: string;
+  offset: number;
+  count: number;
+  sample_ids?: string[];
+  label_counts?: StaticSampleLabelCount[];
+}
+
+interface StaticSamplesIndex {
+  schema_version?: number;
+  total: number;
+  shard_size: number;
+  shards: Array<string | StaticSampleShard>;
+}
+
+interface StaticSimilarityShardRef {
+  path: string;
+  sample_ids: string[];
+}
+
+interface StaticSimilaritySpace {
+  metric: string;
+  shards: StaticSimilarityShardRef[];
+}
+
+interface StaticSimilarityIndex {
+  schema_version: number;
+  k: number;
+  default_space_key: string;
+  spaces: Record<string, StaticSimilaritySpace>;
+}
+
+interface StaticSimilarityShard {
+  space_key: string;
+  metric: string;
+  k: number;
+  queries: Record<
+    string,
+    {
+      results: Array<{ sample_id: string; distance: number }>;
+    }
+  >;
+}
+
+let staticSamplesIndexPromise: Promise<StaticSamplesIndex> | null = null;
+const staticSampleShardPromises = new Map<string, Promise<SamplesResponse>>();
+let staticSimilarityIndexPromise: Promise<StaticSimilarityIndex> | null = null;
+const staticSimilarityShardPromises = new Map<string, Promise<StaticSimilarityShard>>();
+
+function getStaticSamplesIndex(): Promise<StaticSamplesIndex> {
+  staticSamplesIndexPromise ??= fetchStaticJson<StaticSamplesIndex>("api/samples/index.json");
+  return staticSamplesIndexPromise;
+}
+
+function normalizedStaticSampleShards(index: StaticSamplesIndex): StaticSampleShard[] {
+  return index.shards.map((entry, shardIndex) => {
+    if (typeof entry !== "string") return entry;
+    const offset = shardIndex * index.shard_size;
+    return {
+      path: entry,
+      offset,
+      count: Math.min(index.shard_size, Math.max(0, index.total - offset)),
+    };
+  });
+}
+
+function getStaticSampleShard(path: string): Promise<SamplesResponse> {
+  let pending = staticSampleShardPromises.get(path);
+  if (!pending) {
+    pending = fetchStaticJson<SamplesResponse>(`api/samples/${path}`);
+    staticSampleShardPromises.set(path, pending);
+  }
+  return pending;
+}
+
+function sampleMatchesLabel(sample: Sample, label?: string): boolean {
+  if (isMissingLabelFilter(label)) return sample.label === null || sample.label === undefined;
+  const apiLabel = toApiLabel(label);
+  return apiLabel === null || sample.label === apiLabel;
+}
+
+function staticShardMatchCount(shard: StaticSampleShard, label?: string): number | null {
+  if (!label) return shard.count;
+  if (!shard.label_counts) return null;
+  if (isMissingLabelFilter(label)) {
+    return shard.label_counts.find((entry) => entry.value === null)?.count ?? 0;
+  }
+  const apiLabel = toApiLabel(label);
+  if (apiLabel === null) return shard.count;
+  return shard.label_counts.find((entry) => entry.value === apiLabel)?.count ?? 0;
+}
+
+async function fetchStaticSamplesPage(
+  offset: number,
+  limit: number,
+  label?: string,
+  signal?: AbortSignal
+): Promise<SamplesResponse> {
+  signal?.throwIfAborted();
+  const index = await getStaticSamplesIndex();
+  const shards = normalizedStaticSampleShards(index);
+  const counts = shards.map((shard) => staticShardMatchCount(shard, label));
+
+  if (counts.some((count) => count === null)) {
+    const loaded = await Promise.all(shards.map((shard) => getStaticSampleShard(shard.path)));
+    const filtered = loaded
+      .flatMap((shard) => shard.samples)
+      .filter((sample) => sampleMatchesLabel(sample, label));
+    return { total: filtered.length, offset, limit, samples: filtered.slice(offset, offset + limit) };
+  }
+
+  const total = counts.reduce<number>((sum, count) => sum + (count ?? 0), 0);
+  let remainingOffset = Math.max(0, offset);
+  const samples: Sample[] = [];
+  for (let shardIndex = 0; shardIndex < shards.length && samples.length < limit; shardIndex += 1) {
+    signal?.throwIfAborted();
+    const matchCount = counts[shardIndex] ?? 0;
+    if (remainingOffset >= matchCount) {
+      remainingOffset -= matchCount;
+      continue;
+    }
+    const payload = await getStaticSampleShard(shards[shardIndex].path);
+    const matching = payload.samples.filter((sample) => sampleMatchesLabel(sample, label));
+    const available = matching.slice(remainingOffset, remainingOffset + limit - samples.length);
+    samples.push(...available);
+    remainingOffset = 0;
+  }
+  return { total, offset, limit, samples };
+}
+
+async function fetchStaticSamplesByIds(sampleIds: string[]): Promise<Sample[]> {
+  const index = await getStaticSamplesIndex();
+  const shards = normalizedStaticSampleShards(index);
+  const pathById = new Map<string, string>();
+  for (const shard of shards) {
+    for (const sampleId of shard.sample_ids ?? []) pathById.set(sampleId, shard.path);
+  }
+
+  const paths = new Set(
+    sampleIds.map((sampleId) => pathById.get(sampleId)).filter(Boolean)
   );
-  staticSamplesCache = shards.flatMap((shard) => shard.samples);
-  return staticSamplesCache;
+  const selectedShards = paths.size > 0 ? shards.filter((shard) => paths.has(shard.path)) : shards;
+  const loaded = await Promise.all(selectedShards.map((shard) => getStaticSampleShard(shard.path)));
+  const byId = new Map(loaded.flatMap((shard) => shard.samples).map((sample) => [sample.id, sample]));
+  return sampleIds.map((sampleId) => byId.get(sampleId)).filter((sample): sample is Sample => Boolean(sample));
+}
+
+function getStaticSimilarityIndex(): Promise<StaticSimilarityIndex> {
+  staticSimilarityIndexPromise ??= fetchStaticJson<StaticSimilarityIndex>(
+    "api/search/similar/index.json"
+  );
+  return staticSimilarityIndexPromise;
+}
+
+function getStaticSimilarityShard(path: string): Promise<StaticSimilarityShard> {
+  let pending = staticSimilarityShardPromises.get(path);
+  if (!pending) {
+    pending = fetchStaticJson<StaticSimilarityShard>(`api/search/similar/${path}`);
+    staticSimilarityShardPromises.set(path, pending);
+  }
+  return pending;
+}
+
+async function fetchStaticSimilarSamples(
+  sampleId: string,
+  args: {
+    k?: number;
+    spaceKey?: string;
+    layoutKey?: string;
+    includeThumbnails?: boolean;
+    signal?: AbortSignal;
+  }
+): Promise<SimilaritySearchResponse> {
+  const datasetPromise = fetchDataset(args.signal);
+  let index: StaticSimilarityIndex;
+  try {
+    index = await getStaticSimilarityIndex();
+  } catch (error) {
+    if (!(error instanceof ApiError) || error.status !== 404) throw error;
+    const [querySample] = await fetchStaticSamplesByIds([sampleId]);
+    return {
+      query_id: sampleId,
+      query_sample: querySample ?? null,
+      space_key: args.spaceKey ?? null,
+      metric: "unknown",
+      k: args.k ?? 10,
+      results: [],
+    };
+  }
+  const dataset = await datasetPromise;
+  let spaceKey = args.spaceKey ?? index.default_space_key;
+  if (args.layoutKey) {
+    const layout = dataset.layouts.find((item) => item.layout_key === args.layoutKey);
+    if (layout && index.spaces[layout.space_key]) spaceKey = layout.space_key;
+  }
+  const space = index.spaces[spaceKey];
+  if (!space) throw new ApiError(`Similarity space is not exported: ${spaceKey}`, 404, null);
+  const shardRef = space.shards.find((shard) => shard.sample_ids.includes(sampleId));
+  if (!shardRef) throw new ApiError(`Sample is not indexed for similarity: ${sampleId}`, 404, null);
+
+  const shard = await getStaticSimilarityShard(shardRef.path);
+  const query = shard.queries[sampleId];
+  if (!query) throw new ApiError(`Sample is not indexed for similarity: ${sampleId}`, 404, null);
+  const k = Math.max(1, Math.min(args.k ?? 10, index.k));
+  const resultRows = query.results.slice(0, k);
+  const hydrated = await fetchStaticSamplesByIds([
+    sampleId,
+    ...resultRows.map((row) => row.sample_id),
+  ]);
+  const byId = new Map(hydrated.map((sample) => [sample.id, sample]));
+  return {
+    query_id: sampleId,
+    query_sample: byId.get(sampleId) ?? null,
+    space_key: spaceKey,
+    metric: space.metric,
+    k,
+    results: resultRows.flatMap((row) => {
+      const sample = byId.get(row.sample_id);
+      return sample ? [{ ...sample, distance: row.distance }] : [];
+    }),
+  };
 }
 
 function mergePatch(
@@ -632,12 +900,89 @@ async function getStaticSnapshot(): Promise<RuntimeSnapshot> {
   return fetchRuntimeState();
 }
 
+function updateStaticSamplesPanelState(
+  snapshot: RuntimeSnapshot,
+  state: Record<string, unknown>,
+  collections: RuntimeCollection[]
+): RuntimeSnapshot {
+  const current = snapshot.workspace.ui.panels?.samples ?? { state: {}, state_revision: 0 };
+  return {
+    ...snapshot,
+    version: snapshot.version + 1,
+    workspace: {
+      ...snapshot.workspace,
+      collections,
+      ui: {
+        ...snapshot.workspace.ui,
+        selected_ids: [],
+        panels: {
+          ...snapshot.workspace.ui.panels,
+          samples: {
+            state,
+            state_revision: current.state_revision + 1,
+          },
+        },
+      },
+    },
+  };
+}
+
+function runStaticLabelFilterCommand(
+  snapshot: RuntimeSnapshot,
+  args: Record<string, unknown>
+): ControlCommandResult {
+  const retainedCollections = snapshot.workspace.collections.filter(
+    (collection) => collection.kind !== "filter"
+  );
+  const clear = args.clear === true;
+  let collection: RuntimeCollection | null = null;
+  let state: Record<string, unknown> = {};
+  if (!clear) {
+    const field = typeof args.field === "string" ? args.field : "label";
+    const value = typeof args.value === "string" ? args.value : null;
+    const source = typeof args.source === "string" ? args.source : "static-demo";
+    const collectionId =
+      `static-filter-${encodeURIComponent(field)}-` +
+      encodeURIComponent(value ?? "missing");
+    collection = {
+      id: collectionId,
+      dataset_id: snapshot.workspace.dataset_name ?? "",
+      entity_set_id: "samples",
+      kind: "filter",
+      query: { field, op: "eq", value, source },
+      scores: null,
+      created_at: Math.floor(Date.now() / 1000),
+    };
+    state = {
+      mode: "collection",
+      collection_id: collectionId,
+      collection,
+    };
+    retainedCollections.push(collection);
+  }
+  staticRuntimeSnapshot = updateStaticSamplesPanelState(snapshot, state, retainedCollections);
+  return {
+    ok: true,
+    command: "collection.filter.set",
+    result: {
+      collection_id: collection?.id ?? null,
+      collection,
+    },
+    snapshot: staticRuntimeSnapshot,
+    workspace: staticRuntimeSnapshot.workspace,
+    revision: staticRuntimeSnapshot.workspace.ui.panels.samples.state_revision,
+  };
+}
+
 async function runStaticControlCommand(args: {
   command: string;
   target?: Record<string, unknown>;
   args?: Record<string, unknown>;
 }): Promise<ControlCommandResult> {
   const snapshot = await getStaticSnapshot();
+  if (args.command === "collection.filter.set") {
+    return runStaticLabelFilterCommand(snapshot, args.args ?? {});
+  }
   if (args.command === "workspace.panel.state.patch") {
     const panelId = typeof args.target?.panel_id === "string" ? args.target.panel_id : null;
     const patch = args.args?.state;

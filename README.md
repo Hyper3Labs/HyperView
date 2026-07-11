@@ -61,6 +61,14 @@ hyperview extension add .hyperview/extensions/selection-profile --workspace imag
 hyperview tools run selection_profile.summarize --workspace imagenette-demo
 ```
 
+Export a prepared workspace as a read-only static demo that can be served by
+Cloudflare Workers Static Assets without Python or a container:
+
+```bash
+hyperview export imagenette-demo --out dist/imagenette-demo
+cd dist/imagenette-demo && npx wrangler deploy --config wrangler.jsonc
+```
+
 ## What It Does
 
 - Ingests image data from Hugging Face datasets or local folders.
@@ -73,6 +81,7 @@ hyperview tools run selection_profile.summarize --workspace imagenette-demo
 ## Docs
 
 - [Datasets](docs/datasets.md)
+- [Static Spaces](docs/static-spaces.md)
 - [Google Colab](docs/colab.md)
 - [Contributing](CONTRIBUTING.md)
 - [Tests](TESTS.md)

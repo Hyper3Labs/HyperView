@@ -4,7 +4,7 @@ import React, { useEffect, useMemo, useState, type ComponentType } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { AlertTriangle, Puzzle } from "lucide-react";
 
-import { backendUrl } from "@/lib/api";
+import { backendUrl, isStaticBundle } from "@/lib/api";
 import { getBuiltInCenterPanelDefinitionForPanelType } from "@/panels/registry";
 import { installHyperViewPanelSdkGlobal } from "@/panel-sdk";
 import { useStore } from "@/store/useStore";
@@ -190,6 +190,17 @@ function ModulePanelHost({ panel }: { panel: RuntimePanel }) {
   return <LoadedPanel panel={panel} panelId={panel.id} props={panelProps} />;
 }
 
+function StaticPanelUnavailable({ panel }: { panel: RuntimePanel }) {
+  return (
+    <PanelMessage
+      title={panel.title}
+      icon={<AlertTriangle className="h-3.5 w-3.5" />}
+    >
+      {panel.data.static_reason ?? "This panel requires the full HyperView server."}
+    </PanelMessage>
+  );
+}
+
 export function PanelHost(props: IDockviewPanelProps<PanelHostParams>) {
   const panelId = props.params?.panelId ?? "";
   const panel = useStore((state) =>
@@ -198,6 +209,10 @@ export function PanelHost(props: IDockviewPanelProps<PanelHostParams>) {
 
   if (!panel) {
     return <PanelUnavailable />;
+  }
+
+  if (isStaticBundle() && panel.data.static_compatible === false) {
+    return <StaticPanelUnavailable panel={panel} />;
   }
 
   return (

@@ -132,6 +132,50 @@ class SpaceInfo:
     def geometry(self) -> str:
         return (self.config or {}).get("geometry", "euclidean")
 
+    @property
+    def modality(self) -> str:
+        return (self.config or {}).get("modality", "image")
+
+    @property
+    def index_id(self) -> str:
+        return index_id_for_space_key(self.space_key)
+
+    def to_representation_dict(self) -> dict[str, Any]:
+        """Representation view of this space (architecture.md vocabulary).
+
+        The representation is the derived vector field itself, independent of
+        how it is searched; `space_key` doubles as the representation id until
+        storage keys the two separately.
+        """
+        return {
+            "id": self.space_key,
+            "entity_set_id": "samples",
+            "field_path": f"embeddings.{self.space_key}",
+            "kind": "vector",
+            "shape": [self.dim],
+            "model_id": self.model_id,
+            "provider": self.provider,
+            "modality": self.modality,
+            "geometry": self.geometry,
+            "count": self.count,
+        }
+
+    def to_index_dict(self) -> dict[str, Any]:
+        """Index view of this space: the searchable access path over the
+        representation, addressable as `space:<space_key>` in retrieval
+        queries and collection payloads."""
+        from hyperview.storage.metrics import distance_metric_for_space
+
+        query_modes = ["nearest"]
+        if self.modality in ("text", "multimodal"):
+            query_modes.append("text")
+        return {
+            "id": self.index_id,
+            "representation_id": self.space_key,
+            "query_modes": query_modes,
+            "scorer": distance_metric_for_space(self),
+        }
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "space_key": self.space_key,
@@ -237,6 +281,28 @@ class LayoutInfo:
             created_at=row["created_at"],
             params=params,
         )
+
+
+INDEX_ID_PREFIX = "space:"
+
+
+def index_id_for_space_key(space_key: str) -> str:
+    return f"{INDEX_ID_PREFIX}{space_key}"
+
+
+def space_key_from_index_ref(value: Any) -> str | None:
+    """Resolve an index reference to a space_key.
+
+    Accepts the canonical `space:<space_key>` index id as well as a bare
+    space_key, so retrieval can be addressed by index id while storage still
+    keys spaces by space_key.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    ref = value.strip()
+    if ref.startswith(INDEX_ID_PREFIX):
+        ref = ref[len(INDEX_ID_PREFIX) :]
+    return ref or None
 
 
 def slugify_model_id(model_id: str) -> str:

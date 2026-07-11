@@ -73,7 +73,7 @@ Important distinction:
 - `useCommandClient()` discovers and runs backend-owned control commands. Command results include snapshots; apply them instead of refetching runtime state.
 - `usePanelState()` reads concrete panel props/state and patches panel-owned state through `workspace.panel.state.patch`.
 - `useSelection()` exposes current selection and selection setters.
-- `useCollection(collectionId)` and `useSamples(collectionId)` read runtime collection metadata and host-loaded samples.
+- `useCollection(collectionId)` reads runtime collection metadata. `useSamples(collectionId)` materializes `all`/`filter`/`neighbors`/`search` collections through the paged `GET /api/collections/{id}/items` endpoint (call `loadMore()` while `hasMore`); other kinds fall back to the host-loaded sample page. `scores` carries per-sample distances for neighbors/search collections.
 - `useHostAdapter()` exposes host-only focus/resize helpers. Use `workspace.panel.*` commands for durable panel layout changes.
 
 ### Hook return shapes
@@ -84,7 +84,7 @@ Current hook return shapes:
 - `usePanelState()` → `{ panel, panelId, props, state, stateRevision, patchState(statePatch, { replaceState?, expectedRevision? }): Promise<RuntimeSnapshot> }`
 - `useSelection()` → `{ selectedIds: string[], selectionSource, setSelection(ids): Promise<RuntimeSnapshot>, clearSelection(): Promise<RuntimeSnapshot> }`
 - `useCollection(collectionId)` → `RuntimeCollection | null`
-- `useSamples(collectionId)` → `{ collection, samples, total, loading, error }`
+- `useSamples(collectionId, { pageSize? })` → `{ collection, samples, scores, total, loading, error, hasMore, loadMore }`
 - `useHostAdapter()` → `{ focusPanel(panelId): boolean, resizePanel(panelId, options): Promise<RuntimeSnapshot> }`
 
 Sample reads default to `includeThumbnails: false` and return `thumbnail_url`

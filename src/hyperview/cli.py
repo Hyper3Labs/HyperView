@@ -16,7 +16,7 @@ from hyperview.api import Session
 from hyperview.core.selection import OrbitViewState3D
 from hyperview.figures import FigureRenderOptions, render_layout_figure
 from hyperview.runtime import HyperViewRuntime, ProviderRegistry, WorkspaceRegistry
-from hyperview.static_export import export_workspace
+from hyperview.static_export import DEFAULT_SIMILARITY_EXPORT_K, export_workspace
 from hyperview.storage.schema import parse_layout_dimension
 
 
@@ -257,6 +257,12 @@ def _build_control_parser() -> argparse.ArgumentParser:
     export_parser = subparsers.add_parser("export")
     export_parser.add_argument("workspace_id")
     export_parser.add_argument("--out", required=True)
+    export_parser.add_argument(
+        "--similarity-k",
+        type=int,
+        default=DEFAULT_SIMILARITY_EXPORT_K,
+        help="Precompute this many neighbors per sample and space; use 0 to omit similarity.",
+    )
     _add_json_flag(export_parser)
 
     dataset_parser = subparsers.add_parser("dataset")
@@ -700,14 +706,15 @@ def _run_status_command(args: argparse.Namespace) -> None:
 
 
 def _run_export_command(args: argparse.Namespace) -> None:
-    result = export_workspace(args.workspace_id, args.out)
+    result = export_workspace(args.workspace_id, args.out, similarity_k=args.similarity_k)
     payload = {"export": result.to_dict()}
     if args.json:
         _print_output(payload, as_json=True)
         return
     print(
         f"Wrote static HyperView bundle to {result.output_dir} "
-        f"({result.num_samples} samples, {result.num_layouts} layouts)"
+        f"({result.num_samples} samples, {result.num_layouts} layouts, "
+        f"{result.num_files} files, {result.bundle_bytes} bytes)"
     )
 
 

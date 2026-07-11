@@ -247,7 +247,7 @@ function useRankedSamplesPanel(rank: SamplesPanelRankParams | undefined, enabled
     const geometry = space.geometry ? ` · ${space.geometry}` : "";
     const layoutMethod = layout?.method ? ` · ${layout.method}` : "";
     return `${space.model_id}${geometry}${layoutMethod}`;
-  }, [datasetInfo, layoutKey, rank?.source, spaceKey]);
+  }, [datasetInfo, layoutKey, queryText, rank?.source, spaceKey]);
 
   return {
     anchorSampleId,

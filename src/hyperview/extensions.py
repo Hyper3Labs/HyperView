@@ -74,6 +74,8 @@ class PanelSpecEntry:
     allow_multiple: bool = True
     icon: str | None = None
     category: str | None = None
+    static_compatible: bool = True
+    static_reason: str | None = None
 
     def resolved_panel_type(self, extension_name: str) -> str:
         panel_type = (self.panel_type or "").strip()
@@ -97,6 +99,8 @@ class PanelSpecEntry:
             allow_multiple=self.allow_multiple,
             icon=self.icon,
             category=self.category,
+            static_compatible=self.static_compatible,
+            static_reason=self.static_reason,
         )
 
 
@@ -163,6 +167,8 @@ class ExtensionManifest:
                     allow_multiple=bool(entry.get("allow_multiple", True)),
                     icon=_optional_str(entry.get("icon")),
                     category=_optional_str(entry.get("category")),
+                    static_compatible=bool(entry.get("static_compatible", True)),
+                    static_reason=_optional_str(entry.get("static_reason")),
                 )
             )
 
