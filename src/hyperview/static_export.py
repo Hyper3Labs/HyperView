@@ -97,6 +97,7 @@ def _dataset_payload(dataset: Dataset) -> dict[str, Any]:
         "name": dataset.name,
         "num_samples": len(dataset),
         "labels": dataset.labels,
+        "fields": dataset.fields,
         "spaces": [space.to_api_dict() for space in spaces],
         "representations": [space.to_representation_dict() for space in spaces],
         "indexes": [space.to_index_dict() for space in spaces],
@@ -142,6 +143,8 @@ def _sample_path_segment(sample_id: str) -> str:
 
 def _write_sample_media(out_dir: Path, sample: Any) -> int:
     media_count = 0
+    if not sample.filepath or not sample.is_image:
+        return media_count
     source = Path(sample.filepath).expanduser()
     if source.exists() and source.is_file():
         sample_dir = out_dir / "api" / "samples" / _sample_path_segment(sample.id)
@@ -151,6 +154,8 @@ def _write_sample_media(out_dir: Path, sample: Any) -> int:
 
         try:
             thumb = sample.get_thumbnail((DEFAULT_THUMBNAIL_SIZE, DEFAULT_THUMBNAIL_SIZE))
+            if thumb is None:
+                return media_count
             if thumb.mode in ("RGBA", "P"):
                 thumb = thumb.convert("RGB")
             buffer = io.BytesIO()

@@ -195,11 +195,13 @@ class SampleResponse(BaseModel):
     """Response model for a sample."""
 
     id: str
-    filepath: str
-    filename: str
+    filepath: str | None
+    filename: str | None
     label: str | None
     text: str | None = None
     modality: str = "image"
+    media_type: str | None = None
+    duration_s: float | None = None
     thumbnail: str | None
     media_url: str | None = None
     thumbnail_url: str | None = None
@@ -263,6 +265,7 @@ class DatasetResponse(BaseModel):
     name: str
     num_samples: int
     labels: list[str]
+    fields: dict[str, dict[str, Any]]
     spaces: list[SpaceInfoResponse]
     representations: list[RepresentationInfoResponse] = []
     indexes: list[IndexInfoResponse] = []
@@ -324,12 +327,16 @@ def serialize_sample_for_response(
         ensure_dimensions=ensure_dimensions,
     )
     payload["thumbnail"] = thumbnail
-    payload["media_url"] = f"/api/samples/{sample.id}/content"
-    payload["thumbnail_url"] = f"/api/samples/{sample.id}/thumbnail"
+    payload["media_url"] = f"/api/samples/{sample.id}/content" if sample.filepath else None
+    payload["thumbnail_url"] = (
+        f"/api/samples/{sample.id}/thumbnail" if sample.is_image else None
+    )
     return payload
 
 
 def _resolve_sample_media_path(sample: Any) -> Path:
+    if not sample.filepath:
+        raise HTTPException(status_code=404, detail="Sample has no source media")
     file_path = Path(sample.filepath).expanduser().resolve()
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail=f"Sample media not found: {sample.filepath}")
@@ -929,6 +936,7 @@ def create_app(
             name=ds.name,
             num_samples=len(ds),
             labels=ds.labels,
+            fields=ds.fields,
             spaces=space_dicts,
             representations=[s.to_representation_dict() for s in spaces],
             indexes=[s.to_index_dict() for s in spaces],
@@ -1005,9 +1013,13 @@ def create_app(
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=f"Sample not found: {sample_id}") from exc
 
+        if not sample.is_image:
+            raise HTTPException(status_code=404, detail="Sample has no image thumbnail")
         file_path = _resolve_sample_media_path(sample)
         try:
             thumb = sample.get_thumbnail((size, size))
+            if thumb is None:
+                raise ValueError("sample has no image thumbnail")
             if thumb.mode in ("RGBA", "P"):
                 thumb = thumb.convert("RGB")
             buffer = io.BytesIO()

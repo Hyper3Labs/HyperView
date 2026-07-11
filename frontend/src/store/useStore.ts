@@ -129,6 +129,9 @@ interface AppState {
   panelDefinitions: RuntimePanelDefinition[];
   runtimeCollections: RuntimeCollection[];
   panelStates: Record<string, RuntimePanelStateEntry>;
+  workspaceLayout: Record<string, unknown> | null;
+  workspaceLayoutRevision: number;
+  setWorkspaceLayoutLocal: (layout: Record<string, unknown> | null) => void;
   hasExplicitView: boolean;
   activePanelId: string | null;
   viewRevision: number;
@@ -224,6 +227,9 @@ export const useStore = create<AppState>((set) => ({
   panelDefinitions: [],
   runtimeCollections: [],
   panelStates: {},
+  workspaceLayout: null,
+  workspaceLayoutRevision: 0,
+  setWorkspaceLayoutLocal: (workspaceLayout) => set({ workspaceLayout }),
   hasExplicitView: false,
   activePanelId: null,
   viewRevision: 0,
@@ -263,6 +269,8 @@ export const useStore = create<AppState>((set) => ({
         panelDefinitions: snapshot.panel_definitions ?? [],
         runtimeCollections: snapshot.workspace.collections ?? [],
         panelStates: snapshot.workspace.ui.panels ?? {},
+        workspaceLayout: snapshot.workspace.ui.layout ?? null,
+        workspaceLayoutRevision: snapshot.workspace.ui.layout_revision ?? 0,
         hasExplicitView: snapshot.workspace.ui.has_explicit_view,
         activePanelId: snapshot.workspace.ui.active_panel_id,
         viewRevision: snapshot.workspace.ui.view_revision ?? 0,

@@ -12,56 +12,78 @@ from pydantic import BaseModel, Field
 class Sample(BaseModel):
     """A single sample in a HyperView dataset.
 
-    Samples are pure metadata containers. Embeddings and layouts are stored
-    separately in dedicated tables (per embedding space / per layout).
+    Samples are pure metadata containers for image, text, video, audio, or
+    multimodal records. ``filepath`` is an optional media pointer and is absent
+    for text-only records. Embeddings and layouts are stored separately in
+    dedicated tables (per embedding space / per layout).
     """
 
     id: str = Field(..., description="Unique identifier for the sample")
-    filepath: str = Field(..., description="Path to the image file")
+    filepath: str | None = Field(default=None, description="Optional path to source media")
     label: str | None = Field(default=None, description="Label for the sample")
     text: str | None = Field(default=None, description="Text content or caption")
     metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
     thumbnail_base64: str | None = Field(default=None, description="Cached thumbnail as base64")
     width: int | None = Field(default=None, description="Image width in pixels")
     height: int | None = Field(default=None, description="Image height in pixels")
-    modality: str = Field(default="image", description="Data modality: image, text, or multimodal")
+    media_type: str | None = Field(default=None, description="MIME-ish source media type")
+    duration_s: float | None = Field(default=None, description="Media duration in seconds")
+    modality: str = Field(
+        default="image",
+        description="Data modality: image, text, video, audio, or multimodal",
+    )
 
     model_config = {"arbitrary_types_allowed": True}
 
     @property
-    def filename(self) -> str:
+    def filename(self) -> str | None:
         """Get the filename from the filepath."""
-        return Path(self.filepath).name
+        return Path(self.filepath).name if self.filepath else None
 
-    def load_image(self) -> Image.Image:
-        """Load the image from disk."""
+    @property
+    def is_image(self) -> bool:
+        """Whether this sample has image media that PIL may safely inspect."""
+        if not self.filepath:
+            return False
+        if self.media_type is not None:
+            return self.media_type.startswith("image/")
+        return self.modality in {"image", "multimodal"}
+
+    def load_image(self) -> Image.Image | None:
+        """Load image media from disk, returning None for non-image records."""
+        if not self.is_image:
+            return None
         return Image.open(self.filepath)
 
-    def get_thumbnail(self, size: tuple[int, int] = (128, 128)) -> Image.Image:
+    def get_thumbnail(self, size: tuple[int, int] = (128, 128)) -> Image.Image | None:
         """Get a thumbnail of the image. Also captures original dimensions."""
         img = self.load_image()
+        if img is None:
+            return None
         # Capture original dimensions while we have the image loaded
         if self.width is None or self.height is None:
             self.width, self.height = img.size
         img.thumbnail(size, Image.Resampling.LANCZOS)
         return img
 
-    def _encode_thumbnail(self, size: tuple[int, int] = (128, 128)) -> str:
+    def _encode_thumbnail(self, size: tuple[int, int] = (128, 128)) -> str | None:
         """Encode thumbnail as base64 JPEG."""
         thumb = self.get_thumbnail(size)
+        if thumb is None:
+            return None
         if thumb.mode in ("RGBA", "P"):
             thumb = thumb.convert("RGB")
         buffer = io.BytesIO()
         thumb.save(buffer, format="JPEG", quality=85)
         return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
-    def get_thumbnail_base64(self, size: tuple[int, int] = (128, 128)) -> str:
+    def get_thumbnail_base64(self, size: tuple[int, int] = (128, 128)) -> str | None:
         """Get thumbnail as base64 encoded string."""
         return self.thumbnail_base64 or self._encode_thumbnail(size)
 
     def cache_thumbnail(self, size: tuple[int, int] = (128, 128)) -> None:
         """Cache the thumbnail as base64 for persistence."""
-        if self.thumbnail_base64 is None:
+        if self.thumbnail_base64 is None and self.is_image:
             self.thumbnail_base64 = self._encode_thumbnail(size)
 
     def to_api_dict(
@@ -82,6 +104,8 @@ class Sample(BaseModel):
             "label": self.label,
             "text": self.text,
             "modality": self.modality,
+            "media_type": self.media_type,
+            "duration_s": self.duration_s,
             "metadata": self.metadata,
             "width": self.width,
             "height": self.height,
@@ -92,12 +116,13 @@ class Sample(BaseModel):
 
     def ensure_dimensions(self) -> None:
         """Load image dimensions if not already set."""
-        if self.width is None or self.height is None:
+        if self.is_image and (self.width is None or self.height is None):
             try:
                 img = self.load_image()
+                if img is None:
+                    return
                 self.width, self.height = img.size
             except Exception:
                 # If image can't be loaded, leave as None
                 pass
-
 

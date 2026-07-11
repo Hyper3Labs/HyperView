@@ -5,7 +5,7 @@ import type { IDockviewPanelProps } from "dockview-react";
 import { AlertTriangle, Puzzle } from "lucide-react";
 
 import { backendUrl, isStaticBundle } from "@/lib/api";
-import { getBuiltInCenterPanelDefinitionForPanelType } from "@/panels/registry";
+import { getBuiltInPanelComponent } from "@/panels/registry";
 import { installHyperViewPanelSdkGlobal } from "@/panel-sdk";
 import { useStore } from "@/store/useStore";
 import type { RuntimePanel, RuntimePanelStateEntry } from "@/types";
@@ -17,6 +17,8 @@ import { PanelInstanceProvider } from "./PanelHostContext";
 interface PanelHostParams extends Record<string, unknown> {
   panelId: string;
   builtinPanelType?: string;
+  definitionProps?: Record<string, unknown>;
+  definitionTitle?: string;
 }
 
 interface RuntimePanelComponentProps {
@@ -104,9 +106,9 @@ function BuiltInPanelHost({
 }) {
   const builtinPanelType =
     props.params?.builtinPanelType ?? panel.builtin_panel ?? panel.panel_type;
-  const definition = getBuiltInCenterPanelDefinitionForPanelType(builtinPanelType);
+  const Component = getBuiltInPanelComponent(builtinPanelType);
 
-  if (!definition) {
+  if (!Component) {
     return (
       <PanelMessage
         title={panel.title}
@@ -117,7 +119,6 @@ function BuiltInPanelHost({
     );
   }
 
-  const Component = definition.Component;
   const nextParams = {
     ...(panel.props ?? {}),
     ...(props.params ?? {}),
@@ -209,7 +210,31 @@ export function PanelHost(props: IDockviewPanelProps<PanelHostParams>) {
   const panelState = useStore((state) => state.panelStates[panelId]);
 
   if (!panel) {
-    return <PanelUnavailable />;
+    const panelType = props.params?.builtinPanelType;
+    const Component = getBuiltInPanelComponent(panelType);
+    if (!Component || !panelType) return <PanelUnavailable />;
+    const panelId = props.params?.panelId ?? props.api.id;
+    return (
+      <PanelInstanceProvider
+        value={{
+          panel: null,
+          panelId,
+          props: props.params?.definitionProps ?? {},
+          state: panelState?.state ?? {},
+          stateRevision: panelState?.state_revision ?? 0,
+        }}
+      >
+        <Component
+          {...props}
+          params={{
+            ...(props.params?.definitionProps ?? {}),
+            ...(props.params ?? {}),
+            panelId,
+            builtinPanelType: panelType,
+          }}
+        />
+      </PanelInstanceProvider>
+    );
   }
 
   if (isStaticBundle() && panel.data.static_compatible === false) {

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import mimetypes
 import threading
 import time
 import uuid
@@ -18,6 +19,7 @@ from PIL import Image
 from hyperview._compat import disable_blocked_datasets_torch_shared_memory
 from hyperview.core.sample import Sample
 from hyperview.storage.backend import StorageBackend
+from hyperview.storage.fields import FieldCatalog, FieldDefinition
 from hyperview.storage.schema import (
     make_layout_key,
     normalize_layout_dimension,
@@ -76,6 +78,8 @@ def _normalize_local_filepath(filepath: str) -> str:
 
 
 def _normalize_sample_filepath(sample: Sample) -> Sample:
+    if sample.filepath is None:
+        return sample
     normalized = _normalize_local_filepath(sample.filepath)
     if normalized == sample.filepath:
         return sample
@@ -91,6 +95,32 @@ def _dedupe_samples_by_id(samples: list[Sample]) -> list[Sample]:
             del deduped[sample.id]
         deduped[sample.id] = sample
     return list(deduped.values())
+
+
+def _media_type_for_path(path: str | Path) -> str | None:
+    """Infer a MIME-ish media type from a source filename."""
+    media_type, _ = mimetypes.guess_type(str(path))
+    return media_type
+
+
+def _field_catalog_for_samples(samples: list[Sample]) -> FieldCatalog:
+    """Build the discoverable field catalog for ingested sample records."""
+    fields: FieldCatalog = {
+        "id": FieldDefinition(type="scalar", nullable=False, source="builtin"),
+        "filepath": FieldDefinition(type="media", nullable=True, source="builtin"),
+        "media_type": FieldDefinition(type="scalar", nullable=True, source="builtin"),
+        "duration_s": FieldDefinition(type="scalar", nullable=True, source="builtin"),
+        "label": FieldDefinition(type="label", nullable=True, source="builtin"),
+        "text": FieldDefinition(type="text", nullable=True, source="builtin"),
+        "modality": FieldDefinition(type="scalar", nullable=False, source="builtin"),
+    }
+    for sample in samples:
+        for key in sample.metadata:
+            fields.setdefault(
+                f"metadata.{key}",
+                FieldDefinition(type="scalar", nullable=True, source="metadata"),
+            )
+    return fields
 
 
 def parse_visualization_layout(layout: str) -> tuple[str, int]:
@@ -211,6 +241,7 @@ class Dataset:
             return 0, skipped
 
         self._storage.add_samples_batch(sample_list)
+        self._storage.register_fields(_field_catalog_for_samples(sample_list))
 
         return len(sample_list), skipped
 
@@ -239,6 +270,7 @@ class Dataset:
                     filepath=str(path),
                     label=label,
                     metadata={},
+                    media_type=_media_type_for_path(path),
                 )
                 samples.append(sample)
 
@@ -500,6 +532,7 @@ class Dataset:
                     text=text,
                     modality=modality,
                     metadata=metadata,
+                    media_type=_media_type_for_path(image_path),
                 )
 
                 samples.append(sample)
@@ -659,6 +692,11 @@ class Dataset:
     def list_spaces(self) -> list[Any]:
         """List all embedding spaces in this dataset."""
         return self._storage.list_spaces()
+
+    @property
+    def fields(self) -> FieldCatalog:
+        """Typed catalog of fields available on this dataset."""
+        return self._storage.get_fields()
 
     def list_layouts(self) -> list[Any]:
         """List all layouts in this dataset (returns LayoutInfo objects)."""
@@ -966,6 +1004,10 @@ class Dataset:
                     "id": s.id,
                     "filepath": s.filepath,
                     "label": s.label,
+                    "text": s.text,
+                    "modality": s.modality,
+                    "media_type": s.media_type,
+                    "duration_s": s.duration_s,
                     "metadata": s.metadata,
                     "thumbnail_base64": s.thumbnail_base64 if include_thumbnails else None,
                 }
@@ -997,8 +1039,12 @@ class Dataset:
         for s_data in data["samples"]:
             sample = Sample(
                 id=s_data["id"],
-                filepath=s_data["filepath"],
+                filepath=s_data.get("filepath"),
                 label=s_data.get("label"),
+                text=s_data.get("text"),
+                modality=s_data.get("modality", "image"),
+                media_type=s_data.get("media_type"),
+                duration_s=s_data.get("duration_s"),
                 metadata=s_data.get("metadata", {}),
                 thumbnail_base64=s_data.get("thumbnail_base64"),
             )

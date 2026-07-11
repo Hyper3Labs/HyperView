@@ -7,6 +7,7 @@ from typing import Any
 import numpy as np
 
 from hyperview.core.sample import Sample
+from hyperview.storage.fields import FieldCatalog
 
 
 class StorageBackend(ABC):
@@ -81,6 +82,14 @@ class StorageBackend(ABC):
     @abstractmethod
     def filter(self, predicate: Callable[[Sample], bool]) -> list[Sample]:
         """Filter samples based on a predicate function."""
+
+    @abstractmethod
+    def get_fields(self) -> FieldCatalog:
+        """Return the dataset's typed field catalog."""
+
+    @abstractmethod
+    def register_fields(self, fields: FieldCatalog) -> FieldCatalog:
+        """Add or replace typed field definitions and return the full catalog."""
 
     @abstractmethod
     def list_spaces(self) -> list[Any]:

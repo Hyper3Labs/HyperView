@@ -7,6 +7,7 @@ import numpy as np
 
 from hyperview.core.sample import Sample
 from hyperview.storage.backend import StorageBackend
+from hyperview.storage.fields import FieldCatalog
 from hyperview.storage.metrics import (
     distance_metric_for_space,
     pairwise_embedding_distances,
@@ -30,6 +31,7 @@ class MemoryBackend(StorageBackend):
         self._embeddings: dict[str, dict[str, np.ndarray]] = {}
         self._layout_registry: dict[str, LayoutInfo] = {}
         self._layouts: dict[str, dict[str, np.ndarray]] = {}
+        self._fields: FieldCatalog = {}
 
     def add_sample(self, sample: Sample) -> None:
         self.add_samples_batch([sample])
@@ -95,6 +97,13 @@ class MemoryBackend(StorageBackend):
 
     def filter(self, predicate: Callable[[Sample], bool]) -> list[Sample]:
         return [s for s in self._samples.values() if predicate(s)]
+
+    def get_fields(self) -> FieldCatalog:
+        return dict(self._fields)
+
+    def register_fields(self, fields: FieldCatalog) -> FieldCatalog:
+        self._fields.update(fields)
+        return self.get_fields()
 
     def list_spaces(self) -> list[SpaceInfo]:
         return list(self._spaces.values())

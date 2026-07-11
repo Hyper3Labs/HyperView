@@ -5,6 +5,8 @@ export interface Sample {
   label: string | null;
   text?: string | null;
   modality?: string | null;
+  media_type?: string | null;
+  duration_s?: number | null;
   thumbnail: string | null;
   media_url?: string | null;
   thumbnail_url?: string | null;
@@ -58,6 +60,11 @@ export interface DatasetInfo {
   name: string;
   num_samples: number;
   labels: string[];
+  fields?: Record<string, {
+    type: "scalar" | "text" | "media" | "label" | "vector_ref";
+    nullable: boolean;
+    source: string;
+  }>;
   spaces: SpaceInfo[];
   representations?: RepresentationInfo[];
   indexes?: IndexInfo[];
@@ -212,6 +219,8 @@ export interface RuntimeWorkspaceState {
   ui: {
     active_layout_key: string | null;
     selected_ids: string[];
+    layout: Record<string, unknown> | null;
+    layout_revision: number;
     panels: Record<string, RuntimePanelStateEntry>;
     layout_views: Record<
       string,

@@ -13,17 +13,22 @@ pass before the next wave starts.
 
 | # | Item | Source | Status |
 |---|------|--------|--------|
-| W1a | Static ephemeral-collection 404: `static-filter-*` collections must resolve client-side, not fetch nonexistent `items.json` | branch audit | open |
-| W1b | Static `dataset.json` missing `representations[]`/`indexes[]` (live/static contract divergence) | branch audit | open |
-| W1c | Warm-worker reads `hyperview_version`, health returns `version`; `export_frontend.sh` references nonexistent `hyperview demo` | arch review #9 | open |
-| W1d | Phase 8 hygiene: snapshot panel-state de-dup, panel `kind` collapse to `builtin\|module`, delete dead `lifecycle`, alias deprecation warnings in `CommandResult`, rewrite stale `agent-context/extensions/*` examples + skill docs | refactor Phase 8 | open |
-| W2a | CORS allowlist + per-session bearer token on control routes | arch review #1 | open |
-| W2b | Phase 5/6 frontend: Samples built-in renders `collection_id` via SDK only; Explorer ported to SDK; `useDatasetInfo()`; ESLint boundary rule for `panels/**` | refactor Phases 5–6 | open |
-| W3a | Real representation/index split: `index_id` accepted in control command models, `SpaceInfo` stops aliasing `space_key`, delete `ui.similarity_query` shim | refactor Phase 5 | shimmed only |
-| W3b | Multimodal M0: `media_type`/`duration_s` columns, nullable `filepath`, typed `Field` registry, static-export media guards | multimodal M0 | open |
-| W4a | Scatter built-in on SDK (`useQuery` for embeddings/layouts) | refactor Phase 6 | open, riskiest |
-| W4b | Phase 7: one backend panel registry (explorer definition, scatter presets), Dockview layout into runtime state | refactor Phase 7 | open |
+| W1a | Static ephemeral-collection 404: `static-filter-*` collections must resolve client-side, not fetch nonexistent `items.json` | branch audit | **done** (Wave 1) |
+| W1b | Static `dataset.json` missing `representations[]`/`indexes[]` (live/static contract divergence) | branch audit | **done** (Wave 1) |
+| W1c | Warm-worker reads `hyperview_version`, health returns `version`; `export_frontend.sh` references nonexistent `hyperview demo` | arch review #9 | **done** (Wave 1; warm-worker fix uncommitted in nested repo) |
+| W1d | Phase 8 hygiene: snapshot panel-state de-dup, panel `kind` collapse to `builtin\|module`, delete dead `lifecycle`, alias deprecation warnings in `CommandResult`, rewrite stale `agent-context/extensions/*` examples + skill docs | refactor Phase 8 | **done** (Wave 1) |
+| W2a | CORS allowlist + per-session bearer token on control routes | arch review #1 | **done** (Wave 2) |
+| W2b | Phase 5/6 frontend: Samples built-in renders `collection_id` via SDK only; Explorer ported to SDK; `useDatasetInfo()`; ESLint boundary rule for `panels/**` | refactor Phases 5–6 | **done** (Wave 2) |
+| W3a | Real representation/index split: `index_id` accepted in control command models, `SpaceInfo` stops aliasing `space_key`, delete `ui.similarity_query` shim | refactor Phase 5 | **done** (Wave 3) |
+| W3b | Multimodal M0: `media_type`/`duration_s` columns, nullable `filepath`, typed `Field` registry, static-export media guards | multimodal M0 | **done** (Wave 4) |
+| W4a | Scatter built-in on SDK (`useQuery` for embeddings/layouts) | refactor Phase 6 | **done** (Wave 3) |
+| W4b | Phase 7: one backend panel registry (explorer definition, scatter presets), Dockview layout into runtime state | refactor Phase 7 | **done** (Wave 4) |
 | Later | SSE wakeup + delta encoding, thumbnail path consolidation, jobs persistence, god-module splits, repo boundaries | arch review #2,#4,#5,#6,#8 | deferred |
+
+All four waves landed 2026-07-11 (commits `1a3beb7`, `a4b9e8b`, `8824e15`, and the
+Wave 4 commit). Wave 4 note: both minions hit codex credit exhaustion mid-run; the
+orchestrator finished the DockviewWorkspace refactor, the CLI test double, and the
+Phase 7 test suite (`tests/test_workspace_layout_and_registry.py`) by hand.
 
 ## Waves
 

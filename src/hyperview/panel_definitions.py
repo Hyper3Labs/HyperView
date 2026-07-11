@@ -80,7 +80,7 @@ BUILTIN_PANEL_DEFINITIONS = (
         label="Samples",
         title="Samples",
         source="builtin",
-        default_layout={"position": "right"},
+        default_layout={"id": "samples", "position": "center", "order": 10},
         commands=[
             "workspace.panel.state.get",
             "workspace.panel.state.patch",
@@ -98,11 +98,64 @@ BUILTIN_PANEL_DEFINITIONS = (
         label="Scatter",
         title="Embeddings",
         source="builtin",
-        default_layout={"position": "center"},
+        default_props={
+            "preset": "euclidean-2d",
+            "presets": {
+                "euclidean-2d": {
+                    "label": "Euclidean",
+                    "geometry": "euclidean",
+                    "layout_dimension": 2,
+                },
+                "poincare-2d": {
+                    "label": "Hyperbolic",
+                    "geometry": "poincare",
+                    "layout_dimension": 2,
+                },
+                "spherical-2d": {
+                    "label": "Spherical",
+                    "geometry": "spherical",
+                    "layout_dimension": 2,
+                },
+                "euclidean-3d": {
+                    "label": "Euclidean 3D",
+                    "geometry": "euclidean",
+                    "layout_dimension": 3,
+                },
+                "spherical-3d": {
+                    "label": "Sphere 3D",
+                    "geometry": "spherical",
+                    "layout_dimension": 3,
+                },
+            },
+        },
+        default_layout={
+            "id": "scatter",
+            "position": "center",
+            "reference_panel_id": "samples",
+            "direction": "right",
+            "order": 20,
+            "preset": "euclidean-2d",
+        },
         commands=["workspace.panel.state.get", "workspace.panel.state.patch"],
         queries=["embeddings", "layouts"],
         icon="scatter",
         category="embedding",
+    ),
+    PanelDefinition(
+        panel_type="explorer",
+        label="Explorer",
+        title="Labels",
+        source="builtin",
+        default_layout={
+            "id": "explorer",
+            "position": "right",
+            "dock_zone": "left",
+            "order": 0,
+        },
+        commands=["workspace.panel.state.get", "workspace.panel.state.patch"],
+        icon="tags",
+        category="dataset",
+        allow_multiple=False,
     ),
 )
 

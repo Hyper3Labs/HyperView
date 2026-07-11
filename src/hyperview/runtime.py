@@ -741,6 +741,8 @@ class WorkspaceUiState:
     has_explicit_view: bool = False
     active_panel_id: str | None = None
     layout_views: dict[str, LayoutViewState] = field(default_factory=dict)
+    layout: dict[str, Any] | None = None
+    layout_revision: int = 0
     view_revision: int = 0
 
     @classmethod
@@ -786,6 +788,12 @@ class WorkspaceUiState:
             has_explicit_view=bool(data.get("has_explicit_view", False)),
             active_panel_id=data.get("active_panel_id"),
             layout_views=layout_views,
+            layout=(
+                _json_object_copy(data["layout"])
+                if isinstance(data.get("layout"), dict)
+                else None
+            ),
+            layout_revision=max(0, int(data.get("layout_revision") or 0)),
             view_revision=int(data.get("view_revision") or 0),
         )
 
@@ -805,6 +813,8 @@ class WorkspaceUiState:
             "layout_views": {
                 layout_key: view.to_dict() for layout_key, view in sorted(self.layout_views.items())
             },
+            "layout": _json_object_copy(self.layout) if self.layout is not None else None,
+            "layout_revision": self.layout_revision,
             "view_revision": self.view_revision,
         }
 
@@ -1260,6 +1270,48 @@ class HyperViewRuntime:
                 state=next_state,
                 state_revision=entry.state_revision + 1,
             )
+            self.workspace_registry.update_workspace(workspace)
+            self._bump_version(source_client_id=source_client_id)
+            return workspace
+
+    def get_workspace_layout(self, workspace_id: str) -> dict[str, Any]:
+        with self._lock:
+            workspace = self.get_workspace(workspace_id)
+            return {
+                "layout": (
+                    _json_object_copy(workspace.ui.layout)
+                    if workspace.ui.layout is not None
+                    else None
+                ),
+                "layout_revision": workspace.ui.layout_revision,
+            }
+
+    def set_workspace_layout(
+        self,
+        workspace_id: str,
+        layout: dict[str, Any] | None,
+        *,
+        expected_revision: int | None = None,
+        source_client_id: str | None = None,
+    ) -> WorkspaceState:
+        if layout is not None and not isinstance(layout, dict):
+            raise ValueError("workspace layout must be a JSON object or null")
+
+        with self._lock:
+            workspace = self.get_workspace(workspace_id)
+            if (
+                expected_revision is not None
+                and workspace.ui.layout_revision != expected_revision
+            ):
+                raise ValueError(
+                    "workspace layout revision conflict: "
+                    f"expected {expected_revision}, got {workspace.ui.layout_revision}"
+                )
+            next_layout = _json_object_copy(layout) if layout is not None else None
+            if next_layout == workspace.ui.layout:
+                return workspace
+            workspace.ui.layout = next_layout
+            workspace.ui.layout_revision += 1
             self.workspace_registry.update_workspace(workspace)
             self._bump_version(source_client_id=source_client_id)
             return workspace
@@ -2619,6 +2671,12 @@ class HyperViewRuntime:
                             layout_key: view.to_dict()
                             for layout_key, view in sorted(workspace.ui.layout_views.items())
                         },
+                        "layout": (
+                            _json_object_copy(workspace.ui.layout)
+                            if workspace.ui.layout is not None
+                            else None
+                        ),
+                        "layout_revision": workspace.ui.layout_revision,
                         "panels": {
                             panel_id: state.to_dict()
                             for panel_id, state in sorted(workspace.ui.panels.items())

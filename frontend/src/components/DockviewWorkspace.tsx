@@ -19,6 +19,7 @@ import {
   type IDockviewPanel,
   type DockviewReadyEvent,
   type EdgeGroupPosition,
+  type SerializedDockview,
   type DockviewTheme,
   type IDockviewPanelProps,
   type IWatermarkPanelProps,
@@ -26,17 +27,17 @@ import {
 } from "dockview-react";
 import { Columns2 } from "lucide-react";
 
-import { addRuntimePanel, removeRuntimePanel } from "@/lib/api";
-import type { SamplesViewModel } from "@/lib/sampleCollections";
-import { getLayoutDimension } from "@/lib/layouts";
 import {
-  addBuiltInCenterPanel,
-  CENTER_PANEL_COMPONENTS,
-  getBuiltInCenterPanelDefinition,
-  getBuiltInCenterPanelDefinitionForPanelType,
-  getBuiltInCenterPanelIdForLayout,
-  getScatterTabComponent,
+  addRuntimePanel,
+  getRuntimeClientId,
+  isStaticBundle,
+  removeRuntimePanel,
+  runControlCommand,
+} from "@/lib/api";
+import type { SamplesViewModel } from "@/lib/sampleCollections";
+import {
   CENTER_PANEL_TAB_COMPONENTS,
+  getPanelTabComponent,
   PANEL,
 } from "@/panels/registry";
 import { installHyperViewPanelSdkGlobal } from "@/panel-sdk";
@@ -45,6 +46,7 @@ import type {
   DatasetInfo,
   Geometry,
   RuntimePanel,
+  RuntimePanelDefinition,
   RuntimePanelStateEntry,
 } from "@/types";
 import { cn } from "@/lib/utils";
@@ -55,11 +57,9 @@ import {
 
 import { Button } from "./ui/button";
 import { DockviewContext, useDockviewContext } from "./DockviewContext";
-import { ExplorerPanel } from "./ExplorerPanel";
 import { HyperViewLogo } from "./icons";
 import { PanelHost } from "./PanelHost";
 
-const LAYOUT_STORAGE_KEY = "hyperview:dockview-layout:v10";
 const DEFAULT_CONTAINER_WIDTH = 1200;
 const DEFAULT_CONTAINER_HEIGHT = 800;
 const MIN_SIDE_PANEL_WIDTH = 120;
@@ -90,12 +90,7 @@ const EDGE_ZONES = ["left", "right", "bottom"] as const satisfies readonly Dockv
 const DEFAULT_BUILT_IN_PANEL_IDS = [
   PANEL.EXPLORER,
   PANEL.GRID,
-  PANEL.SCATTER_EUCLIDEAN,
-  PANEL.SCATTER_POINCARE,
-  PANEL.SCATTER_SPHERICAL,
-  PANEL.SCATTER_EUCLIDEAN_3D,
-  PANEL.SCATTER_SPHERICAL_3D,
-  PANEL.SCATTER_DEFAULT,
+  PANEL.SCATTER,
 ] as const;
 
 const getContainerWidth = (api?: DockviewApi | null) =>
@@ -122,38 +117,34 @@ const getBottomPanelMaxHeight = (containerHeight: number) =>
     Math.max(containerHeight - MIN_BOTTOM_PANEL_HEIGHT, MIN_BOTTOM_PANEL_HEIGHT)
   );
 
-const getLayoutStorageKey = (
-  workspaceId: string | null,
-  viewRevision: number | null | undefined,
-  hasExplicitView: boolean
-) =>
-  `${LAYOUT_STORAGE_KEY}:${workspaceId ?? "default"}:${viewRevision ?? 0}:${
-    hasExplicitView ? "explicit" : "default"
-  }`;
+function definitionLayout(definition: RuntimePanelDefinition) {
+  return definition.default_layout ?? {};
+}
 
-function getDefaultScatterPanelId(
-  datasetInfo: DatasetInfo | null,
-  requestedLayoutKey: string | null
+function defaultPanelId(definition: RuntimePanelDefinition) {
+  const id = definitionLayout(definition).id;
+  return typeof id === "string" && id.length > 0 ? id : definition.panel_type;
+}
+
+function defaultPanelProps(definition: RuntimePanelDefinition) {
+  const props = { ...definition.default_props };
+  const presetName = definitionLayout(definition).preset;
+  const presets = props.presets;
+  if (
+    typeof presetName === "string" &&
+    isRecord(presets) &&
+    isRecord(presets[presetName])
+  ) {
+    Object.assign(props, presets[presetName], { preset: presetName });
+  }
+  return props;
+}
+
+function panelDefinition(
+  definitions: RuntimePanelDefinition[],
+  panel: RuntimePanel
 ) {
-  const layouts = datasetInfo?.layouts ?? [];
-  const requestedLayout =
-    requestedLayoutKey === null
-      ? null
-      : layouts.find((layout) => layout.layout_key === requestedLayoutKey) ?? null;
-  const euclideanLayout2d =
-    layouts.find(
-      (layout) =>
-        layout.geometry === "euclidean" && getLayoutDimension(layout.layout_key) === 2
-    ) ?? null;
-  const fallbackLayout2d =
-    layouts.find((layout) => getLayoutDimension(layout.layout_key) === 2) ?? null;
-  const fallbackLayout3d =
-    layouts.find((layout) => getLayoutDimension(layout.layout_key) === 3) ?? null;
-  const layout = requestedLayout ?? euclideanLayout2d ?? fallbackLayout2d ?? fallbackLayout3d;
-
-  return layout
-    ? getBuiltInCenterPanelIdForLayout({ datasetInfo, layoutKey: layout.layout_key })
-    : null;
+  return definitions.find((item) => item.panel_type === panel.panel_type) ?? null;
 }
 
 function getCenterAnchorPanel(api: DockviewApi) {
@@ -297,7 +288,7 @@ function getRuntimePanelAddLayout(spec: RuntimePanel) {
 
 function getRuntimePanelPosition(
   api: DockviewApi,
-  zone: "center" | "right" | "bottom",
+  zone: "center" | "left" | "right" | "bottom",
   panel?: RuntimePanel
 ) {
   if (panel?.reference_panel_id && panel.direction) {
@@ -341,6 +332,10 @@ function isClosableDockPanel(panelId: string) {
 
 function getExpectedRuntimePanelComponent(panel: RuntimePanel) {
   return "panelHost";
+}
+
+function getDockPanelId(panel: RuntimePanel) {
+  return panel.kind === "builtin" ? panel.id : `${RUNTIME_PANEL_PREFIX}${panel.id}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -399,11 +394,19 @@ function getRuntimePanelHostParams(
   };
 
   if (panel.panel_type === "scatter") {
-    const layoutDimension = panel.layout_dimension === 3 ? 3 : 2;
+    const presetName = typeof panel.props?.preset === "string" ? panel.props.preset : null;
+    const presets = isRecord(panel.props?.presets) ? panel.props.presets : null;
+    const preset = presetName && presets && isRecord(presets[presetName])
+      ? presets[presetName]
+      : null;
+    const presetDimension = preset?.layout_dimension;
+    const layoutDimension =
+      panel.layout_dimension === 3 || presetDimension === 3 ? 3 : 2;
+    const presetGeometry = preset?.geometry;
     return {
       ...baseParams,
       layoutKey: panel.layout_key ?? undefined,
-      geometry: (panel.geometry ?? undefined) as Geometry | undefined,
+      geometry: (panel.geometry ?? presetGeometry ?? undefined) as Geometry | undefined,
       layoutDimension,
       pinnedLayout: true,
     };
@@ -524,31 +527,51 @@ function getCenterTabPosition(api: DockviewApi) {
 
 export function useDockviewApi() {
   const ctx = useContext(DockviewContext);
-  const datasetInfo = useStore((state) => state.datasetInfo);
   const activeWorkspaceId = useStore((state) => state.activeWorkspaceId);
-  const viewRevision = useStore((state) => state.viewRevision);
-  const hasExplicitView = useStore((state) => state.hasExplicitView);
+  const customPanels = useStore((state) => state.customPanels);
+  const panelDefinitions = useStore((state) => state.panelDefinitions);
+  const applyRuntimeSnapshot = useStore((state) => state.applyRuntimeSnapshot);
+  const setWorkspaceLayoutLocal = useStore((state) => state.setWorkspaceLayoutLocal);
 
   const addPanel = useCallback(
     (panelId: string) => {
-      if (!ctx?.api) return;
-
-      addBuiltInCenterPanel({
-        api: ctx.api,
+      if (!ctx?.api || !activeWorkspaceId) return;
+      const existing = customPanels.find((panel) => panel.id === panelId);
+      if (existing) {
+        ctx.api.getPanel(getDockPanelId(existing))?.focus();
+        return;
+      }
+      const definition = panelDefinitions.find(
+        (item) => defaultPanelId(item) === panelId
+      );
+      if (!definition || isStaticBundle()) return;
+      void addRuntimePanel({
+        workspaceId: activeWorkspaceId,
         panelId,
-        datasetInfo,
-        position: getCenterTabPosition(ctx.api) ?? undefined,
+        kind: "builtin",
+        builtinPanel: definition.panel_type,
+        title: definition.title,
+        position: "center",
+        props: defaultPanelProps(definition),
+      }).then(applyRuntimeSnapshot).catch((error) => {
+        console.error("Failed to add built-in panel:", error);
       });
     },
-    [ctx?.api, datasetInfo]
+    [activeWorkspaceId, applyRuntimeSnapshot, ctx?.api, customPanels, panelDefinitions]
   );
 
   const resetLayout = useCallback(() => {
-    localStorage.removeItem(
-      getLayoutStorageKey(activeWorkspaceId, viewRevision, hasExplicitView)
-    );
-    window.location.reload();
-  }, [activeWorkspaceId, hasExplicitView, viewRevision]);
+    setWorkspaceLayoutLocal(null);
+    if (isStaticBundle() || !activeWorkspaceId) {
+      window.location.reload();
+      return;
+    }
+    void runControlCommand({
+      command: "workspace.layout.set",
+      target: { workspace_id: activeWorkspaceId },
+      args: { layout: null, client_id: getRuntimeClientId() },
+    }).finally(() => window.location.reload());
+  }, [activeWorkspaceId, setWorkspaceLayoutLocal]);
 
   const toggleZone = useCallback(
     (zone: "left" | "right" | "bottom") => {
@@ -563,20 +586,13 @@ export function useDockviewApi() {
 
       const group = showEdgeGroup(api, zone);
       if (zone === "left") {
-        const explorer =
-          api.getPanel(PANEL.EXPLORER) ??
-          api.addPanel({
-            id: PANEL.EXPLORER,
-            component: "explorer",
-            title: "Labels",
-            position: { referenceGroup: group.id },
-          });
-
-        applyExplorerPanelPolicy(explorer);
+        const explorer = customPanels.find((panel) => panel.panel_type === "explorer");
+        if (explorer) applyExplorerPanelPolicy(api.getPanel(getDockPanelId(explorer)));
+        else addPanel(PANEL.EXPLORER);
       }
       ctx.notifyEdgeStateChange();
     },
-    [ctx]
+    [addPanel, ctx, customPanels]
   );
 
   if (!ctx) return null;
@@ -589,10 +605,6 @@ export function useDockviewApi() {
   };
 }
 
-const ExplorerDockPanel = React.memo(function ExplorerDockPanel() {
-  return <ExplorerPanel />;
-});
-
 const Watermark = React.memo(function Watermark(_props: IWatermarkPanelProps) {
   return (
     <div className="flex h-full w-full items-center justify-center">
@@ -604,8 +616,6 @@ const Watermark = React.memo(function Watermark(_props: IWatermarkPanelProps) {
 });
 
 const COMPONENTS = {
-  ...CENTER_PANEL_COMPONENTS,
-  explorer: ExplorerDockPanel,
   panelHost: PanelHost,
 };
 
@@ -665,73 +675,86 @@ export function DockviewWorkspace() {
   const ctx = useDockviewContext();
   const datasetInfo = useStore((state) => state.datasetInfo);
   const customPanels = useStore((state) => state.customPanels);
+  const panelDefinitions = useStore((state) => state.panelDefinitions);
   const panelStates = useStore((state) => state.panelStates);
   const activePanelId = useStore((state) => state.activePanelId);
   const activeWorkspaceId = useStore((state) => state.activeWorkspaceId);
-  const viewRevision = useStore((state) => state.viewRevision);
   const hasExplicitView = useStore((state) => state.hasExplicitView);
   const requestedLayoutKey = useStore((state) => state.requestedLayoutKey);
+  const workspaceLayout = useStore((state) => state.workspaceLayout);
+  const workspaceLayoutRevision = useStore((state) => state.workspaceLayoutRevision);
+  const setWorkspaceLayoutLocal = useStore((state) => state.setWorkspaceLayoutLocal);
   const applyRuntimeSnapshot = useStore((state) => state.applyRuntimeSnapshot);
   const runtimeSyncClosedPanels = useRef(new Set<string>());
+  const bootstrappingWorkspace = useRef<string | null>(null);
+  const restoredLayoutRevision = useRef<number | null>(null);
+  const layoutSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const buildDefaultLayout = useCallback(
     (api: DockviewApi) => {
-      const gridPanel =
-        api.getPanel(PANEL.GRID) ??
-        addBuiltInCenterPanel({
-          api,
-          panelId: PANEL.GRID,
-          datasetInfo,
-          focusIfPresent: false,
+      const orderedDefinitions = panelDefinitions
+        .filter((definition) => typeof definitionLayout(definition).id === "string")
+        .toSorted((left, right) => {
+          const leftOrder = definitionLayout(left).order;
+          const rightOrder = definitionLayout(right).order;
+          return (typeof leftOrder === "number" ? leftOrder : 0) -
+            (typeof rightOrder === "number" ? rightOrder : 0);
         });
 
-      const scatterPanelId = getDefaultScatterPanelId(datasetInfo, requestedLayoutKey);
-      if (gridPanel && scatterPanelId) {
-        addBuiltInCenterPanel({
-          api,
-          panelId: scatterPanelId,
-          datasetInfo,
-          position: { referencePanel: gridPanel.id, direction: "right" },
-          focusIfPresent: false,
+      for (const definition of orderedDefinitions) {
+        const id = defaultPanelId(definition);
+        if (api.getPanel(id)) continue;
+        const layout = definitionLayout(definition);
+        const referenceId = typeof layout.reference_panel_id === "string"
+          ? layout.reference_panel_id
+          : null;
+        const referencePanel = referenceId ? api.getPanel(referenceId) : null;
+        const dockZone = layout.dock_zone;
+        const position = dockZone === "left"
+          ? { referenceGroup: showEdgeGroup(api, "left").id }
+          : referencePanel
+            ? {
+                referencePanel,
+                direction:
+                  layout.direction === "left" || layout.direction === "above" ||
+                  layout.direction === "below" || layout.direction === "within"
+                    ? layout.direction
+                    : "right",
+              }
+            : undefined;
+        const panel = api.addPanel({
+          id,
+          component: "panelHost",
+          title: definition.title,
+          tabComponent: getPanelTabComponent(definition.panel_type),
+          params: {
+            panelId: id,
+            builtinPanelType: definition.panel_type,
+            definitionProps: defaultPanelProps(definition),
+            definitionTitle: definition.title,
+          },
+          position,
         });
+        if (definition.panel_type === "explorer") applyExplorerPanelPolicy(panel);
       }
-
-      const leftGroup = showEdgeGroup(api, "left");
-      const explorerPanel =
-        api.getPanel(PANEL.EXPLORER) ??
-        api.addPanel({
-          id: PANEL.EXPLORER,
-          component: "explorer",
-          title: "Labels",
-          position: { referenceGroup: leftGroup.id },
-        });
-
-      applyExplorerPanelPolicy(explorerPanel);
 
       ensureEdgeGroup(api, "right");
       ensureEdgeGroup(api, "bottom");
       hideEdgeGroup(api, "right");
       hideEdgeGroup(api, "bottom");
     },
-    [datasetInfo, requestedLayoutKey]
+    [panelDefinitions]
   );
 
   const onReady = useCallback(
     (event: DockviewReadyEvent) => {
       ctx.setApi(event.api);
-
-      const layoutStorageKey = getLayoutStorageKey(
-        activeWorkspaceId,
-        viewRevision,
-        hasExplicitView
-      );
-      const stored = hasExplicitView ? null : localStorage.getItem(layoutStorageKey);
-      if (stored) {
+      if (workspaceLayout) {
         try {
-          event.api.fromJSON(JSON.parse(stored));
+          event.api.fromJSON(workspaceLayout as unknown as SerializedDockview);
+          restoredLayoutRevision.current = workspaceLayoutRevision;
 
           if (event.api.totalPanels === 0) {
-            localStorage.removeItem(layoutStorageKey);
             if (!hasExplicitView) {
               buildDefaultLayout(event.api);
             }
@@ -743,20 +766,19 @@ export function DockviewWorkspace() {
           return;
         } catch (err) {
           console.warn("Failed to restore dock layout, resetting.", err);
-          localStorage.removeItem(layoutStorageKey);
         }
       }
 
-      if (!hasExplicitView && event.api.totalPanels === 0) {
+      if (isStaticBundle() && !hasExplicitView && event.api.totalPanels === 0) {
         buildDefaultLayout(event.api);
       }
     },
     [
-      activeWorkspaceId,
       buildDefaultLayout,
       ctx,
       hasExplicitView,
-      viewRevision,
+      workspaceLayout,
+      workspaceLayoutRevision,
     ]
   );
 
@@ -764,18 +786,111 @@ export function DockviewWorkspace() {
     const api = ctx.api;
     if (!api) return;
 
-    if (hasExplicitView) return;
-
     const disposable = api.onDidLayoutChange(() => {
       if (api.totalPanels === 0) return;
-      localStorage.setItem(
-        getLayoutStorageKey(activeWorkspaceId, viewRevision, hasExplicitView),
-        JSON.stringify(api.toJSON())
-      );
+      const nextLayout = api.toJSON() as unknown as Record<string, unknown>;
+      setWorkspaceLayoutLocal(nextLayout);
+      if (layoutSaveTimer.current) clearTimeout(layoutSaveTimer.current);
+      if (isStaticBundle() || !activeWorkspaceId) return;
+      layoutSaveTimer.current = setTimeout(() => {
+        void runControlCommand({
+          command: "workspace.layout.set",
+          target: { workspace_id: activeWorkspaceId },
+          args: { layout: nextLayout, client_id: getRuntimeClientId() },
+        }).catch((error) => {
+          console.error("Failed to persist workspace layout:", error);
+        });
+      }, 150);
     });
 
-    return () => disposable.dispose();
-  }, [activeWorkspaceId, ctx.api, hasExplicitView, viewRevision]);
+    return () => {
+      disposable.dispose();
+      if (layoutSaveTimer.current) clearTimeout(layoutSaveTimer.current);
+    };
+  }, [activeWorkspaceId, ctx.api, setWorkspaceLayoutLocal]);
+
+  useEffect(() => {
+    const api = ctx.api;
+    if (!api || !workspaceLayout) return;
+    if (restoredLayoutRevision.current === workspaceLayoutRevision) return;
+    try {
+      api.fromJSON(workspaceLayout as unknown as SerializedDockview);
+      restoredLayoutRevision.current = workspaceLayoutRevision;
+      ensureEdgeGroups(api);
+      hideEmptySecondaryEdgeGroups(api);
+      applyZonePolicies(api);
+    } catch (error) {
+      console.warn("Failed to apply runtime workspace layout:", error);
+    }
+  }, [ctx.api, workspaceLayout, workspaceLayoutRevision]);
+
+  useEffect(() => {
+    if (
+      !ctx.api ||
+      !activeWorkspaceId ||
+      workspaceLayout ||
+      hasExplicitView ||
+      isStaticBundle() ||
+      panelDefinitions.length === 0 ||
+      bootstrappingWorkspace.current === activeWorkspaceId
+    ) return;
+
+    bootstrappingWorkspace.current = activeWorkspaceId;
+    const existingIds = new Set(customPanels.map((panel) => panel.id));
+    const defaults = panelDefinitions
+      .filter((definition) => typeof definitionLayout(definition).id === "string")
+      .toSorted((left, right) => {
+        const leftOrder = definitionLayout(left).order;
+        const rightOrder = definitionLayout(right).order;
+        return (typeof leftOrder === "number" ? leftOrder : 0) -
+          (typeof rightOrder === "number" ? rightOrder : 0);
+      });
+
+    void (async () => {
+      try {
+        for (const definition of defaults) {
+          const panelId = defaultPanelId(definition);
+          if (existingIds.has(panelId)) continue;
+          const layout = definitionLayout(definition);
+          const position = layout.position === "center" || layout.position === "bottom"
+            ? layout.position
+            : "right";
+          const direction =
+            layout.direction === "left" || layout.direction === "above" ||
+            layout.direction === "below" || layout.direction === "within"
+              ? layout.direction
+              : layout.direction === "right" ? "right" : null;
+          const snapshot = await addRuntimePanel({
+            workspaceId: activeWorkspaceId,
+            panelId,
+            kind: "builtin",
+            builtinPanel: definition.panel_type,
+            title: definition.title,
+            position,
+            referencePanelId:
+              typeof layout.reference_panel_id === "string"
+                ? layout.reference_panel_id
+                : null,
+            direction,
+            props: defaultPanelProps(definition),
+          });
+          existingIds.add(panelId);
+          applyRuntimeSnapshot(snapshot);
+        }
+      } catch (error) {
+        console.error("Failed to create default runtime panels:", error);
+        bootstrappingWorkspace.current = null;
+      }
+    })();
+  }, [
+    activeWorkspaceId,
+    applyRuntimeSnapshot,
+    ctx.api,
+    customPanels,
+    hasExplicitView,
+    panelDefinitions,
+    workspaceLayout,
+  ]);
 
   useEffect(() => {
     const api = ctx.api;
@@ -816,22 +931,42 @@ export function DockviewWorkspace() {
 
   useEffect(() => {
     const api = ctx.api;
-    if (!api || !datasetInfo || !requestedLayoutKey || hasExplicitView) return;
+    if (!api || !requestedLayoutKey || hasExplicitView) return;
 
-    const panelId = getBuiltInCenterPanelIdForLayout({
-      datasetInfo,
-      layoutKey: requestedLayoutKey,
-    });
-    if (!panelId) return;
+    // The scatter panel itself resolves the requested layout (geometry/dimension
+    // live in panel state now); the host only guarantees a scatter panel is open.
+    const existingScatter = customPanels.find(
+      (panel) =>
+        panel.visible !== false &&
+        (panel.builtin_panel ?? panel.panel_type) === "scatter"
+    );
+    if (existingScatter) {
+      api.getPanel(getDockPanelId(existingScatter))?.api.setActive();
+      return;
+    }
+    if (isStaticBundle() || !activeWorkspaceId) return;
 
-    addBuiltInCenterPanel({
-      api,
-      panelId,
-      datasetInfo,
-      position: getCenterTabPosition(api) ?? undefined,
-      focusIfPresent: true,
-    });
-  }, [ctx.api, datasetInfo, hasExplicitView, requestedLayoutKey]);
+    void addRuntimePanel({
+      workspaceId: activeWorkspaceId,
+      panelId: `scatter-${requestedLayoutKey.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
+      kind: "builtin",
+      builtinPanel: "scatter",
+      title: "Embeddings",
+      position: "center",
+      props: { layout_key: requestedLayoutKey },
+    })
+      .then(applyRuntimeSnapshot)
+      .catch((error) => {
+        console.error("Failed to open scatter panel for requested layout:", error);
+      });
+  }, [
+    activeWorkspaceId,
+    applyRuntimeSnapshot,
+    ctx.api,
+    customPanels,
+    hasExplicitView,
+    requestedLayoutKey,
+  ]);
 
   useEffect(() => {
     const api = ctx.api;
@@ -883,35 +1018,15 @@ export function DockviewWorkspace() {
       }
 
       const builtInPanelType = panel.builtin_panel ?? panel.panel_type;
-      const definition =
-        panel.kind === "module"
-          ? null
-          : getBuiltInCenterPanelDefinitionForPanelType(builtInPanelType);
-      const builtInOptions = definition?.buildAddPanelOptions({
-        api,
-        datasetInfo,
-        position: getRuntimePanelPosition(api, panel.position, panel),
-      });
       const layout = getRuntimePanelAddLayout(panel);
-      const layoutDimension = panel.layout_dimension === 3 ? 3 : 2;
       api.addPanel({
         id: runtimePanelId,
         component: "panelHost",
         title: panel.title,
         tabComponent:
-          panel.panel_type === "scatter"
-            ? getScatterTabComponent({
-                geometry: panel.geometry,
-                layoutDimension,
-              })
-            : builtInOptions?.tabComponent,
-        params: {
-          ...(builtInOptions?.params ?? {}),
-          ...getRuntimePanelHostParams(panel, panelStates[panel.id]),
-        },
-        position:
-          builtInOptions?.position ??
-          getRuntimePanelPosition(api, panel.position, panel),
+          panel.kind === "module" ? undefined : getPanelTabComponent(builtInPanelType),
+        params: getRuntimePanelHostParams(panel, panelStates[panel.id]),
+        position: getRuntimePanelPosition(api, panel.position, panel),
         initialWidth:
           layout.initialWidth ??
           (panel.position === "right" ? getDefaultRightPanelWidth(getContainerWidth(api)) : undefined),

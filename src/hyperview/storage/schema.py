@@ -48,10 +48,12 @@ def create_sample_schema() -> pa.Schema:
     return pa.schema(
         [
             pa.field("id", pa.utf8(), nullable=False),
-            pa.field("filepath", pa.utf8(), nullable=False),
+            pa.field("filepath", pa.utf8(), nullable=True),
             pa.field("label", pa.utf8(), nullable=True),
             pa.field("text", pa.utf8(), nullable=True),
             pa.field("modality", pa.utf8(), nullable=False),
+            pa.field("media_type", pa.utf8(), nullable=True),
+            pa.field("duration_s", pa.float64(), nullable=True),
             pa.field("metadata_json", pa.utf8(), nullable=True),
             pa.field("thumbnail_base64", pa.utf8(), nullable=True),
         ]
@@ -371,6 +373,8 @@ def sample_to_dict(sample: Sample) -> dict[str, Any]:
         "label": sample.label,
         "text": sample.text,
         "modality": sample.modality,
+        "media_type": sample.media_type,
+        "duration_s": sample.duration_s,
         "metadata_json": json.dumps(sample.metadata) if sample.metadata else None,
         "thumbnail_base64": sample.thumbnail_base64,
     }
@@ -383,10 +387,12 @@ def dict_to_sample(row: dict[str, Any]) -> Sample:
 
     return Sample(
         id=row["id"],
-        filepath=row["filepath"],
+        filepath=row.get("filepath"),
         label=row.get("label"),
         text=row.get("text"),
         modality=str(row.get("modality") or "image"),
+        media_type=row.get("media_type"),
+        duration_s=row.get("duration_s"),
         metadata=metadata,
         thumbnail_base64=row.get("thumbnail_base64"),
     )

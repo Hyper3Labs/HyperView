@@ -234,6 +234,7 @@ def _dataset_payload(dataset: Dataset) -> dict[str, Any]:
     return {
         "name": dataset.name,
         "num_samples": len(dataset),
+        "fields": dataset.fields,
         "spaces": [
             {
                 "space_key": space.space_key,

@@ -11,6 +11,7 @@ from lancedb.expr import col, lit
 from hyperview.core.sample import Sample
 from hyperview.storage.backend import StorageBackend
 from hyperview.storage.config import StorageConfig
+from hyperview.storage.fields import FieldCatalog, FieldRegistry
 from hyperview.storage.metrics import (
     distance_metric_for_space,
     hyperboloid_dot_query,
@@ -139,6 +140,7 @@ class LanceDBBackend(StorageBackend):
         self._dataset_dir = self.config.datasets_dir / dataset_name
         self._dataset_dir.mkdir(parents=True, exist_ok=True)
         self._db = lancedb.connect(str(self._dataset_dir))
+        self._field_registry = FieldRegistry(self._dataset_dir / "fields.json")
 
         self._samples_table = self._get_or_create_samples_table()
         self._spaces_table = self._get_or_create_spaces_table()
@@ -153,6 +155,12 @@ class LanceDBBackend(StorageBackend):
     def _get_or_create_samples_table(self) -> lancedb.table.Table | None:
         if "samples" in self._table_names():
             table = self._db.open_table("samples")
+            expected = create_sample_schema()
+            missing = [expected.field(name) for name in ("media_type", "duration_s") if name not in table.schema.names]
+            if missing:
+                table.add_columns(missing)
+            if not table.schema.field("filepath").nullable:
+                table.alter_columns({"path": "filepath", "nullable": True})
             _ensure_samples_indices(table)
             return table
         return None
@@ -187,6 +195,12 @@ class LanceDBBackend(StorageBackend):
             self._samples_table.merge_insert(
                 "id"
             ).when_matched_update_all().when_not_matched_insert_all().execute(arrow)
+
+    def get_fields(self) -> FieldCatalog:
+        return self._field_registry.load()
+
+    def register_fields(self, fields: FieldCatalog) -> FieldCatalog:
+        return self._field_registry.update(fields)
 
     def get_sample(self, sample_id: str) -> Sample | None:
         if self._samples_table is None:

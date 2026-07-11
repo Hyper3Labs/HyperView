@@ -217,6 +217,10 @@ def test_cli_dataset_create_forwards_hf_subset_config(monkeypatch, capsys) -> No
         def list_layouts(self) -> list:
             return []
 
+        @property
+        def fields(self) -> dict:
+            return {}
+
         def add_from_huggingface(self, dataset_name: str, **kwargs) -> tuple[int, int]:
             recorded["dataset_name"] = dataset_name
             recorded["kwargs"] = kwargs

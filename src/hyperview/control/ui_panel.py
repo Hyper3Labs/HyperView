@@ -110,6 +110,14 @@ class PanelStatePatchArgs(BaseModel):
     client_id: str | None = None
 
 
+class WorkspaceLayoutSetArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    layout: dict[str, Any] | None
+    expected_revision: int | None = None
+    client_id: str | None = None
+
+
 class WorkspaceTarget(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -485,6 +493,47 @@ def _patch_panel_state(
     )
 
 
+def _get_workspace_layout(
+    runtime: HyperViewRuntime,
+    target: BaseModel,
+    args: BaseModel,
+) -> CommandExecution:
+    workspace_target = _workspace_target(target)
+    workspace = runtime.get_workspace(workspace_target.workspace_id)
+    payload = runtime.get_workspace_layout(workspace_target.workspace_id)
+    return CommandExecution(
+        workspace=workspace,
+        result=payload,
+        revision=int(payload["layout_revision"]),
+    )
+
+
+def _set_workspace_layout(
+    runtime: HyperViewRuntime,
+    target: BaseModel,
+    args: BaseModel,
+) -> CommandExecution:
+    workspace_target = _workspace_target(target)
+    layout_args = args if isinstance(args, WorkspaceLayoutSetArgs) else WorkspaceLayoutSetArgs()
+    try:
+        workspace = runtime.set_workspace_layout(
+            workspace_target.workspace_id,
+            layout_args.layout,
+            expected_revision=layout_args.expected_revision,
+            source_client_id=layout_args.client_id,
+        )
+    except ValueError as exc:
+        if "revision conflict" in str(exc):
+            raise CommandError("conflict", str(exc)) from exc
+        raise
+    payload = runtime.get_workspace_layout(workspace_target.workspace_id)
+    return CommandExecution(
+        workspace=workspace,
+        result=payload,
+        revision=int(payload["layout_revision"]),
+    )
+
+
 def _set_samples_retrieval_anchor(
     runtime: HyperViewRuntime,
     target: BaseModel,
@@ -689,6 +738,22 @@ def create_default_command_registry() -> CommandRegistry:
             target_model=PanelTarget,
             args_model=PanelStatePatchArgs,
             handler=_patch_panel_state,
+        ),
+        CommandSpec(
+            id="workspace.layout.get",
+            owner="backend",
+            summary="Read the persisted Dockview workspace layout.",
+            target_model=WorkspaceTarget,
+            args_model=EmptyArgs,
+            handler=_get_workspace_layout,
+        ),
+        CommandSpec(
+            id="workspace.layout.set",
+            owner="backend",
+            summary="Replace the persisted Dockview workspace layout.",
+            target_model=WorkspaceTarget,
+            args_model=WorkspaceLayoutSetArgs,
+            handler=_set_workspace_layout,
         ),
         CommandSpec(
             id="panel.samples.retrieval.set-anchor",
