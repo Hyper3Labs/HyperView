@@ -197,3 +197,35 @@ def test_hybrid_text_search_uses_rrf_and_is_opt_in() -> None:
     assert hybrid_response.status_code == 200
     assert hybrid_response.json()["metric"] == "hybrid_rrf"
     assert hybrid_response.json()["results"][0]["id"] == "fts-first"
+
+
+def test_text_search_provider_type_error_is_actionable_client_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset = Dataset("text_provider_error", persist=False)
+    dataset._storage.ensure_space(
+        model_id="stub-model",
+        dim=2,
+        config={"provider": "stub", "geometry": "euclidean", "modality": "multimodal"},
+        space_key="mixed-space",
+    )
+
+    def fail_to_embed(*_args: Any, **_kwargs: Any) -> list[Any]:
+        raise TypeError("argument 'query': Can't extract str to Vec")
+
+    monkeypatch.setattr(dataset, "find_similar_by_text", fail_to_embed)
+    app = create_app(dataset)
+    client = TestClient(
+        app,
+        headers={"Authorization": f"Bearer {app.state.api_token}"},
+    )
+
+    response = client.post(
+        "/api/search/text",
+        json={"query_text": "a red apple", "space_key": "mixed-space", "k": 3},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "Text query embedding failed: argument 'query': Can't extract str to Vec"
+    }

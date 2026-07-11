@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
@@ -10,6 +11,11 @@ import pytest
 from hyperview import Dataset
 from hyperview.control import CommandEnvelope, ControlService, create_default_command_registry
 from hyperview.core.sample import Sample
+from hyperview.embeddings.engine import EmbeddingEngine, EmbeddingSpec
+from hyperview.embeddings.providers.lancedb_providers import (
+    EmbedAnythingEmbeddings,
+    HyperModelsEmbeddings,
+)
 from hyperview.runtime import (
     HyperViewRuntime,
     ProviderRegistry,
@@ -45,6 +51,23 @@ class _CanonicalProviderRegistry:
     def instantiate(self, alias: str, **_kwargs: Any) -> Any:
         assert alias == "embed-anything"
         return self.provider
+
+
+class _FakeEmbedAnythingModel:
+    def __init__(self) -> None:
+        self.queries: list[Any] = []
+
+    def embed_query(self, query: Any) -> list[Any]:
+        self.queries.append(query)
+        return [SimpleNamespace(embedding=[1.0, 0.0])]
+
+
+class _FakeEmbedAnythingComputer:
+    def __init__(self, model: _FakeEmbedAnythingModel) -> None:
+        self.model = model
+
+    def _get_model(self) -> _FakeEmbedAnythingModel:
+        return self.model
 
 
 def _service(tmp_path: Path) -> ControlService:
@@ -149,6 +172,52 @@ def test_dataset_find_similar_by_text_uses_encoded_vector(tmp_path: Path) -> Non
 
     assert len(results) == 1
     assert results[0][0].id == "s0"
+
+
+def test_embed_anything_text_query_passes_list_to_model() -> None:
+    provider = EmbedAnythingEmbeddings()
+    model = _FakeEmbedAnythingModel()
+
+    with patch.object(
+        provider,
+        "_get_computer",
+        return_value=_FakeEmbedAnythingComputer(model),
+    ):
+        embeddings = provider.compute_query_embeddings("dog in park")
+
+    assert model.queries == [["dog in park"]]
+    assert np.asarray(embeddings[0]).tolist() == [1.0, 0.0]
+
+
+def test_hyper_models_image_only_model_does_not_claim_text_support() -> None:
+    provider = HyperModelsEmbeddings(name="hyper3-clip-v0.5")
+    provider._model_info = SimpleNamespace(input_name="image", geometry="hyperboloid", dim=513)
+
+    assert provider.supports == frozenset({"image"})
+
+    with pytest.raises(
+        ValueError,
+        match=r"hyper-models model 'hyper3-clip-v0.5' does not support text queries",
+    ):
+        provider.compute_query_embeddings("dog in park")
+
+
+def test_hyper_models_image_only_text_search_fails_before_encoding() -> None:
+    provider = HyperModelsEmbeddings(name="hyper3-clip-v0.5")
+    provider._model_info = SimpleNamespace(input_name="image", geometry="hyperboloid", dim=513)
+    engine = EmbeddingEngine()
+    spec = EmbeddingSpec(
+        provider="hyper-models",
+        model_id="hyper3-clip-v0.5",
+        modality="multimodal",
+    )
+    engine._cache[spec.content_hash()] = provider
+
+    with pytest.raises(
+        ValueError,
+        match=r"does not support required modality 'text'.*supported modalities: \['image'\]",
+    ):
+        engine.embed_texts(["dog in park"], spec)
 
 
 def test_legacy_embed_anything_space_resolves_canonical_provider() -> None:

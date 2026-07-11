@@ -1568,6 +1568,11 @@ def create_app(
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except TypeError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Text query embedding failed: {exc}",
+            ) from exc
 
         results = []
         for sample, distance in similar:

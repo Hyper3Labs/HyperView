@@ -88,7 +88,7 @@ class EmbedAnythingEmbeddings(EmbeddingFunction):
     ) -> list[np.ndarray | None]:
         if isinstance(query, str):
             model = self._get_computer()._get_model()
-            result = model.embed_query(query)
+            result = model.embed_query([query])
             if not result:
                 raise RuntimeError(f"EmbedAnything returned no embedding for text query: {query!r}")
             return [np.asarray(result[0].embedding, dtype=np.float32)]
@@ -112,7 +112,6 @@ class HyperModelsEmbeddings(EmbeddingFunction):
     name: str = "hycoclip-vit-s"
     checkpoint: str | None = None
     batch_size: int = 1
-    supports: ClassVar[frozenset[str]] = frozenset({"image", "text"})
 
     _model: Any = PrivateAttr(default=None)
     _model_info: Any = PrivateAttr(default=None)
@@ -162,6 +161,41 @@ class HyperModelsEmbeddings(EmbeddingFunction):
         assert self._model_info is not None
         return str(getattr(self._model_info, "geometry"))
 
+    @property
+    def supports(self) -> frozenset[str]:
+        supported = {"image"}
+        if self._supports_text_queries():
+            supported.add("text")
+        return frozenset(supported)
+
+    @staticmethod
+    def _declares_text_support(value: Any) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, str):
+            return value.strip().lower() in {"text", "texts"}
+        try:
+            return any(HyperModelsEmbeddings._declares_text_support(item) for item in value)
+        except TypeError:
+            return False
+
+    def _supports_text_queries(self) -> bool:
+        self._ensure_model_info()
+        assert self._model_info is not None
+        for attr in (
+            "supports",
+            "modalities",
+            "input_modalities",
+            "query_modes",
+            "input_name",
+        ):
+            if self._declares_text_support(getattr(self._model_info, attr, None)):
+                return True
+        return any(
+            getattr(self._model_info, attr, None) is not None
+            for attr in ("text_config", "text_input_name", "text_model")
+        )
+
     def compute_source_embeddings(
         self, inputs: Any, *args: Any, **kwargs: Any
     ) -> list[np.ndarray | None]:
@@ -203,6 +237,10 @@ class HyperModelsEmbeddings(EmbeddingFunction):
         self, query: Any, *args: Any, **kwargs: Any
     ) -> list[np.ndarray | None]:
         if isinstance(query, str):
+            if not self._supports_text_queries():
+                raise ValueError(
+                    f"hyper-models model '{self.name}' does not support text queries"
+                )
             self._ensure_model()
             assert self._model is not None
             encoder = getattr(self._model, "encode_text", None) or getattr(
