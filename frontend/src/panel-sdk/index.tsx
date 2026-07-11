@@ -5,8 +5,10 @@ import React, { useCallback, useMemo } from "react";
 import { useDockviewContext } from "@/components/DockviewContext";
 import { usePanelInstance } from "@/components/PanelHostContext";
 import {
+  apiRequest,
   apiUrl,
   fetchCollectionItems,
+  fetchDataset,
   fetchRuntimeState,
   getRuntimeClientId,
   isAbortError,
@@ -17,7 +19,7 @@ import {
 } from "@/lib/api";
 import { RUNTIME_PANEL_PREFIX } from "@/lib/dockviewPanelPolicy";
 import { useStore } from "@/store/useStore";
-import type { RuntimeCollection, RuntimeSnapshot, Sample } from "@/types";
+import type { DatasetInfo, RuntimeCollection, RuntimeSnapshot, Sample } from "@/types";
 
 interface CommandEnvelope {
   target?: Record<string, unknown>;
@@ -59,7 +61,7 @@ function buildUrl(path: string, params?: Record<string, string | number | boolea
 }
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
+  const response = await apiRequest(path, {
     ...init,
     headers: {
       Accept: "application/json",
@@ -73,6 +75,72 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return (await response.json()) as T;
+}
+
+export interface DatasetInfoResult {
+  dataset: DatasetInfo | null;
+  name: string | null;
+  labels: string[];
+  numSamples: number;
+  labelCounts: Map<string, number>;
+  loading: boolean;
+  error: string | null;
+}
+
+export function useDatasetInfo(): DatasetInfoResult {
+  const cachedDataset = useStore((state) => state.datasetInfo);
+  const setDatasetInfo = useStore((state) => state.setDatasetInfo);
+  const embeddingsByLayoutKey = useStore((state) => state.embeddingsByLayoutKey);
+  const activeLayoutKey = useStore((state) => state.activeLayoutKey);
+  const [loading, setLoading] = React.useState(cachedDataset === null);
+  const [error, setError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (cachedDataset) {
+      setLoading(false);
+      return;
+    }
+
+    const abort = new AbortController();
+    setLoading(true);
+    setError(null);
+    void fetchDataset(abort.signal)
+      .then(setDatasetInfo)
+      .catch((reason) => {
+        if (abort.signal.aborted || isAbortError(reason)) return;
+        setError(reason instanceof Error ? reason.message : "Failed to load dataset information");
+      })
+      .finally(() => {
+        if (!abort.signal.aborted) setLoading(false);
+      });
+    return () => abort.abort();
+  }, [cachedDataset, setDatasetInfo]);
+
+  const resolvedLayoutKey = activeLayoutKey ?? cachedDataset?.layouts?.[0]?.layout_key ?? null;
+  const embeddingLabels = resolvedLayoutKey
+    ? embeddingsByLayoutKey[resolvedLayoutKey]?.labels ?? null
+    : null;
+  const labelCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const label of embeddingLabels ?? []) {
+      const key = label ?? "undefined";
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return counts;
+  }, [embeddingLabels]);
+
+  return useMemo(
+    () => ({
+      dataset: cachedDataset,
+      name: cachedDataset?.name ?? null,
+      labels: cachedDataset?.labels ?? [],
+      numSamples: cachedDataset?.num_samples ?? 0,
+      labelCounts,
+      loading,
+      error,
+    }),
+    [cachedDataset, error, labelCounts, loading]
+  );
 }
 
 function workspaceTarget(workspaceId: string | null) {
@@ -127,10 +195,18 @@ export function useCommandClient(): HyperViewCommandClient {
   }, [applyRuntimeSnapshot, workspaceId]);
 }
 
-export function usePanelState() {
+export function usePanelState(panelIdOverride?: string) {
   const instance = usePanelInstance();
   const activeWorkspaceId = useStore((state) => state.activeWorkspaceId);
   const applyRuntimeSnapshot = useStore((state) => state.applyRuntimeSnapshot);
+  const fallbackState = useStore((state) =>
+    panelIdOverride ? state.panelStates[panelIdOverride] : undefined
+  );
+  const resolvedPanelId = instance.panelId ?? panelIdOverride ?? null;
+  const resolvedState = instance.panelId ? instance.state : fallbackState?.state ?? instance.state;
+  const resolvedStateRevision = instance.panelId
+    ? instance.stateRevision
+    : fallbackState?.state_revision ?? instance.stateRevision;
 
   const patchState = useCallback(
     async (
@@ -140,14 +216,14 @@ export function usePanelState() {
         expectedRevision?: number | null;
       }
     ) => {
-      if (!activeWorkspaceId || !instance.panelId) {
+      if (!activeWorkspaceId || !resolvedPanelId) {
         throw new Error("No active panel instance");
       }
       const payload = await runControlCommand({
         command: "workspace.panel.state.patch",
         target: {
           workspace_id: activeWorkspaceId,
-          panel_id: instance.panelId,
+          panel_id: resolvedPanelId,
         },
         args: {
           state: statePatch,
@@ -160,24 +236,24 @@ export function usePanelState() {
       applyRuntimeSnapshot(snapshot);
       return snapshot;
     },
-    [activeWorkspaceId, applyRuntimeSnapshot, instance.panelId]
+    [activeWorkspaceId, applyRuntimeSnapshot, resolvedPanelId]
   );
 
   return useMemo(
     () => ({
       panel: instance.panel,
-      panelId: instance.panelId,
+      panelId: resolvedPanelId,
       props: instance.props,
-      state: instance.state,
-      stateRevision: instance.stateRevision,
+      state: resolvedState,
+      stateRevision: resolvedStateRevision,
       patchState,
     }),
     [
       instance.panel,
-      instance.panelId,
+      resolvedPanelId,
       instance.props,
-      instance.state,
-      instance.stateRevision,
+      resolvedState,
+      resolvedStateRevision,
       patchState,
     ]
   );
@@ -237,20 +313,6 @@ export function useCollection(collectionId?: string | null): RuntimeCollection |
   }, [collectionId, runtimeCollections]);
 }
 
-function sampleMatchesCollection(sample: Sample, collection: RuntimeCollection | null) {
-  if (!collection || collection.kind === "all") return true;
-  if (collection.kind === "selection") return true;
-  if (collection.kind !== "filter") return false;
-
-  const { field, op, value } = collection.query;
-  if (field !== "label" || op !== "eq") return false;
-  return sample.label === (typeof value === "string" ? value : null);
-}
-
-// Kinds the server can materialize via GET /api/collections/{id}/items.
-// Everything else (selection, lasso, tool_result, extension) stays on the
-// legacy client-side filter over the loaded sample page.
-const MATERIALIZABLE_COLLECTION_KINDS = new Set(["all", "filter", "neighbors", "search"]);
 const DEFAULT_COLLECTION_PAGE_SIZE = 60;
 
 interface CollectionSamplesState {
@@ -275,15 +337,9 @@ export function useSamples(
 ) {
   const collection = useCollection(collectionId);
   const activeWorkspaceId = useStore((state) => state.activeWorkspaceId);
-  const storeSamples = useStore((state) => state.samples);
-  const totalSamples = useStore((state) => state.totalSamples);
-  const storeLoading = useStore((state) => state.isLoading);
-  const storeError = useStore((state) => state.error);
 
   const pageSize = Math.max(1, options?.pageSize ?? DEFAULT_COLLECTION_PAGE_SIZE);
-  const materialized = Boolean(
-    collection && MATERIALIZABLE_COLLECTION_KINDS.has(collection.kind)
-  );
+  const materialized = collection !== null;
   // created_at is part of the identity: replacing a collection under the same
   // id (e.g. a new search) must invalidate the loaded pages.
   const collectionKey = collection
@@ -381,16 +437,13 @@ export function useSamples(
       };
     }
 
-    const filteredSamples = storeSamples.filter((sample) =>
-      sampleMatchesCollection(sample, collection)
-    );
     return {
       collection,
-      samples: filteredSamples,
+      samples: [],
       scores: null,
-      total: collection ? filteredSamples.length : totalSamples,
-      loading: storeLoading,
-      error: storeError,
+      total: 0,
+      loading: false,
+      error: collectionId ? `Collection ${collectionId} is not available` : null,
       hasMore: false,
       loadMore: () => {},
     };
@@ -402,10 +455,7 @@ export function useSamples(
     remote,
     remoteError,
     remoteLoading,
-    storeError,
-    storeLoading,
-    storeSamples,
-    totalSamples,
+    collectionId,
   ]);
 }
 
@@ -468,6 +518,7 @@ export interface HyperViewPanelSdkGlobal {
     useSelection: typeof useSelection;
     useCollection: typeof useCollection;
     useSamples: typeof useSamples;
+    useDatasetInfo: typeof useDatasetInfo;
     useHostAdapter: typeof useHostAdapter;
   };
   createClient: typeof createHyperViewPanelClient;
@@ -491,6 +542,7 @@ export function installHyperViewPanelSdkGlobal() {
       useSelection,
       useCollection,
       useSamples,
+      useDatasetInfo,
       useHostAdapter,
     },
     createClient: createHyperViewPanelClient,

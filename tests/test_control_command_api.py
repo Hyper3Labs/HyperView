@@ -2,10 +2,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi.testclient import TestClient
+from fastapi.testclient import TestClient as FastAPITestClient
 
 from hyperview.runtime import HyperViewRuntime, ProviderRegistry, WorkspaceRegistry
 from hyperview.server.app import create_app
+
+
+class TestClient(FastAPITestClient):
+    def __init__(self, app):
+        super().__init__(
+            app,
+            headers={"Authorization": f"Bearer {app.state.api_token}"},
+        )
 
 
 def _client_with_panel(tmp_path: Path) -> TestClient:

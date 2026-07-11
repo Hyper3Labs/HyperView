@@ -17,11 +17,63 @@ const MISSING_LABEL_SENTINEL = "undefined";
 const READ_ONLY_DEMO_NOTICE = "Read-only demo — pip install hyperview for the full workbench";
 const RUNTIME_CLIENT_ID = `hv-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`;
 const SAMPLE_BATCH_SIZE = 1000;
+const SESSION_TOKEN_STORAGE_KEY = "hyperview.session-token";
+const MUTATING_METHODS = new Set(["POST", "PATCH", "DELETE"]);
+
+let sessionToken: string | null = null;
 
 declare global {
   interface Window {
     __HYPERVIEW_STATIC__?: boolean;
   }
+}
+
+function captureSessionToken(): void {
+  if (typeof window === "undefined") return;
+
+  const url = new URL(window.location.href);
+  const urlToken = url.searchParams.get("token");
+  if (urlToken) {
+    sessionToken = urlToken;
+    try {
+      window.sessionStorage.setItem(SESSION_TOKEN_STORAGE_KEY, urlToken);
+    } catch {
+      // In-memory auth still works when storage is unavailable.
+    }
+    url.searchParams.delete("token");
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+    return;
+  }
+
+  try {
+    sessionToken = window.sessionStorage.getItem(SESSION_TOKEN_STORAGE_KEY);
+  } catch {
+    sessionToken = null;
+  }
+}
+
+captureSessionToken();
+
+function isApiRequest(input: RequestInfo | URL): boolean {
+  const rawUrl = input instanceof Request ? input.url : String(input);
+  try {
+    return new URL(rawUrl, window.location.origin).pathname.startsWith("/api/");
+  } catch {
+    return rawUrl.startsWith("/api/") || rawUrl.includes("/api/");
+  }
+}
+
+/** Central request path for every mutating HyperView API call. */
+export function apiRequest(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const method = (init.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+  const headers = new Headers(input instanceof Request ? input.headers : undefined);
+  new Headers(init.headers).forEach((value, key) => headers.set(key, value));
+
+  if (sessionToken && MUTATING_METHODS.has(method) && isApiRequest(input)) {
+    headers.set("Authorization", `Bearer ${sessionToken}`);
+  }
+
+  return fetch(input, { ...init, headers });
 }
 
 export function apiUrl(path: string): string {
@@ -157,7 +209,7 @@ export async function runControlCommand(args: {
   if (isStaticBundle()) {
     return runStaticControlCommand(args);
   }
-  const res = await fetch(apiUrl("/control/commands/run"), {
+  const res = await apiRequest(apiUrl("/control/commands/run"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -240,7 +292,7 @@ export async function setActiveWorkspace(workspaceId: string): Promise<RuntimeSn
     showReadOnlyNotice();
     return fetchRuntimeState(workspaceId);
   }
-  const res = await fetch(apiUrl("/control/workspaces/set-active"), {
+  const res = await apiRequest(apiUrl("/control/workspaces/set-active"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -383,7 +435,7 @@ export async function fetchSamplesBatch(
       params.set("workspace_id", args.workspaceId);
     }
     const query = params.toString();
-    const res = await fetch(`${apiUrl("/samples/batch")}${query ? `?${query}` : ""}`, {
+    const res = await apiRequest(`${apiUrl("/samples/batch")}${query ? `?${query}` : ""}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -543,7 +595,7 @@ export async function fetchTextSimilarSamples(
   if (isStaticBundle()) {
     throw new ApiError("Text search is not available in read-only static demos", 400, null);
   }
-  const res = await fetch(apiUrl("/search/text"), {
+  const res = await apiRequest(apiUrl("/search/text"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -589,7 +641,7 @@ export async function setLayoutView(args: {
   if (isStaticBundle()) {
     return;
   }
-  const res = await fetch(apiUrl("/control/ui/layout-view"), {
+  const res = await apiRequest(apiUrl("/control/ui/layout-view"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -620,7 +672,7 @@ export async function fetchLassoSelection(args: {
   if (isStaticBundle()) {
     return fetchStaticLassoSelection(args);
   }
-  const res = await fetch(apiUrl("/selection/lasso"), {
+  const res = await apiRequest(apiUrl("/selection/lasso"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

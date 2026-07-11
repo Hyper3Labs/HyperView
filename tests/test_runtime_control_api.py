@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from fastapi.testclient import TestClient
+from fastapi.testclient import TestClient as FastAPITestClient
 from PIL import Image
 
 import hyperview.ui as hv_ui
@@ -16,6 +16,14 @@ from hyperview.core.sample import Sample
 from hyperview.extensions import discover_local_extensions
 from hyperview.runtime import CustomPanelSpec, HyperViewRuntime, ProviderRegistry, WorkspaceRegistry
 from hyperview.server.app import MAX_SAMPLE_PAGE_SIZE, create_app
+
+
+class TestClient(FastAPITestClient):
+    def __init__(self, app):
+        super().__init__(
+            app,
+            headers={"Authorization": f"Bearer {app.state.api_token}"},
+        )
 
 
 class LocalCheckpointProvider:

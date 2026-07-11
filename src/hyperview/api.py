@@ -22,6 +22,13 @@ from hyperview.control import CommandEnvelope, ControlService, create_default_co
 from hyperview.core.dataset import Dataset
 from hyperview.runtime import HyperViewRuntime, ProviderRegistry
 from hyperview.server.app import create_app, set_runtime
+from hyperview.server.security import (
+    browser_url,
+    mint_api_token,
+    read_server_info,
+    remove_server_info,
+    write_server_info,
+)
 from hyperview.static_export import (
     DEFAULT_SIMILARITY_EXPORT_K,
     export_runtime_workspace,
@@ -133,9 +140,15 @@ class Session:
         self.host = host
         self.port = port
         self._controls_runtime = controls_runtime
+        if controls_runtime:
+            self.api_token = mint_api_token()
+        else:
+            server_info = read_server_info(port)
+            existing_token = server_info.get("token") if server_info is not None else None
+            self.api_token = existing_token if isinstance(existing_token, str) else None
         # Prefer a browser-connectable host for user-facing URLs.
         # When binding to 0.0.0.0, users should connect via 127.0.0.1 locally.
-        self.url = f"http://{self._connect_host}:{port}"
+        self.url = browser_url(f"http://{self._connect_host}:{port}", self.api_token)
         self._server_thread: threading.Thread | None = None
         self._server: uvicorn.Server | None = None
         self._startup_error: BaseException | None = None
@@ -156,12 +169,20 @@ class Session:
     def _run_server(self):
         try:
             set_runtime(self.runtime)
-            app = create_app(runtime=self.runtime, session_id=self.session_id)
+            write_server_info(self.port, self.api_token)
+            app = create_app(
+                runtime=self.runtime,
+                session_id=self.session_id,
+                api_token=self.api_token,
+                port=self.port,
+            )
             config = uvicorn.Config(app, host=self.host, port=self.port, log_level="warning")
             self._server = uvicorn.Server(config)
             self._server.run()
         except BaseException as exc:
             self._startup_error = exc
+        finally:
+            remove_server_info(self.port, self.api_token)
 
     def start(self, background: bool = True):
         """Start the visualizer server."""
@@ -274,7 +295,7 @@ class Session:
                 from IPython.display import HTML, display
 
                 proxy_url = eval_js(f"google.colab.kernel.proxyPort({self.port})")
-                app_url = str(proxy_url).rstrip("/") + "/"
+                app_url = browser_url(str(proxy_url).rstrip("/") + "/", self.api_token)
 
                 display(
                     HTML(

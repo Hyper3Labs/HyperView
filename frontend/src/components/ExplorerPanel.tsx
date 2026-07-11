@@ -1,44 +1,51 @@
 "use client";
 
 import React from "react";
-import { useStore } from "@/store/useStore";
 import { Panel } from "./Panel";
 import { PanelHeader } from "./PanelHeader";
 import { Search, Tag } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FALLBACK_LABEL_COLOR, MISSING_LABEL_COLOR, normalizeLabel } from "@/lib/labelColors";
 import { useLabelLegend } from "./useLabelLegend";
-import { setLabelFilterCollection } from "@/lib/api";
+import {
+  useCollection,
+  useCommandClient,
+  useDatasetInfo,
+  usePanelState,
+} from "@/panel-sdk";
 
 interface ExplorerPanelProps {
   className?: string;
 }
 
 export function ExplorerPanel({ className }: ExplorerPanelProps) {
-  const {
-    datasetInfo,
-    embeddingsByLayoutKey,
-    activeLayoutKey,
-    labelFilter,
-    setLabelFilter,
-    activeWorkspaceId,
-    applyRuntimeSnapshot,
-  } = useStore();
+  const dataset = useDatasetInfo();
+  const commandClient = useCommandClient();
+  const { state } = usePanelState("samples");
+  const collectionId = typeof state.collection_id === "string" ? state.collection_id : null;
+  const collection = useCollection(collectionId);
   const [labelSearch, setLabelSearch] = React.useState("");
   const [isSearchOpen, setIsSearchOpen] = React.useState(false);
   const searchInputRef = React.useRef<HTMLInputElement>(null);
 
-  const resolvedLayoutKey =
-    activeLayoutKey ?? datasetInfo?.layouts?.[0]?.layout_key ?? null;
-  const embeddings = resolvedLayoutKey
-    ? embeddingsByLayoutKey[resolvedLayoutKey] ?? null
-    : null;
+  const labelFilter = React.useMemo(() => {
+    if (collection?.kind !== "filter") return null;
+    const { field, op, value } = collection.query;
+    if (field !== "label" || op !== "eq") return null;
+    return normalizeLabel(typeof value === "string" ? value : null);
+  }, [collection]);
 
   const {
     labelCounts,
     labelColorMap,
     legendLabels,
-  } = useLabelLegend({ datasetInfo, embeddings, labelSearch, labelFilter });
+  } = useLabelLegend({
+    datasetInfo: dataset.dataset,
+    embeddings: null,
+    labelSearch,
+    labelFilter,
+    labelCountsOverride: dataset.labelCounts,
+  });
 
   const hasCounts = labelCounts.size > 0;
 
@@ -60,20 +67,21 @@ export function ExplorerPanel({ className }: ExplorerPanelProps) {
 
   const applyLabelFilter = React.useCallback(
     (nextLabel: string | null) => {
-      setLabelFilter(nextLabel);
-      if (!activeWorkspaceId) return;
-
-      void setLabelFilterCollection({
-        workspaceId: activeWorkspaceId,
-        value: nextLabel,
-        clear: nextLabel === null,
-      })
-        .then(applyRuntimeSnapshot)
+      void commandClient
+        .runCommand("collection.filter.set", {
+          args: {
+            field: "label",
+            ...(nextLabel === null
+              ? { clear: true }
+              : { value: nextLabel === "undefined" ? null : nextLabel }),
+            source: "explorer",
+          },
+        })
         .catch((err) => {
           console.error("Failed to persist label filter:", err);
         });
     },
-    [activeWorkspaceId, applyRuntimeSnapshot, setLabelFilter]
+    [commandClient]
   );
 
   return (

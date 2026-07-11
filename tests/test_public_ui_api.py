@@ -5,13 +5,21 @@ from uuid import uuid4
 
 import numpy as np
 import pytest
-from fastapi.testclient import TestClient
+from fastapi.testclient import TestClient as FastAPITestClient
 
 import hyperview as hv
 import hyperview.api as hv_api
 from hyperview.core.sample import Sample
 from hyperview.runtime import HyperViewRuntime
 from hyperview.server.app import create_app
+
+
+class TestClient(FastAPITestClient):
+    def __init__(self, app):
+        super().__init__(
+            app,
+            headers={"Authorization": f"Bearer {app.state.api_token}"},
+        )
 
 
 def _make_dataset() -> hv.Dataset:

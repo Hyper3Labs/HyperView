@@ -15,6 +15,7 @@ interface UseLabelLegendArgs {
   embeddings: EmbeddingsData | null;
   labelSearch?: string;
   labelFilter?: string | null;
+  labelCountsOverride?: Map<string, number>;
 }
 
 export function useLabelLegend({
@@ -22,10 +23,12 @@ export function useLabelLegend({
   embeddings,
   labelSearch = "",
   labelFilter = null,
+  labelCountsOverride,
 }: UseLabelLegendArgs) {
   const labelColorMapId = useColorSettings((state) => state.labelColorMapId);
 
-  const labelCounts = useMemo(() => buildLabelCounts(embeddings), [embeddings]);
+  const computedLabelCounts = useMemo(() => buildLabelCounts(embeddings), [embeddings]);
+  const labelCounts = labelCountsOverride ?? computedLabelCounts;
 
   const labelUniverse = useMemo(
     () => buildLabelUniverse(datasetInfo?.labels ?? [], embeddings?.labels ?? null),

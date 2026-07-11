@@ -17,6 +17,28 @@ const config = [
     ignores: ["**/.next/**", "**/out/**", "**/node_modules/**"],
   },
   ...compat.extends("next/core-web-vitals"),
+  {
+    files: ["src/panels/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@/store/useStore",
+              message: "Panels must access runtime state through @/panel-sdk.",
+              allowTypeImports: true,
+            },
+            {
+              name: "@/lib/api",
+              message: "Panels must access data and commands through @/panel-sdk.",
+              allowTypeImports: true,
+            },
+          ],
+        },
+      ],
+    },
+  },
 ];
 
 export default config;

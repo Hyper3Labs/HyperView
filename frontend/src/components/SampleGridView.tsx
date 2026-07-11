@@ -19,6 +19,9 @@ interface SampleGridViewProps {
   className?: string;
   showRankSimilarityBadge?: boolean;
   distanceMetric?: string | null;
+  controlledSelectedIds?: ReadonlySet<string>;
+  onSelectionChange?: (ids: string[]) => void;
+  gridSize?: "small" | "medium" | "large";
 }
 
 const BOX_SPACING = 2;
@@ -118,20 +121,26 @@ export function SampleGridView({
   className,
   showRankSimilarityBadge = false,
   distanceMetric = null,
+  controlledSelectedIds,
+  onSelectionChange,
+  gridSize,
 }: SampleGridViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(0);
 
   const {
-    selectedIds,
+    selectedIds: storeSelectedIds,
     isLassoSelection,
     selectionSource,
     toggleSelection,
     addToSelection,
     setHoveredId,
     hoveredId,
-    sampleGridSize,
+    sampleGridSize: storeSampleGridSize,
   } = useStore();
+
+  const selectedIds = controlledSelectedIds ?? storeSelectedIds;
+  const sampleGridSize = gridSize ?? storeSampleGridSize;
 
   const targetRowHeight = useMemo(() => getTargetRowHeight(sampleGridSize), [sampleGridSize]);
 
@@ -209,6 +218,28 @@ export function SampleGridView({
 
   const handleClick = useCallback(
     (sample: Sample, event: React.MouseEvent) => {
+      if (onSelectionChange) {
+        if (event.metaKey || event.ctrlKey) {
+          const next = new Set(selectedIds);
+          if (next.has(sample.id)) next.delete(sample.id);
+          else next.add(sample.id);
+          onSelectionChange(Array.from(next));
+        } else if (event.shiftKey && selectedIds.size > 0) {
+          const selectedArray = Array.from(selectedIds);
+          const lastSelected = selectedArray[selectedArray.length - 1];
+          const lastIndex = samples.findIndex((candidate) => candidate.id === lastSelected);
+          const currentIndex = samples.findIndex((candidate) => candidate.id === sample.id);
+          if (lastIndex !== -1 && currentIndex !== -1) {
+            const start = Math.min(lastIndex, currentIndex);
+            const end = Math.max(lastIndex, currentIndex);
+            onSelectionChange(samples.slice(start, end + 1).map((candidate) => candidate.id));
+          }
+        } else {
+          onSelectionChange([sample.id]);
+        }
+        return;
+      }
+
       if (event.metaKey || event.ctrlKey) {
         toggleSelection(sample.id);
       } else if (event.shiftKey && selectedIds.size > 0) {
@@ -227,7 +258,7 @@ export function SampleGridView({
         useStore.getState().setSelectedIds(new Set([sample.id]), "grid");
       }
     },
-    [addToSelection, samples, selectedIds, toggleSelection]
+    [addToSelection, onSelectionChange, samples, selectedIds, toggleSelection]
   );
 
   const virtualRows = virtualizer.getVirtualItems();

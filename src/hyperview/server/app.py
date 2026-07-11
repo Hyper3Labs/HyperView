@@ -4,13 +4,14 @@ import asyncio
 import io
 import json
 import os
+import secrets
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 
@@ -30,6 +31,7 @@ from hyperview.runtime import (
     HyperViewRuntime,
     LayoutViewState,
 )
+from hyperview.server.security import auth_disabled, mint_api_token
 from hyperview.storage.metrics import distance_metric_for_space
 from hyperview.storage.schema import parse_layout_dimension, space_key_from_index_ref
 
@@ -447,6 +449,8 @@ def create_app(
     dataset: Dataset | None = None,
     runtime: HyperViewRuntime | None = None,
     session_id: str | None = None,
+    api_token: str | None = None,
+    port: int = 6262,
 ) -> FastAPI:
     """Create the FastAPI application.
 
@@ -472,6 +476,8 @@ def create_app(
         description="Dataset visualization with hyperbolic embeddings",
         version=__version__,
     )
+    resolved_api_token = None if auth_disabled() else api_token or mint_api_token()
+    app.state.api_token = resolved_api_token
 
     def get_runtime() -> HyperViewRuntime:
         """Dependency that returns the current runtime or raises 404."""
@@ -490,11 +496,56 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    # CORS middleware for development
+    @app.middleware("http")
+    async def require_api_token(request: Request, call_next):
+        if request.url.path.startswith("/api/") and request.method in {
+            "POST",
+            "PATCH",
+            "DELETE",
+        }:
+            query_token = request.query_params.get("token")
+            authorization = request.headers.get("authorization", "")
+            scheme, _, header_token = authorization.partition(" ")
+            bearer_token = header_token.strip() if scheme.lower() == "bearer" else None
+
+            token_is_valid = resolved_api_token is None or any(
+                candidate is not None
+                and secrets.compare_digest(candidate, resolved_api_token)
+                for candidate in (bearer_token, query_token)
+            )
+
+            if not token_is_valid:
+                return JSONResponse(
+                    status_code=401,
+                    content={
+                        "detail": (
+                            "Missing or invalid HyperView session token. "
+                            "Send Authorization: Bearer <token> or ?token=<token>."
+                        )
+                    },
+                )
+        return await call_next(request)
+
+    extra_origins = [
+        origin.strip()
+        for origin in os.environ.get("HYPERVIEW_EXTRA_ORIGINS", "").split(",")
+        if origin.strip()
+    ]
+    allowed_origins = list(
+        dict.fromkeys(
+            [
+                f"http://127.0.0.1:{port}",
+                f"http://localhost:{port}",
+                "http://localhost:6363",
+                "http://127.0.0.1:6363",
+                *extra_origins,
+            ]
+        )
+    )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
+        allow_origins=allowed_origins,
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
 from typing import Any, cast
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from hyperview import Dataset
@@ -16,6 +18,7 @@ from hyperview.api import Session
 from hyperview.core.selection import OrbitViewState3D
 from hyperview.figures import FigureRenderOptions, render_layout_figure
 from hyperview.runtime import HyperViewRuntime, ProviderRegistry, WorkspaceRegistry
+from hyperview.server.security import read_server_info
 from hyperview.static_export import DEFAULT_SIMILARITY_EXPORT_K, export_workspace
 from hyperview.storage.schema import parse_layout_dimension
 
@@ -25,7 +28,7 @@ def _read_json_response(response: Any) -> Any:
 
 
 def _http_get_json(url: str) -> Any:
-    request = Request(url, headers={"Accept": "application/json"})
+    request = Request(url, headers=_http_headers(url))
     with urlopen(request, timeout=5.0) as response:
         return _read_json_response(response)
 
@@ -36,10 +39,7 @@ def _http_send_json(url: str, payload: dict[str, Any], method: str = "POST") -> 
         url,
         data=data,
         method=method,
-        headers={
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        },
+        headers=_http_headers(url, content_type=True),
     )
 
     try:
@@ -50,6 +50,23 @@ def _http_send_json(url: str, payload: dict[str, Any], method: str = "POST") -> 
         raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
     except URLError as exc:
         raise RuntimeError(f"Failed to reach HyperView server: {exc}") from exc
+
+
+def _http_headers(url: str, *, content_type: bool = False) -> dict[str, str]:
+    headers = {"Accept": "application/json"}
+    if content_type:
+        headers["Content-Type"] = "application/json"
+
+    token = os.environ.get("HYPERVIEW_API_TOKEN")
+    if token is None:
+        parsed = urlsplit(url)
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        info = read_server_info(port)
+        discovered_token = info.get("token") if info is not None else None
+        token = discovered_token if isinstance(discovered_token, str) else None
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
 
 def _parse_scalar(value: str) -> Any:

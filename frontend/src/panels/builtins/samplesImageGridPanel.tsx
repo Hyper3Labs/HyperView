@@ -4,10 +4,9 @@ import React from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { Grid3X3, Settings2, Undo2 } from "lucide-react";
 
-import { SampleCollectionState } from "@/components/SampleCollectionState";
-import { SampleDerivedSpace } from "@/components/SampleDerivedSpace";
-import { SampleGridView } from "@/components/SampleGridView";
 import { Panel } from "@/components/Panel";
+import { SampleCollectionState } from "@/components/SampleCollectionState";
+import { SampleGridView } from "@/components/SampleGridView";
 import {
   PanelToolbar,
   PanelToolbarButton,
@@ -15,26 +14,20 @@ import {
   type PanelToolbarItem,
 } from "@/components/PanelToolbar";
 import {
-  fetchSamplesBatch,
-  fetchSimilarSamples,
-  fetchTextSimilarSamples,
-  isAbortError,
-  runControlCommand,
-  runtimeSnapshotFromCommandResult,
-} from "@/lib/api";
-import { findLayoutByKey } from "@/lib/layouts";
-import {
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import {
-  defineBuiltInCenterPanel,
-} from "@/panels/definitions";
-import { useHyperViewSamplesView } from "@/panels/runtime";
-import { useStore } from "@/store/useStore";
-import type { Sample, SimilarSample } from "@/types";
+  useCollection,
+  useCommandClient,
+  usePanelState,
+  useSamples,
+  useSelection,
+} from "@/panel-sdk";
+import { defineBuiltInCenterPanel } from "@/panels/definitions";
+import type { RuntimeCollection, Sample } from "@/types";
 
 const SAMPLE_GRID_SIZE_OPTIONS = [
   { value: "small", label: "Small" },
@@ -43,236 +36,61 @@ const SAMPLE_GRID_SIZE_OPTIONS = [
 ] as const;
 
 type SampleGridSize = (typeof SAMPLE_GRID_SIZE_OPTIONS)[number]["value"];
-type SamplesPanelMode = "auto" | "browse" | "ranked";
-
-interface SamplesPanelRankParams extends Record<string, unknown> {
-  anchorSampleId?: string;
-  queryText?: string;
-  layoutKey?: string;
-  spaceKey?: string;
-  k?: number;
-  source?: string;
-}
 
 interface SamplesPanelParams extends Record<string, unknown> {
   panelId?: string;
-  mode?: SamplesPanelMode;
-  rank?: SamplesPanelRankParams;
+  mode?: "auto" | "browse" | "ranked";
 }
 
-const DEFAULT_RANK_LIMIT = 18;
-const RANK_PAGE_INCREMENT = 12;
-const MAX_RANK_LIMIT = 96;
-
-function sourceLabel(source: "dataset" | "lasso") {
-  if (source === "lasso") return "Lasso";
-  return "Dataset";
+function stringState(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-function normalizeRankLimit(value: unknown) {
-  if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_RANK_LIMIT;
-  return Math.max(1, Math.min(MAX_RANK_LIMIT, Math.round(value)));
+function collectionSource(collection: RuntimeCollection | null): string {
+  if (!collection) return "Collection";
+  if (collection.kind === "all") return "Dataset";
+  if (collection.kind === "lasso") return "Lasso";
+  if (collection.kind === "neighbors") return "Neighbors";
+  if (collection.kind === "search") return "Search";
+  if (collection.kind === "filter") return "Filter";
+  return collection.kind.replaceAll("_", " ");
+}
+
+function collectionFilterLabel(collection: RuntimeCollection | null): string | null {
+  if (collection?.kind !== "filter") return null;
+  const value = collection.query.value;
+  return typeof value === "string" ? value : value === null ? "undefined" : null;
+}
+
+function collectionQueryText(collection: RuntimeCollection | null): string | null {
+  if (collection?.kind !== "search") return null;
+  return stringState(collection.query.queryText ?? collection.query.query_text);
 }
 
 function useSamplesPanelCommands() {
-  const activeWorkspaceId = useStore((state) => state.activeWorkspaceId);
-  const applyRuntimeSnapshot = useStore((state) => state.applyRuntimeSnapshot);
-  const clearLassoSelection = useStore((state) => state.clearLassoSelection);
+  const commandClient = useCommandClient();
 
   const searchByText = React.useCallback(
-    async (options: { queryText: string; source?: string | null }) => {
-      if (!activeWorkspaceId) {
-        throw new Error("No active workspace");
-      }
-      clearLassoSelection();
-      const payload = await runControlCommand({
-        command: "panel.samples.retrieval.set-text-query",
-        target: { workspace_id: activeWorkspaceId },
-        args: {
-          query_text: options.queryText,
-          source: options.source ?? "samples-panel",
-        },
-      });
-      const snapshot = runtimeSnapshotFromCommandResult(payload);
-      applyRuntimeSnapshot(snapshot);
-      return snapshot;
-    },
-    [activeWorkspaceId, applyRuntimeSnapshot, clearLassoSelection]
+    (queryText: string) =>
+      commandClient.runCommand("panel.samples.retrieval.set-text-query", {
+        args: { query_text: queryText, source: "samples-panel" },
+      }),
+    [commandClient]
   );
 
-  const clearQueryContext = React.useCallback(async () => {
-    if (!activeWorkspaceId) {
-      throw new Error("No active workspace");
-    }
-    clearLassoSelection();
-    const payload = await runControlCommand({
-      command: "panel.samples.retrieval.clear",
-      target: { workspace_id: activeWorkspaceId },
-    });
-    const snapshot = runtimeSnapshotFromCommandResult(payload);
-    applyRuntimeSnapshot(snapshot);
-    return snapshot;
-  }, [activeWorkspaceId, applyRuntimeSnapshot, clearLassoSelection]);
+  const clearCollection = React.useCallback(
+    () => commandClient.runCommand("panel.samples.retrieval.clear"),
+    [commandClient]
+  );
 
   return React.useMemo(
-    () => ({
-      searchByText,
-      clearQueryContext,
-      clearLassoSelection,
-    }),
-    [clearLassoSelection, clearQueryContext, searchByText]
+    () => ({ searchByText, clearCollection }),
+    [clearCollection, searchByText]
   );
-}
-
-function getRankAnchorFromSelection(selectedIds: Set<string>) {
-  if (selectedIds.size !== 1) return null;
-  return Array.from(selectedIds)[0] ?? null;
-}
-
-function useRankedSamplesPanel(rank: SamplesPanelRankParams | undefined, enabled: boolean) {
-  const datasetInfo = useStore((state) => state.datasetInfo);
-  const selectedIds = useStore((state) => state.selectedIds);
-  const loadedSamples = useStore((state) => state.samples);
-
-  const configuredLimit = normalizeRankLimit(rank?.k);
-  const [limit, setLimit] = React.useState(configuredLimit);
-  const [anchorSample, setAnchorSample] = React.useState<Sample | null>(null);
-  const [rankedSamples, setRankedSamples] = React.useState<SimilarSample[]>([]);
-  const [metric, setMetric] = React.useState<string | null>(null);
-  const [loading, setLoading] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
-
-  const selectedAnchorId = React.useMemo(
-    () => getRankAnchorFromSelection(selectedIds),
-    [selectedIds]
-  );
-  const queryText = enabled ? rank?.queryText ?? null : null;
-  const anchorSampleId = enabled && !queryText ? rank?.anchorSampleId ?? selectedAnchorId : null;
-  const layoutKey = rank?.layoutKey;
-  const spaceKey = rank?.spaceKey;
-
-  const loadedAnchorSample = React.useMemo(
-    () =>
-      anchorSampleId
-        ? loadedSamples.find((sample) => sample.id === anchorSampleId) ?? null
-        : null,
-    [anchorSampleId, loadedSamples]
-  );
-
-  React.useEffect(() => {
-    setLimit(configuredLimit);
-  }, [configuredLimit, anchorSampleId, queryText, layoutKey, spaceKey]);
-
-  React.useEffect(() => {
-    if (!enabled || (!anchorSampleId && !queryText)) {
-      setAnchorSample(null);
-      setRankedSamples([]);
-      setMetric(null);
-      setError(null);
-      setLoading(false);
-      return;
-    }
-
-    let cancelled = false;
-    const abort = new AbortController();
-    setLoading(true);
-    setError(null);
-
-    const rankedPromise = queryText
-      ? fetchTextSimilarSamples(queryText, {
-          k: limit,
-          layoutKey,
-          spaceKey: layoutKey ? undefined : spaceKey,
-          includeThumbnails: false,
-          signal: abort.signal,
-        }).then((response) => ({
-          anchor: null as Sample | null,
-          results: response.results,
-          metric: response.metric,
-        }))
-      : Promise.all([
-          (loadedAnchorSample
-            ? Promise.resolve(loadedAnchorSample)
-            : fetchSamplesBatch([anchorSampleId!]).then((samples) => samples[0] ?? null)),
-          fetchSimilarSamples(anchorSampleId!, {
-            k: limit,
-            layoutKey,
-            spaceKey: layoutKey ? undefined : spaceKey,
-            includeThumbnails: false,
-            signal: abort.signal,
-          }),
-        ]).then(([nextAnchorSample, response]) => ({
-          anchor: nextAnchorSample,
-          results: response.results.filter((sample) => sample.id !== anchorSampleId),
-          metric: response.metric,
-        }));
-
-    rankedPromise
-      .then(({ anchor, results, metric }) => {
-        if (cancelled || abort.signal.aborted) return;
-        setAnchorSample(anchor);
-        setRankedSamples(results);
-        setMetric(metric);
-      })
-      .catch((err) => {
-        if (cancelled || isAbortError(err)) return;
-        console.error("Failed to fetch ranked samples:", err);
-        setAnchorSample(loadedAnchorSample);
-        setRankedSamples([]);
-        setMetric(null);
-        setError(err instanceof Error ? err.message : "Failed to fetch ranked samples");
-      })
-      .finally(() => {
-        if (cancelled || abort.signal.aborted) return;
-        setLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-      abort.abort();
-    };
-  }, [anchorSampleId, enabled, layoutKey, limit, loadedAnchorSample, queryText, spaceKey]);
-
-  const sourceDescription = React.useMemo(() => {
-    if (queryText) return `"${queryText}"`;
-    if (!datasetInfo) return rank?.source ?? null;
-    const layout = layoutKey ? findLayoutByKey(datasetInfo.layouts, layoutKey) : null;
-    const resolvedSpaceKey = spaceKey ?? layout?.space_key ?? null;
-    const space =
-      resolvedSpaceKey === null
-        ? null
-        : datasetInfo.spaces.find((candidate) => candidate.space_key === resolvedSpaceKey) ??
-          null;
-    if (!space) return rank?.source ?? layoutKey ?? spaceKey ?? null;
-    const geometry = space.geometry ? ` · ${space.geometry}` : "";
-    const layoutMethod = layout?.method ? ` · ${layout.method}` : "";
-    return `${space.model_id}${geometry}${layoutMethod}`;
-  }, [datasetInfo, layoutKey, queryText, rank?.source, spaceKey]);
-
-  return {
-    anchorSampleId,
-    queryText,
-    anchorSample,
-    rankedSamples,
-    metric,
-    sourceDescription,
-    loading,
-    error,
-    hasMore: rankedSamples.length >= limit && limit < MAX_RANK_LIMIT,
-    loadMore: () => setLimit((current) => Math.min(MAX_RANK_LIMIT, current + RANK_PAGE_INCREMENT)),
-    scrollResetKey: [
-      "ranked",
-      anchorSampleId ?? "none",
-      queryText ?? "none",
-      layoutKey ?? "none",
-      spaceKey ?? "none",
-      limit,
-    ].join(":"),
-  };
 }
 
 function SamplesTextSearchBar() {
-  const { searchByText, clearQueryContext } = useSamplesPanelCommands();
+  const { searchByText, clearCollection } = useSamplesPanelCommands();
   const [query, setQuery] = React.useState("");
   const [submitting, setSubmitting] = React.useState(false);
 
@@ -283,7 +101,7 @@ function SamplesTextSearchBar() {
       if (!trimmed) return;
       setSubmitting(true);
       try {
-        await searchByText({ queryText: trimmed, source: "samples-panel" });
+        await searchByText(trimmed);
       } catch (error) {
         console.error("Failed to run text search:", error);
       } finally {
@@ -294,10 +112,7 @@ function SamplesTextSearchBar() {
   );
 
   return (
-    <form
-      onSubmit={handleSubmit}
-      className="flex items-center gap-2 border-b border-border px-3 py-2"
-    >
+    <form onSubmit={handleSubmit} className="flex items-center gap-2 border-b border-border px-3 py-2">
       <input
         value={query}
         onChange={(event) => setQuery(event.target.value)}
@@ -315,7 +130,7 @@ function SamplesTextSearchBar() {
         type="button"
         onClick={() => {
           setQuery("");
-          void clearQueryContext().catch((error) => {
+          void clearCollection().catch((error) => {
             console.error("Failed to clear text search:", error);
           });
         }}
@@ -330,87 +145,56 @@ function SamplesTextSearchBar() {
 export const SamplesImageGridPanel = React.memo(function SamplesImageGridPanel(
   props: IDockviewPanelProps<SamplesPanelParams>
 ) {
-  const { collection, derivedSpace } = useHyperViewSamplesView();
-  const { clearLassoSelection } = useSamplesPanelCommands();
-  const sampleGridSize = useStore((state) => state.sampleGridSize);
-  const setSampleGridSize = useStore((state) => state.setSampleGridSize);
+  const { state, patchState } = usePanelState("samples");
+  const collectionId = stringState(state.collection_id);
+  const collection = useCollection(collectionId);
+  const samplesPage = useSamples(collectionId, { pageSize: 60 });
+  const selection = useSelection();
+  const { clearCollection } = useSamplesPanelCommands();
   const panelMode = props.params?.mode ?? "auto";
-  const showRankedPanel = panelMode === "ranked";
-  const rankedPanel = useRankedSamplesPanel(props.params?.rank, showRankedPanel);
-  const showDefaultDerivedSpace = panelMode === "auto" && derivedSpace.visible;
+  const showRankedPanel = panelMode === "ranked" || collection?.kind === "neighbors";
+  const gridSize = SAMPLE_GRID_SIZE_OPTIONS.some((option) => option.value === state.grid_size)
+    ? (state.grid_size as SampleGridSize)
+    : "medium";
+  const selectedIds = React.useMemo(() => new Set(selection.selectedIds), [selection.selectedIds]);
+  const queryText = collectionQueryText(collection);
+  const filterLabel = collectionFilterLabel(collection);
+
+  const displayedSamples = React.useMemo(() => {
+    if (!samplesPage.scores) return samplesPage.samples;
+    return samplesPage.samples.map((sample) => {
+      const score = samplesPage.scores?.[sample.id];
+      return typeof score === "number" ? ({ ...sample, distance: score } as Sample) : sample;
+    });
+  }, [samplesPage.samples, samplesPage.scores]);
 
   const toolbarItems = React.useMemo<PanelToolbarItem[]>(
-    () => {
-      if (showRankedPanel) {
-        return [
-          {
-            id: "source",
-            label: "Source",
-            value: "Ranked",
-          },
-          {
-            id: "count",
-            label: "Results",
-            value: rankedPanel.rankedSamples.length.toLocaleString(),
-          },
-          ...(rankedPanel.queryText
-            ? [
-                {
-                  id: "query",
-                  label: "Query",
-                  value: rankedPanel.queryText,
-                } satisfies PanelToolbarItem,
-              ]
-            : rankedPanel.anchorSampleId
-            ? [
-                {
-                  id: "anchor",
-                  label: "Anchor",
-                  value: rankedPanel.anchorSampleId,
-                } satisfies PanelToolbarItem,
-              ]
-            : []),
-        ];
-      }
-
-      return [
-        {
-          id: "source",
-          label: "Source",
-          value: sourceLabel(collection.meta.source),
-        },
-        {
-          id: "count",
-          label: "Samples",
-          value: collection.total.toLocaleString(),
-        },
-        ...(collection.meta.labelFilter
-          ? [
-              {
-                id: "filter",
-                label: "Filter",
-                value: collection.meta.labelFilter,
-              } satisfies PanelToolbarItem,
-            ]
-          : []),
-      ];
-    },
-    [
-      collection.meta.labelFilter,
-      collection.meta.source,
-      collection.total,
-      rankedPanel.anchorSampleId,
-      rankedPanel.queryText,
-      rankedPanel.rankedSamples.length,
-      showRankedPanel,
-    ]
+    () => [
+      { id: "source", label: "Source", value: showRankedPanel ? "Ranked" : collectionSource(collection) },
+      {
+        id: "count",
+        label: showRankedPanel ? "Results" : "Samples",
+        value: samplesPage.total.toLocaleString(),
+      },
+      ...(queryText
+        ? [{ id: "query", label: "Query", value: queryText } satisfies PanelToolbarItem]
+        : []),
+      ...(filterLabel
+        ? [{ id: "filter", label: "Filter", value: filterLabel } satisfies PanelToolbarItem]
+        : []),
+    ],
+    [collection, filterLabel, queryText, samplesPage.total, showRankedPanel]
   );
 
   const toolbarActions = React.useMemo(
     () => (
       <>
-        {collection.meta.source === "lasso" ? (
-          <PanelToolbarButton onClick={clearLassoSelection}>
+        {collection?.kind === "lasso" ? (
+          <PanelToolbarButton
+            onClick={() => {
+              void clearCollection();
+            }}
+          >
             <Undo2 className="h-3 w-3" />
             Clear lasso
           </PanelToolbarButton>
@@ -418,16 +202,16 @@ export const SamplesImageGridPanel = React.memo(function SamplesImageGridPanel(
         <PanelToolbarMenu
           icon={<Settings2 className="h-3.5 w-3.5" />}
           label="Sample panel settings"
-          title={`Thumbnail size: ${sampleGridSize}`}
+          title={`Thumbnail size: ${gridSize}`}
           contentClassName="min-w-[220px]"
         >
-          <DropdownMenuLabel>
-            Thumbnail size
-          </DropdownMenuLabel>
+          <DropdownMenuLabel>Thumbnail size</DropdownMenuLabel>
           <DropdownMenuSeparator />
           <DropdownMenuRadioGroup
-            value={sampleGridSize}
-            onValueChange={(value) => setSampleGridSize(value as SampleGridSize)}
+            value={gridSize}
+            onValueChange={(value) => {
+              void patchState({ grid_size: value });
+            }}
           >
             {SAMPLE_GRID_SIZE_OPTIONS.map((option) => (
               <DropdownMenuRadioItem key={option.value} value={option.value}>
@@ -438,104 +222,50 @@ export const SamplesImageGridPanel = React.memo(function SamplesImageGridPanel(
         </PanelToolbarMenu>
       </>
     ),
-    [clearLassoSelection, collection.meta.source, sampleGridSize, setSampleGridSize]
+    [clearCollection, collection?.kind, gridSize, patchState]
   );
 
   return (
     <Panel className="h-full">
       <PanelToolbar items={toolbarItems} actions={toolbarActions} />
-
-      {showRankedPanel ? (
-        !rankedPanel.anchorSampleId && !rankedPanel.queryText ? (
-          <SampleCollectionState
-            title="No rank anchor"
-            description="Select one sample, run a text search, or set rank props on this panel."
-          />
-        ) : rankedPanel.queryText && rankedPanel.loading && rankedPanel.rankedSamples.length === 0 ? (
-          <SampleCollectionState
-            tone="loading"
-            title="Searching by text"
-            description={`Finding matches for "${rankedPanel.queryText}".`}
-          />
-        ) : !rankedPanel.queryText && rankedPanel.anchorSample === null && rankedPanel.loading ? (
-          <SampleCollectionState
-            tone="loading"
-            title="Loading ranked samples"
-            description="Resolving the anchor and ranking candidates."
-          />
-        ) : !rankedPanel.queryText && rankedPanel.anchorSample === null ? (
-          <SampleCollectionState
-            tone="error"
-            title="Could not load rank anchor"
-            description={rankedPanel.error ?? rankedPanel.anchorSampleId ?? "Unknown anchor"}
-          />
-        ) : rankedPanel.queryText ? (
-          <SampleGridView
-            samples={rankedPanel.rankedSamples}
-            onLoadMore={rankedPanel.loadMore}
-            hasMore={rankedPanel.hasMore}
-            scrollResetKey={rankedPanel.scrollResetKey}
-            showRankSimilarityBadge
-            distanceMetric={rankedPanel.metric}
-          />
-        ) : (
-          <SampleDerivedSpace
-            selectionSamples={[rankedPanel.anchorSample!]}
-            neighborSamples={rankedPanel.rankedSamples}
-            neighborsMetric={rankedPanel.metric}
-            neighborsSourceLabel={rankedPanel.sourceDescription}
-            neighborsLoading={rankedPanel.loading}
-            hasMoreNeighbors={rankedPanel.hasMore}
-            loadMoreNeighbors={rankedPanel.loadMore}
-            neighborsError={rankedPanel.error}
-            neighborsScrollResetKey={rankedPanel.scrollResetKey}
-            neighborsTitle="Ranked samples"
-          />
-        )
-      ) : showDefaultDerivedSpace ? (
-        <SampleDerivedSpace
-          selectionSamples={derivedSpace.selectionSamples}
-          neighborSamples={derivedSpace.neighborSamples}
-          neighborsMetric={derivedSpace.neighborsMetric}
-          neighborsSourceLabel={derivedSpace.neighborsSourceLabel}
-          neighborsLoading={derivedSpace.neighborsLoading}
-          hasMoreNeighbors={derivedSpace.hasMoreNeighbors}
-          loadMoreNeighbors={derivedSpace.loadMoreNeighbors}
-          neighborsError={derivedSpace.neighborsError}
-          neighborsScrollResetKey={derivedSpace.neighborsScrollResetKey}
-        />
-      ) : null}
-
       {!showRankedPanel ? <SamplesTextSearchBar /> : null}
 
-      {showRankedPanel ? null : collection.error ? (
-        <SampleCollectionState
-          tone="error"
-          title="Could not load samples"
-          description={collection.error}
-        />
-      ) : collection.loading && collection.samples.length === 0 ? (
+      {samplesPage.error ? (
+        <SampleCollectionState tone="error" title="Could not load samples" description={samplesPage.error} />
+      ) : samplesPage.loading && displayedSamples.length === 0 ? (
         <SampleCollectionState
           tone="loading"
-          title="Loading samples"
-          description="Preparing the active sample collection."
+          title={queryText ? "Searching by text" : "Loading samples"}
+          description={queryText ? `Finding matches for "${queryText}".` : "Preparing the active sample collection."}
         />
-      ) : collection.samples.length === 0 ? (
-        showDefaultDerivedSpace ? null : (
-          <SampleCollectionState
-            title={collection.emptyTitle}
-            description={collection.emptyDescription}
-          />
-        )
-      ) : !showDefaultDerivedSpace ? (
+      ) : !collectionId ? (
+        <SampleCollectionState
+          title="No sample collection"
+          description="Bind a collection to this panel to display its samples."
+        />
+      ) : displayedSamples.length === 0 ? (
+        <SampleCollectionState
+          title={filterLabel ? "No samples match this filter" : "No samples available"}
+          description={
+            filterLabel
+              ? "Clear the current label filter to return to the full dataset."
+              : "The collection has no samples to display."
+          }
+        />
+      ) : (
         <SampleGridView
-          samples={collection.samples}
-          onLoadMore={collection.loadMore}
-          hasMore={collection.hasMore}
-          scrollResetKey={collection.meta.scrollResetKey}
+          samples={displayedSamples}
+          onLoadMore={samplesPage.loadMore}
+          hasMore={samplesPage.hasMore}
+          scrollResetKey={`${collectionId}:${collection?.created_at ?? 0}`}
+          showRankSimilarityBadge={showRankedPanel}
+          controlledSelectedIds={selectedIds}
+          onSelectionChange={(ids) => {
+            void selection.setSelection(ids);
+          }}
+          gridSize={gridSize}
         />
-      ) : null
-      }
+      )}
     </Panel>
   );
 });
