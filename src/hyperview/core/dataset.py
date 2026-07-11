@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import math
@@ -276,12 +277,122 @@ class Dataset:
 
         return self.add_samples(samples, skip_existing=skip_existing)
 
+    def add_texts(
+        self,
+        records: Iterable[dict[str, Any]] | str | Path,
+        *,
+        text_field: str = "text",
+        label_field: str | None = "label",
+        id_field: str | None = "id",
+        skip_existing: bool = True,
+    ) -> tuple[int, int]:
+        """Add text records from dictionaries, JSONL, or CSV.
+
+        Input fields are mapped onto HyperView's canonical ``text``, ``label``,
+        and ``id`` fields. Any remaining values are retained under ``metadata``.
+        """
+        if not text_field:
+            raise ValueError("text_field must be a non-empty string")
+
+        source_records: Iterable[dict[str, Any]]
+        if isinstance(records, (str, Path)):
+            path = Path(records).expanduser()
+            if not path.exists() or not path.is_file():
+                raise ValueError(f"Text records file does not exist: {path}")
+            suffix = path.suffix.lower()
+            if suffix == ".jsonl":
+
+                def iter_jsonl() -> Iterator[dict[str, Any]]:
+                    with path.open(encoding="utf-8") as handle:
+                        for line_number, line in enumerate(handle, start=1):
+                            if not line.strip():
+                                continue
+                            value = json.loads(line)
+                            if not isinstance(value, dict):
+                                raise ValueError(
+                                    f"JSONL record {line_number} must be an object"
+                                )
+                            yield value
+
+                source_records = iter_jsonl()
+            elif suffix == ".csv":
+
+                def iter_csv() -> Iterator[dict[str, Any]]:
+                    with path.open(encoding="utf-8", newline="") as handle:
+                        yield from csv.DictReader(handle)
+
+                source_records = iter_csv()
+            else:
+                raise ValueError("Text records path must use a .jsonl or .csv extension")
+        else:
+            source_records = records
+
+        samples: list[Sample] = []
+        for index, record in enumerate(source_records):
+            if not isinstance(record, dict):
+                raise TypeError(f"Text record {index} must be a dictionary")
+            if text_field not in record:
+                raise ValueError(f"Text record {index} is missing field '{text_field}'")
+
+            text = str(record[text_field] or "").strip()
+            if not text:
+                raise ValueError(f"Text record {index} has an empty '{text_field}' value")
+
+            label: str | None = None
+            if label_field and record.get(label_field) is not None:
+                label = str(record[label_field])
+
+            if id_field and record.get(id_field) is not None:
+                sample_id = str(record[id_field]).strip()
+                if not sample_id:
+                    raise ValueError(f"Text record {index} has an empty '{id_field}' value")
+            else:
+                identity = json.dumps(record, sort_keys=True, default=str)
+                sample_id = f"text_{hashlib.sha256(f'{index}:{identity}'.encode()).hexdigest()[:12]}"
+
+            metadata_value = record.get("metadata")
+            metadata = dict(metadata_value) if isinstance(metadata_value, dict) else {}
+            mapped_fields = {text_field, "metadata"}
+            if label_field:
+                mapped_fields.add(label_field)
+            if id_field:
+                mapped_fields.add(id_field)
+            metadata.update(
+                {key: value for key, value in record.items() if key not in mapped_fields}
+            )
+
+            samples.append(
+                Sample(
+                    id=sample_id,
+                    filepath=None,
+                    label=label,
+                    text=text,
+                    modality="text",
+                    media_type="text/plain",
+                    metadata=metadata,
+                )
+            )
+
+        added, skipped = self.add_samples(samples, skip_existing=skip_existing)
+        if samples:
+            mapped_catalog: FieldCatalog = {
+                "id": FieldDefinition(
+                    type="scalar", nullable=False, source=id_field or "generated"
+                ),
+                "text": FieldDefinition(type="text", nullable=False, source=text_field),
+                "label": FieldDefinition(
+                    type="label", nullable=True, source=label_field or "unmapped"
+                ),
+            }
+            self._storage.register_fields(mapped_catalog)
+        return added, skipped
+
     def add_from_huggingface(
         self,
         dataset_name: str,
         config: str | None = None,
         split: str = "train",
-        image_key: str = "img",
+        image_key: str | None = "img",
         label_key: str | None = "fine_label",
         label_names_key: str | None = None,
         text_key: str | None = None,
@@ -294,8 +405,11 @@ class Dataset:
         skip_existing: bool = True,
         image_format: str = "auto",
     ) -> tuple[int, int]:
-        """Load samples from a Hugging Face dataset."""
+        """Load image, text, or paired samples from a Hugging Face dataset."""
         from hyperview.storage import StorageConfig
+
+        if not image_key and not text_key:
+            raise ValueError("At least one of image_key or text_key is required")
 
         source_index_key = "__hyperview_source_index"
 
@@ -357,7 +471,7 @@ class Dataset:
         if streaming:
             stream = ds
             if hasattr(stream, "select_columns"):
-                columns = [image_key]
+                columns = [key for key in (image_key,) if key]
                 if label_key:
                     columns.append(label_key)
                 if text_key:
@@ -467,12 +581,13 @@ class Dataset:
                     source_index = int(item.pop(source_index_key, i))
                 else:
                     source_index = selected_indices[i] if selected_indices is not None else i
-                image = item[image_key]
-
-                if isinstance(image, Image.Image):
-                    pil_image = image
-                else:
-                    pil_image = Image.fromarray(np.asarray(image))
+                pil_image: Image.Image | None = None
+                if image_key:
+                    image = item[image_key]
+                    if isinstance(image, Image.Image):
+                        pil_image = image
+                    else:
+                        pil_image = Image.fromarray(np.asarray(image))
 
                 label = None
                 if label_key and label_key in item:
@@ -489,13 +604,21 @@ class Dataset:
                         text = " ".join(str(part).strip() for part in raw_text if str(part).strip()) or None
                     elif raw_text is not None:
                         text = str(raw_text).strip() or None
+                if pil_image is None and text is None:
+                    raise ValueError(
+                        f"Hugging Face sample {source_index} has no non-empty "
+                        f"'{text_key}' value"
+                    )
 
-                modality = "multimodal" if text else "image"
+                modality = "multimodal" if pil_image is not None and text else (
+                    "image" if pil_image is not None else "text"
+                )
 
                 safe_name = dataset_name.replace("/", "_")
                 sample_id = f"{safe_name}_{config_name}_{fingerprint}_{split}_{source_index}"
 
-                if image_format == "auto":
+                image_path: Path | None = None
+                if pil_image is not None and image_format == "auto":
                     original_format = getattr(pil_image, "format", None)
                     if original_format in ("JPEG", "JPG"):
                         save_format = "JPEG"
@@ -503,10 +626,10 @@ class Dataset:
                     else:
                         save_format = "PNG"
                         ext = ".png"
-                elif image_format == "jpeg":
+                elif pil_image is not None and image_format == "jpeg":
                     save_format = "JPEG"
                     ext = ".jpg"
-                else:
+                elif pil_image is not None:
                     save_format = "PNG"
                     ext = ".png"
 
@@ -519,20 +642,25 @@ class Dataset:
                     "version": version,
                 }
 
-                image_path = media_dir / f"{sample_id}{ext}"
-                if not image_path.exists():
+                if pil_image is not None:
+                    image_path = media_dir / f"{sample_id}{ext}"
+                if image_path is not None and not image_path.exists():
                     if save_format == "JPEG" or pil_image.mode in ("RGBA", "P", "L"):
                         pil_image = pil_image.convert("RGB")
                     pil_image.save(image_path, format=save_format)
 
                 sample = Sample(
                     id=sample_id,
-                    filepath=str(image_path),
+                    filepath=str(image_path) if image_path is not None else None,
                     label=label,
                     text=text,
                     modality=modality,
                     metadata=metadata,
-                    media_type=_media_type_for_path(image_path),
+                    media_type=(
+                        _media_type_for_path(image_path)
+                        if image_path is not None
+                        else "text/plain"
+                    ),
                 )
 
                 samples.append(sample)
@@ -563,13 +691,29 @@ class Dataset:
             total = loaded
 
         num_added, skipped = self.add_samples(samples, skip_existing=skip_existing)
+        mapped_fields: FieldCatalog = {}
+        if image_key:
+            mapped_fields["filepath"] = FieldDefinition(
+                type="media", nullable=not bool(image_key), source=image_key
+            )
+        if text_key:
+            mapped_fields["text"] = FieldDefinition(
+                type="text", nullable=bool(image_key), source=text_key
+            )
+        if label_key:
+            mapped_fields["label"] = FieldDefinition(
+                type="label", nullable=True, source=label_key
+            )
+        if mapped_fields:
+            self._storage.register_fields(mapped_fields)
 
         if show_progress:
             print(
                 f"Prepared {loaded} samples in {_format_elapsed(time.perf_counter() - started_at)}",
                 flush=True,
             )
-            print(f"Images saved to: {media_dir}", flush=True)
+            if image_key:
+                print(f"Images saved to: {media_dir}", flush=True)
             if skipped > 0:
                 print(f"Skipped {skipped} existing samples", flush=True)
 
@@ -634,7 +778,11 @@ class Dataset:
             model_id=model,
             checkpoint=checkpoint,
             provider_kwargs=provider_kwargs,
-            modality="multimodal" if provider == "embed-anything" else "image",
+            modality=(
+                "multimodal"
+                if provider in {"embed-anything", "hyper-models"}
+                else "image"
+            ),
         )
 
         space_key, _num_computed, _num_skipped = compute_embeddings(
@@ -806,8 +954,9 @@ class Dataset:
         space_key: str | None = None,
         *,
         layout_key: str | None = None,
+        hybrid: bool = False,
     ) -> list[tuple[Sample, float]]:
-        """Find k most similar samples to a natural-language text query."""
+        """Find samples by text-vector similarity, optionally fused with FTS."""
         query = str(text or "").strip()
         if not query:
             raise ValueError("text query must be a non-empty string")
@@ -823,12 +972,70 @@ class Dataset:
 
         spec = self._embedding_spec_for_space(resolved_space_key)
         vector = get_engine().embed_texts([query], spec)[0]
-        return self._storage.find_similar_by_text(
+        candidate_k = max(k * 4, 20) if hybrid else k
+        vector_results = self._storage.find_similar_by_text(
             query,
-            k,
+            candidate_k,
             resolved_space_key,
             query_vector=vector,
         )
+        if not hybrid:
+            return vector_results
+
+        fts_results = self._find_text_matches(query, candidate_k)
+        reciprocal_rank_constant = 60
+        scores: dict[str, float] = {}
+        samples_by_id: dict[str, Sample] = {}
+        for ranked_results in (vector_results, fts_results):
+            for rank, result in enumerate(ranked_results, start=1):
+                sample = result[0] if isinstance(result, tuple) else result
+                samples_by_id[sample.id] = sample
+                scores[sample.id] = scores.get(sample.id, 0.0) + 1.0 / (
+                    reciprocal_rank_constant + rank
+                )
+
+        ranked_ids = sorted(scores, key=lambda sample_id: (-scores[sample_id], sample_id))
+        return [
+            (samples_by_id[sample_id], 1.0 / scores[sample_id])
+            for sample_id in ranked_ids[:k]
+        ]
+
+    def _find_text_matches(self, query: str, k: int) -> list[Sample]:
+        """Rank text matches using LanceDB FTS, with a memory-backend fallback."""
+        samples_table = getattr(self._storage, "_samples_table", None)
+        if samples_table is not None:
+            try:
+                rows = (
+                    samples_table.search(query, query_type="fts")
+                    .select(["id"])
+                    .limit(k)
+                    .to_list()
+                )
+                samples_by_id = {
+                    sample.id: sample
+                    for sample in self._storage.get_samples_by_ids(
+                        [str(row["id"]) for row in rows]
+                    )
+                }
+                return [
+                    samples_by_id[str(row["id"])]
+                    for row in rows
+                    if str(row["id"]) in samples_by_id
+                ]
+            except (RuntimeError, TypeError, ValueError):
+                # Tiny/in-memory datasets and older LanceDB builds may not have
+                # a usable FTS index yet; preserve deterministic search behavior.
+                pass
+
+        terms = [term for term in query.casefold().split() if term]
+        ranked: list[tuple[Sample, int]] = []
+        for sample in self.samples:
+            haystack = (sample.text or "").casefold()
+            score = sum(haystack.count(term) for term in terms)
+            if score:
+                ranked.append((sample, score))
+        ranked.sort(key=lambda item: (-item[1], item[0].id))
+        return [sample for sample, _score in ranked[:k]]
 
     def set_coords(
         self,

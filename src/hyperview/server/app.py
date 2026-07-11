@@ -1,6 +1,5 @@
 """FastAPI application for HyperView."""
 
-import asyncio
 import io
 import json
 import os
@@ -307,6 +306,7 @@ class TextSearchRequest(BaseModel):
     index_id: str | None = None
     layout_key: str | None = None
     include_thumbnails: bool = False
+    hybrid: bool = False
 
 
 def serialize_sample_for_response(
@@ -585,20 +585,26 @@ def create_app(
         client_id: str | None = Query(None),
     ):
         async def event_stream():
-            last_version = -1
+            snapshot = runtime_dep.snapshot(workspace_id)
+            last_version = snapshot["version"]
+            yield f"data: {json.dumps(snapshot)}\n\n"
             while True:
+                # Fifteen-second comments keep proxy connections alive without snapshots.
+                advanced_version = await runtime_dep.wait_for_version(
+                    last_version,
+                    timeout=15.0,
+                )
+                if advanced_version is None:
+                    yield ": keepalive\n\n"
+                    continue
                 snapshot = runtime_dep.snapshot(workspace_id)
-                if snapshot["version"] != last_version:
-                    last_version = snapshot["version"]
-                    if (
-                        client_id
-                        and runtime_dep.version_source_client_id == client_id
-                    ):
-                        await asyncio.sleep(0.5)
-                        continue
-                    payload = json.dumps(snapshot)
-                    yield f"data: {payload}\n\n"
-                await asyncio.sleep(0.5)
+                if snapshot["version"] <= last_version:
+                    continue
+                last_version = snapshot["version"]
+                if client_id and runtime_dep.version_source_client_id == client_id:
+                    continue
+                payload = json.dumps(snapshot)
+                yield f"data: {payload}\n\n"
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -1537,12 +1543,14 @@ def create_app(
         metric = distance_metric_for_space(space) if space is not None else "cosine"
 
         try:
-            similar = ds.find_similar_by_text(
-                query_text,
-                k=request.k,
-                space_key=resolved_space_key,
-                layout_key=request.layout_key,
-            )
+            search_kwargs = {
+                "k": request.k,
+                "space_key": resolved_space_key,
+                "layout_key": request.layout_key,
+            }
+            if request.hybrid:
+                search_kwargs["hybrid"] = True
+            similar = ds.find_similar_by_text(query_text, **search_kwargs)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1561,7 +1569,7 @@ def create_app(
             query_text=query_text,
             query_sample=None,
             space_key=resolved_space_key,
-            metric=metric,
+            metric="hybrid_rrf" if request.hybrid else metric,
             k=request.k,
             results=results,
         )

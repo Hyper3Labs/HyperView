@@ -195,6 +195,30 @@ class EmbeddingEngine:
         self._cache[cache_key] = func
         return func
 
+    def supported_modalities(self, spec: EmbeddingSpec) -> frozenset[str]:
+        """Return the input capabilities declared by a provider.
+
+        Providers predating the capability contract remain image-capable by
+        default, which preserves the existing ``embed_images`` behavior.
+        """
+        func = self.get_function(spec)
+        declared = getattr(func, "supports", None)
+        if declared is None:
+            return frozenset({"image"})
+        if isinstance(declared, str):
+            declared = {declared}
+        return frozenset(str(modality) for modality in declared)
+
+    def require_modalities(self, spec: EmbeddingSpec, modalities: set[str]) -> None:
+        """Raise a clear error if the provider cannot encode required inputs."""
+        supported = self.supported_modalities(spec)
+        missing = sorted(modalities - supported)
+        if missing:
+            raise ValueError(
+                f"Embedding provider '{spec.provider}' does not support required "
+                f"modality {missing[0]!r}; supported modalities: {sorted(supported)}"
+            )
+
     def embed_images(
         self,
         samples: list[Any],
@@ -213,6 +237,7 @@ class EmbeddingEngine:
         Returns:
             Array of shape (N, D) where N is len(samples) and D is embedding dim.
         """
+        self.require_modalities(spec, {"image"})
         provider_target = spec.model_id or spec.checkpoint or spec.provider
         if show_progress:
             print(
@@ -274,6 +299,8 @@ class EmbeddingEngine:
         self,
         texts: list[str],
         spec: EmbeddingSpec,
+        batch_size: int = 32,
+        show_progress: bool = False,
     ) -> np.ndarray:
         """Compute embeddings for text inputs.
 
@@ -284,11 +311,18 @@ class EmbeddingEngine:
         Returns:
             Array of shape (N, D).
         """
+        self.require_modalities(spec, {"text"})
         func = self.get_function(spec)
 
+        if hasattr(func, "set_progress_enabled"):
+            func.set_progress_enabled(show_progress)
+
         if hasattr(func, "generate_embeddings"):
-            out = func.generate_embeddings(texts)
-            return np.asarray(out, dtype=np.float32)
+            all_embeddings: list[np.ndarray] = []
+            for start in range(0, len(texts), batch_size):
+                out = func.generate_embeddings(texts[start : start + batch_size])
+                all_embeddings.extend(np.asarray(out, dtype=np.float32))
+            return np.asarray(all_embeddings, dtype=np.float32)
 
         embeddings: list[np.ndarray] = []
         for text in texts:

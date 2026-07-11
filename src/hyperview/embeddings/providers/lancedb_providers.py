@@ -11,7 +11,7 @@ Providers:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 from lancedb.embeddings import EmbeddingFunction, register
@@ -37,6 +37,7 @@ class EmbedAnythingEmbeddings(EmbeddingFunction):
 
     name: str = "openai/clip-vit-base-patch32"
     batch_size: int = 32
+    supports: ClassVar[frozenset[str]] = frozenset({"image", "text"})
 
     _computer: Any = PrivateAttr(default=None)
     _ndims: int | None = PrivateAttr(default=None)
@@ -111,6 +112,7 @@ class HyperModelsEmbeddings(EmbeddingFunction):
     name: str = "hycoclip-vit-s"
     checkpoint: str | None = None
     batch_size: int = 1
+    supports: ClassVar[frozenset[str]] = frozenset({"image", "text"})
 
     _model: Any = PrivateAttr(default=None)
     _model_info: Any = PrivateAttr(default=None)
@@ -200,6 +202,22 @@ class HyperModelsEmbeddings(EmbeddingFunction):
     def compute_query_embeddings(
         self, query: Any, *args: Any, **kwargs: Any
     ) -> list[np.ndarray | None]:
+        if isinstance(query, str):
+            self._ensure_model()
+            assert self._model is not None
+            encoder = getattr(self._model, "encode_text", None) or getattr(
+                self._model, "encode_texts", None
+            )
+            if encoder is None:
+                raise ValueError(
+                    f"hyper-models model '{self.name}' does not expose a text encoder"
+                )
+            encoded_output = encoder([query])
+            if hasattr(encoded_output, "detach"):
+                encoded_output = encoded_output.detach().cpu().numpy()
+            encoded = np.asarray(encoded_output, dtype=np.float32)
+            vector = encoded[0] if encoded.ndim > 1 else encoded
+            return [vector]
         return self.compute_source_embeddings([query], *args, **kwargs)
 
 
@@ -220,6 +238,7 @@ class TimmImageEmbeddings(EmbeddingFunction):
     name: str = "hf-hub:BVRA/MegaDescriptor-L-384"
     batch_size: int = 8
     device: str | None = None
+    supports: ClassVar[frozenset[str]] = frozenset({"image"})
 
     _model: Any = PrivateAttr(default=None)
     _transform: Any = PrivateAttr(default=None)

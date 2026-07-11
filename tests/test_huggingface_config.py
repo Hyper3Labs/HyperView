@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 from collections.abc import Iterator
 from pathlib import Path
@@ -11,7 +12,7 @@ from datasets import IterableDataset
 from PIL import Image
 
 from hyperview import Dataset
-from hyperview.cli import main
+from hyperview.cli import _validate_dataset_source_args, main
 
 
 class DummyHFDataset:
@@ -125,6 +126,20 @@ class DummyHFStreamingDataset:
         return iter(self._project_row(row) for row in self._rows)
 
 
+def test_huggingface_cli_accepts_text_key_without_image_key() -> None:
+    parser = argparse.ArgumentParser()
+    args = argparse.Namespace(
+        hf_dataset="example/text-corpus",
+        images_dir=None,
+        split="train",
+        image_key=None,
+        text_key="text",
+        hf_shuffle_buffer_size=1000,
+    )
+
+    _validate_dataset_source_args(parser, args)
+
+
 def test_add_from_huggingface_passes_subset_config(tmp_path: Path) -> None:
     dataset = Dataset("subset_demo", persist=False)
     hf_dataset = DummyHFDataset(
@@ -159,6 +174,38 @@ def test_add_from_huggingface_passes_subset_config(tmp_path: Path) -> None:
     assert sample.metadata["config"] == "default"
     assert sample.id.startswith("hyper3labs_jaguar-re-id_default_abcdef12_train_")
     assert dataset.last_requested_sample_ids == [sample.id]
+
+
+def test_add_from_huggingface_accepts_text_without_image(tmp_path: Path) -> None:
+    dataset = Dataset("text_only_hf", persist=False)
+    hf_dataset = DummyHFDataset(
+        [{"caption": "a text-only record", "label": "document"}]
+    )
+    hf_dataset.features = {"caption": object(), "label": object()}
+
+    with (
+        patch("hyperview.core.dataset.load_dataset", return_value=hf_dataset),
+        patch(
+            "hyperview.storage.StorageConfig.default",
+            return_value=DummyStorageConfig(tmp_path),
+        ),
+    ):
+        added, skipped = dataset.add_from_huggingface(
+            "example/text-corpus",
+            split="train",
+            image_key=None,
+            text_key="caption",
+            label_key="label",
+            show_progress=False,
+        )
+
+    assert (added, skipped) == (1, 0)
+    sample = dataset.samples[0]
+    assert sample.filepath is None
+    assert sample.text == "a text-only record"
+    assert sample.modality == "text"
+    assert sample.media_type == "text/plain"
+    assert dataset.fields["text"]["source"] == "caption"
 
 
 def test_add_from_huggingface_tracks_requested_ids_when_samples_already_exist(

@@ -10,6 +10,7 @@ import { useStore } from "@/store/useStore";
 import type { Sample } from "@/types";
 
 import { SampleTile } from "./SampleTile";
+import { getSampleAspectRatio } from "./tiles/sampleTileKind";
 
 interface SampleGridViewProps {
   samples: Sample[];
@@ -25,7 +26,6 @@ interface SampleGridViewProps {
 }
 
 const BOX_SPACING = 2;
-const DEFAULT_ASPECT_RATIO = 1;
 const MIN_LAYOUT_ASPECT_RATIO = 0.25;
 const MAX_LAYOUT_ASPECT_RATIO = 4;
 
@@ -36,11 +36,8 @@ function getTargetRowHeight(size: "small" | "medium" | "large"): number {
 }
 
 function getLayoutAspectRatio(sample: Sample): number {
-  if (sample.width && sample.height && sample.height > 0) {
-    const aspectRatio = sample.width / sample.height;
-    return Math.min(MAX_LAYOUT_ASPECT_RATIO, Math.max(MIN_LAYOUT_ASPECT_RATIO, aspectRatio));
-  }
-  return DEFAULT_ASPECT_RATIO;
+  const aspectRatio = getSampleAspectRatio(sample);
+  return Math.min(MAX_LAYOUT_ASPECT_RATIO, Math.max(MIN_LAYOUT_ASPECT_RATIO, aspectRatio));
 }
 
 function computeLayout(

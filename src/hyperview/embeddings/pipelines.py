@@ -9,6 +9,8 @@ from __future__ import annotations
 import time
 from typing import Any
 
+import numpy as np
+
 from hyperview.storage.backend import StorageBackend
 from hyperview.storage.geometry import apply_inferred_geometry_params, resolve_geometry
 from hyperview.storage.schema import make_layout_key, normalize_layout_dimension
@@ -104,11 +106,61 @@ def compute_embeddings(
     from hyperview.embeddings.engine import get_engine
 
     engine = get_engine(provider_registry=provider_registry)
-    embeddings = engine.embed_images(
-        samples=samples_to_embed,
-        spec=spec,
-        batch_size=batch_size,
-        show_progress=show_progress,
+    image_samples = []
+    text_samples = []
+    unsupported_modalities: set[str] = set()
+    for sample in samples_to_embed:
+        if sample.modality == "text" or (sample.filepath is None and sample.text is not None):
+            text_samples.append(sample)
+        elif sample.modality in {"image", "multimodal"} and sample.filepath is not None:
+            image_samples.append(sample)
+        else:
+            unsupported_modalities.add(sample.modality)
+
+    if unsupported_modalities:
+        raise ValueError(
+            "Embedding pipeline cannot route sample modalities: "
+            f"{sorted(unsupported_modalities)}"
+        )
+
+    required_modalities = set()
+    if image_samples:
+        required_modalities.add("image")
+    if text_samples:
+        required_modalities.add("text")
+    engine.require_modalities(spec, required_modalities)
+
+    ids: list[str] = []
+    embedding_batches: list[np.ndarray] = []
+    if image_samples:
+        image_embeddings = engine.embed_images(
+            samples=image_samples,
+            spec=spec,
+            batch_size=batch_size,
+            show_progress=show_progress,
+        )
+        ids.extend(sample.id for sample in image_samples)
+        embedding_batches.append(image_embeddings)
+    if text_samples:
+        text_embeddings = engine.embed_texts(
+            [sample.text or "" for sample in text_samples],
+            spec,
+            batch_size=batch_size,
+            show_progress=show_progress,
+        )
+        ids.extend(sample.id for sample in text_samples)
+        embedding_batches.append(text_embeddings)
+
+    dimensions = {batch.shape[1] for batch in embedding_batches}
+    if len(dimensions) != 1:
+        raise ValueError(
+            f"Provider '{spec.provider}' returned incompatible image/text embedding dimensions: "
+            f"{sorted(dimensions)}"
+        )
+    embeddings = (
+        embedding_batches[0]
+        if len(embedding_batches) == 1
+        else np.concatenate(embedding_batches, axis=0)
     )
 
     dim = embeddings.shape[1]
@@ -120,7 +172,6 @@ def compute_embeddings(
         space_key=space_key,
     )
 
-    ids = [sample.id for sample in samples_to_embed]
     storage.add_embeddings(space_key, ids, embeddings)
 
     return space_key, len(ids), num_skipped

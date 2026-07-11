@@ -7,6 +7,11 @@ import { cn } from "@/lib/utils";
 import type { Sample } from "@/types";
 
 import { CheckIcon } from "./icons";
+import { ImageTileContent } from "./tiles/ImageTileContent";
+import { MetadataTileContent } from "./tiles/MetadataTileContent";
+import { getSampleTileKind } from "./tiles/sampleTileKind";
+import { TextTileContent } from "./tiles/TextTileContent";
+import { VideoTileContent } from "./tiles/VideoTileContent";
 
 interface SampleTileProps extends HTMLAttributes<HTMLDivElement> {
   sample: Sample;
@@ -31,17 +36,21 @@ export function SampleTile({
   className,
   ...props
 }: SampleTileProps) {
-  const mediaSrc = useMemo(() => {
+  const tileKind = getSampleTileKind(sample);
+  const thumbnailSrc = useMemo(() => {
     if (sample.thumbnail) return `data:image/jpeg;base64,${sample.thumbnail}`;
     if (sample.thumbnail_url) return backendUrl(sample.thumbnail_url);
-    return backendUrl(sample.media_url);
-  }, [sample.media_url, sample.thumbnail, sample.thumbnail_url]);
+    return null;
+  }, [sample.thumbnail, sample.thumbnail_url]);
+  const imageSrc = thumbnailSrc ?? backendUrl(sample.media_url);
+  const rendererSrc = tileKind === "video" ? thumbnailSrc : imageSrc;
   const [imageFailed, setImageFailed] = useState(false);
-  const showImage = Boolean(mediaSrc) && !imageFailed;
 
   useEffect(() => {
     setImageFailed(false);
-  }, [mediaSrc]);
+  }, [rendererSrc, tileKind]);
+
+  const durationBadge = formatDuration(sample.duration_s);
 
   return (
     <div
@@ -54,20 +63,36 @@ export function SampleTile({
       )}
       {...props}
     >
-      {showImage ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={mediaSrc ?? undefined}
+      {tileKind === "image" ? (
+        <ImageTileContent
+          src={imageSrc}
           alt={sample.filename}
-          className="block h-full w-full object-contain"
-          loading="lazy"
+          failed={imageFailed}
+          onError={() => setImageFailed(true)}
+        />
+      ) : tileKind === "text" ? (
+        <TextTileContent text={sample.text} />
+      ) : tileKind === "video" ? (
+        <VideoTileContent
+          posterSrc={thumbnailSrc}
+          filename={sample.filename}
+          id={sample.id}
+          failed={imageFailed}
           onError={() => setImageFailed(true)}
         />
       ) : (
-        <div className="flex h-full w-full items-center justify-center bg-muted">
-          <span className="text-xs text-muted-foreground">No image</span>
-        </div>
+        <MetadataTileContent
+          filename={sample.filename}
+          id={sample.id}
+          kind={sample.media_type || sample.modality}
+        />
       )}
+
+      {tileKind === "video" && durationBadge ? (
+        <div className="absolute left-1 top-1 z-[1] rounded bg-black/60 px-1.5 py-0.5 font-mono text-[10px] font-medium tabular-nums text-white backdrop-blur-sm">
+          {durationBadge}
+        </div>
+      ) : null}
 
       {metricBadge && (
         <div
@@ -91,7 +116,7 @@ export function SampleTile({
               {sample.label}
             </span>
           ) : null}
-          {sample.text ? (
+          {sample.text && tileKind !== "text" ? (
             <span
               className="block max-w-full truncate px-1 py-0.5 text-[10px] leading-tight text-white"
               style={{ backgroundColor: "rgba(0,0,0,0.72)" }}
@@ -110,4 +135,19 @@ export function SampleTile({
       )}
     </div>
   );
+}
+
+function formatDuration(durationSeconds: number | null | undefined): string | null {
+  if (
+    typeof durationSeconds !== "number" ||
+    !Number.isFinite(durationSeconds) ||
+    durationSeconds < 0
+  ) {
+    return null;
+  }
+
+  const totalSeconds = Math.floor(durationSeconds);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }

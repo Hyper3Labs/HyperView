@@ -224,8 +224,10 @@ def _validate_dataset_source_args(
     if args.hf_dataset:
         if not args.split:
             parser.error("--split is required when using --hf-dataset.")
-        if not args.image_key:
-            parser.error("--image-key is required when using --hf-dataset.")
+        if not args.image_key and not args.text_key:
+            parser.error(
+                "--image-key or --text-key is required when using --hf-dataset."
+            )
         if args.hf_shuffle_buffer_size < 1:
             parser.error("--hf-shuffle-buffer-size must be at least 1.")
 

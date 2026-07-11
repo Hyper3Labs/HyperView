@@ -9,6 +9,7 @@ import type { Sample } from "@/types";
 
 import { SampleGridView } from "./SampleGridView";
 import { SampleTile } from "./SampleTile";
+import { getSampleAspectRatio } from "./tiles/sampleTileKind";
 
 interface SampleDerivedSpaceProps {
   selectionSamples: Sample[];
@@ -28,11 +29,7 @@ const ANCHOR_TILE_MIN_WIDTH = 180;
 const ANCHOR_TILE_MAX_WIDTH = 500;
 
 function getAnchorTileWidth(sample: Sample): number {
-  if (!sample.width || !sample.height || sample.height <= 0) {
-    return ANCHOR_TILE_HEIGHT;
-  }
-
-  const width = Math.round((sample.width / sample.height) * ANCHOR_TILE_HEIGHT);
+  const width = Math.round(getSampleAspectRatio(sample) * ANCHOR_TILE_HEIGHT);
   return Math.max(ANCHOR_TILE_MIN_WIDTH, Math.min(ANCHOR_TILE_MAX_WIDTH, width));
 }
 

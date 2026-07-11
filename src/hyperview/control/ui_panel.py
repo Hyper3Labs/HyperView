@@ -124,6 +124,12 @@ class WorkspaceTarget(BaseModel):
     workspace_id: str
 
 
+class JobTarget(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: str
+
+
 class SamplesRetrievalSetArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -233,6 +239,20 @@ def _workspace_target(target: BaseModel) -> WorkspaceTarget:
     if not isinstance(target, WorkspaceTarget):
         raise CommandError("validation_error", "Invalid workspace target")
     return target
+
+
+def _cancel_job(
+    runtime: HyperViewRuntime,
+    target: BaseModel,
+    args: BaseModel,
+) -> CommandExecution:
+    if not isinstance(target, JobTarget):
+        raise CommandError("validation_error", "Invalid job target")
+    try:
+        job = runtime.cancel_job(target.job_id)
+    except ValueError as exc:
+        raise CommandError("not_found", str(exc)) from exc
+    return CommandExecution(result={"job": job.to_dict()})
 
 
 def _samples_retrieval_set_args(args: BaseModel) -> SamplesRetrievalSetArgs:
@@ -810,6 +830,14 @@ def create_default_command_registry() -> CommandRegistry:
             target_model=WorkspaceTarget,
             args_model=LabelsFilterArgs,
             handler=_filter_labels,
+        ),
+        CommandSpec(
+            id="jobs.cancel",
+            owner="backend",
+            summary="Request cooperative cancellation of a queued or running job.",
+            target_model=JobTarget,
+            args_model=EmptyArgs,
+            handler=_cancel_job,
         ),
     ):
         registry.register(spec)

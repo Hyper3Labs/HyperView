@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import importlib
 import inspect
 import json
+import queue
 import threading
 import time
 import uuid
@@ -148,6 +150,10 @@ def get_provider_registry_path() -> Path:
 
 def get_workspace_registry_path() -> Path:
     return get_runtime_config_dir() / "workspaces.json"
+
+
+def get_job_registry_path() -> Path:
+    return get_runtime_config_dir() / "jobs.json"
 
 
 def _parse_import_path(import_path: str) -> tuple[str, str]:
@@ -967,16 +973,95 @@ class JobState:
     kind: str
     workspace_id: str
     dataset_name: str | None
-    status: Literal["queued", "running", "completed", "failed"] = "queued"
+    status: Literal[
+        "queued",
+        "running",
+        "completed",
+        "failed",
+        "cancelled",
+        "interrupted",
+    ] = "queued"
     created_at: int = field(default_factory=_now_ts)
     started_at: int | None = None
     finished_at: int | None = None
     result: dict[str, Any] | None = None
     error: str | None = None
     params: dict[str, Any] = field(default_factory=dict)
+    cancellation_requested: bool = False
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> JobState:
+        return cls(
+            id=str(data["id"]),
+            kind=str(data["kind"]),
+            workspace_id=str(data["workspace_id"]),
+            dataset_name=data.get("dataset_name"),
+            status=data.get("status", "queued"),
+            created_at=int(data.get("created_at") or _now_ts()),
+            started_at=data.get("started_at"),
+            finished_at=data.get("finished_at"),
+            result=data.get("result"),
+            error=data.get("error"),
+            params=dict(data.get("params") or {}),
+            cancellation_requested=bool(data.get("cancellation_requested", False)),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+class JobRegistry:
+    """Persistent registry for inspectable background job records."""
+
+    def __init__(self, path: Path | None = None):
+        self.path = path or get_job_registry_path()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._jobs: dict[str, JobState] = {}
+        self._load()
+
+    def _load(self) -> None:
+        if not self.path.exists():
+            self._jobs = {}
+            return
+
+        data = json.loads(self.path.read_text())
+        self._jobs = {
+            entry["id"]: JobState.from_dict(entry)
+            for entry in list(data.get("jobs") or [])
+        }
+        interrupted = False
+        for job in self._jobs.values():
+            if job.status not in {"queued", "running"}:
+                continue
+            job.status = "interrupted"
+            job.finished_at = _now_ts()
+            job.error = "Job was interrupted when the previous runtime stopped."
+            interrupted = True
+        if interrupted:
+            self._save()
+
+    def _save(self) -> None:
+        payload = {
+            "jobs": [
+                job.to_dict()
+                for job in sorted(self._jobs.values(), key=lambda item: item.id)
+            ]
+        }
+        self.path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str))
+
+    def list(self) -> list[JobState]:
+        return [self._jobs[key] for key in sorted(self._jobs)]
+
+    def get(self, job_id: str) -> JobState | None:
+        return self._jobs.get(job_id)
+
+    def update(self, job: JobState) -> None:
+        self._jobs[job.id] = job
+        self._save()
+
+
+class _JobCancelledError(Exception):
+    """Internal cooperative-cancellation signal for a running job."""
 
 
 @dataclass
@@ -1012,18 +1097,31 @@ class HyperViewRuntime:
         *,
         provider_registry: ProviderRegistry | None = None,
         workspace_registry: WorkspaceRegistry | None = None,
+        job_registry: JobRegistry | None = None,
     ):
         self.runtime_id = uuid.uuid4().hex
         self.provider_registry = provider_registry or ProviderRegistry()
         self.workspace_registry = workspace_registry or WorkspaceRegistry()
+        self.job_registry = job_registry or JobRegistry(
+            self.workspace_registry.path.with_name("jobs.json")
+        )
         self.tools = ToolRegistry()
         self._extensions: dict[str, ExtensionInstallation] = {}
         self._dataset_cache: dict[str, Dataset] = {}
-        self._jobs: dict[str, JobState] = {}
         self._panel_module_revisions: dict[tuple[str, str, str], str] = {}
         self._lock = threading.RLock()
         self._version = 1
         self._version_source_client_id: str | None = None
+        self._version_waiters: set[tuple[asyncio.AbstractEventLoop, asyncio.Event]] = set()
+        self._job_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
+        self._job_cancel_events: dict[str, threading.Event] = {}
+        self._job_worker_context = threading.local()
+        self._job_worker = threading.Thread(
+            target=self._job_worker_loop,
+            name="hyperview-job-worker",
+            daemon=True,
+        )
+        self._job_worker.start()
 
     @property
     def version(self) -> int:
@@ -1037,6 +1135,38 @@ class HyperViewRuntime:
         with self._lock:
             self._version += 1
             self._version_source_client_id = source_client_id
+            waiters = tuple(self._version_waiters)
+        for loop, event in waiters:
+            try:
+                loop.call_soon_threadsafe(event.set)
+            except RuntimeError:
+                # A disconnected SSE client may have already closed its event loop.
+                continue
+
+    async def wait_for_version(
+        self,
+        after_version: int,
+        *,
+        timeout: float | None = None,
+    ) -> int | None:
+        """Wait without polling until the runtime version advances."""
+
+        loop = asyncio.get_running_loop()
+        event = asyncio.Event()
+        waiter = (loop, event)
+        with self._lock:
+            if self._version > after_version:
+                return self._version
+            self._version_waiters.add(waiter)
+        try:
+            await asyncio.wait_for(event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:  # noqa: UP041 — builtin TimeoutError only aliases this on 3.11+
+            return None
+        finally:
+            with self._lock:
+                self._version_waiters.discard(waiter)
+        with self._lock:
+            return self._version
 
     def _panel_module_revision(self, panel: CustomPanelSpec) -> str | None:
         module_file = panel.resolved_module_file()
@@ -2176,17 +2306,95 @@ class HyperViewRuntime:
             params=params,
         )
         with self._lock:
-            self._jobs[job.id] = job
+            self.job_registry.update(job)
+            self._job_cancel_events[job.id] = threading.Event()
             self._bump_version()
         return job
 
     def list_jobs(self) -> list[JobState]:
         with self._lock:
-            return [self._jobs[key] for key in sorted(self._jobs)]
+            return self.job_registry.list()
 
     def get_job(self, job_id: str) -> JobState | None:
         with self._lock:
-            return self._jobs.get(job_id)
+            return self.job_registry.get(job_id)
+
+    def cancel_job(self, job_id: str) -> JobState:
+        """Request cooperative cancellation of a queued or running job."""
+
+        with self._lock:
+            job = self.job_registry.get(job_id)
+            if job is None:
+                raise ValueError(f"Unknown job: {job_id}")
+            if job.status in {"completed", "failed", "cancelled", "interrupted"}:
+                return job
+            job.cancellation_requested = True
+            self._job_cancel_events.setdefault(job.id, threading.Event()).set()
+            if job.status == "queued":
+                job.status = "cancelled"
+                job.finished_at = _now_ts()
+            self.job_registry.update(job)
+            self._bump_version()
+            return job
+
+    def _check_job_cancelled(self, job_id: str | None = None) -> None:
+        if job_id is None:
+            job_id = getattr(self._job_worker_context, "job_id", None)
+        if job_id is None:
+            return
+        event = self._job_cancel_events.get(job_id)
+        if event is not None and event.is_set():
+            raise _JobCancelledError
+
+    def _job_worker_loop(self) -> None:
+        while True:
+            job_id, target = self._job_queue.get()
+            try:
+                self._job_worker_context.job_id = job_id
+                with self._lock:
+                    current = self.job_registry.get(job_id)
+                    if current is None or current.status == "cancelled":
+                        continue
+                    current.status = "running"
+                    current.started_at = _now_ts()
+                    self.job_registry.update(current)
+                    self._bump_version()
+
+                try:
+                    self._check_job_cancelled(job_id)
+                    result = target()
+                    self._check_job_cancelled(job_id)
+                except _JobCancelledError:
+                    with self._lock:
+                        current = self.job_registry.get(job_id)
+                        if current is not None:
+                            current.status = "cancelled"
+                            current.finished_at = _now_ts()
+                            self.job_registry.update(current)
+                            self._bump_version()
+                    continue
+                except Exception as exc:  # pragma: no cover - runtime-specific failures
+                    with self._lock:
+                        current = self.job_registry.get(job_id)
+                        if current is not None:
+                            current.status = "failed"
+                            current.error = f"{type(exc).__name__}: {exc}"
+                            current.finished_at = _now_ts()
+                            self.job_registry.update(current)
+                            self._bump_version()
+                    continue
+
+                with self._lock:
+                    current = self.job_registry.get(job_id)
+                    if current is not None:
+                        current.status = "completed"
+                        current.result = result
+                        current.finished_at = _now_ts()
+                        self.job_registry.update(current)
+                        self._bump_version()
+            finally:
+                self._job_worker_context.job_id = None
+                self._job_queue.task_done()
 
     def submit_job(
         self,
@@ -2200,34 +2408,7 @@ class HyperViewRuntime:
         job = self.register_job(
             kind=kind, workspace_id=workspace_id, dataset_name=dataset_name, params=params
         )
-
-        def runner() -> None:
-            with self._lock:
-                current = self._jobs[job.id]
-                current.status = "running"
-                current.started_at = _now_ts()
-                self._bump_version()
-
-            try:
-                result = target()
-            except Exception as exc:  # pragma: no cover - error path depends on runtime failures
-                with self._lock:
-                    current = self._jobs[job.id]
-                    current.status = "failed"
-                    current.error = f"{type(exc).__name__}: {exc}"
-                    current.finished_at = _now_ts()
-                    self._bump_version()
-                return
-
-            with self._lock:
-                current = self._jobs[job.id]
-                current.status = "completed"
-                current.result = result
-                current.finished_at = _now_ts()
-                self._bump_version()
-
-        thread = threading.Thread(target=runner, name=f"hyperview-job-{job.id[:8]}", daemon=True)
-        thread.start()
+        self._job_queue.put((job.id, target))
         return job
 
     def submit_embedding_job(
@@ -2249,6 +2430,7 @@ class HyperViewRuntime:
         provider_kwargs = dict(provider_kwargs or {})
 
         def run() -> dict[str, Any]:
+            self._check_job_cancelled()
             dataset = self.get_dataset(workspace_id, dataset_name)
             space_key = dataset.compute_embeddings(
                 model=model,
@@ -2258,9 +2440,11 @@ class HyperViewRuntime:
                 _provider_registry=self.provider_registry,
                 **provider_kwargs,
             )
+            self._check_job_cancelled()
 
             layout_keys: list[str] = []
             for layout in layouts or []:
+                self._check_job_cancelled()
                 layout_key = dataset.compute_visualization(
                     space_key=space_key,
                     method=method,
@@ -2270,6 +2454,7 @@ class HyperViewRuntime:
                     metric=metric,
                 )
                 layout_keys.append(layout_key)
+                self._check_job_cancelled()
 
             self.set_workspace_dataset(workspace_id, dataset_name)
             if activate_layout and layout_keys:
@@ -2307,9 +2492,11 @@ class HyperViewRuntime:
         activate_layout: bool = True,
     ) -> JobState:
         def run() -> dict[str, Any]:
+            self._check_job_cancelled()
             dataset = self.get_dataset(workspace_id, dataset_name)
             layout_keys: list[str] = []
             for layout in layouts:
+                self._check_job_cancelled()
                 layout_key = dataset.compute_visualization(
                     space_key=space_key,
                     method=method,
@@ -2319,6 +2506,7 @@ class HyperViewRuntime:
                     metric=metric,
                 )
                 layout_keys.append(layout_key)
+                self._check_job_cancelled()
             if activate_layout and layout_keys:
                 self.set_active_layout(workspace_id, layout_keys[0])
             return {"layout_keys": layout_keys}
