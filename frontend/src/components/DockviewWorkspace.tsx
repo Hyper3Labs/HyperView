@@ -1264,6 +1264,27 @@ export function DockviewWorkspace() {
         maximumWidth: layout.maximumWidth,
         maximumHeight: layout.maximumHeight,
       });
+      // Dockview applies initialWidth/initialHeight only when the panel opens a
+      // new group; joining an existing edge group keeps that group's current
+      // size (often a degenerate one from a pre-measurement onReady). Re-assert
+      // the authored size for edge-docked panels explicitly.
+      if (!isCompactWorkspace && (panel.position === "right" || panel.position === "bottom")) {
+        const addedPanel = api.getPanel(runtimePanelId);
+        const width =
+          panel.position === "right"
+            ? layout.initialWidth ?? getDefaultRightPanelWidth(getContainerWidth(api))
+            : undefined;
+        const height =
+          panel.position === "bottom"
+            ? layout.initialHeight ?? getDefaultBottomPanelHeight(getContainerHeight(api))
+            : undefined;
+        if (addedPanel && (width !== undefined || height !== undefined)) {
+          addedPanel.api.setSize({
+            ...(width !== undefined ? { width } : {}),
+            ...(height !== undefined ? { height } : {}),
+          });
+        }
+      }
       if (panel.active) newlyAddedActivePanelIds.push(runtimePanelId);
     }
 
