@@ -91,3 +91,10 @@ hyper-lrp/
 # Generated version file (hatch-vcs)
 src/hyperview/_version.py
 node_modules/
+# Local review/dogfood evidence trees (not part of the repo)
+.tmp/
+.review-artifacts/
+dogfood-output/
+artifacts/
+images/
+docs/_review_precision_region/
