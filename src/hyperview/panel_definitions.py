@@ -1,8 +1,8 @@
 """Serializable panel definition metadata.
 
-Panel definitions describe what a panel type is and what default runtime
-metadata it declares. They intentionally exclude frontend implementation
-bindings such as React components or Dockview adapter details.
+Panel definitions describe what a panel type is, which renderer implements it,
+and what default runtime metadata it declares. Renderer references are stable
+transport identifiers, not frontend component imports or Dockview details.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ class PanelDefinition:
     panel_type: str
     label: str
     source: str
+    renderer: str
     title: str | None = None
     extension: str | None = None
     default_props: dict[str, Any] = field(default_factory=dict)
@@ -29,6 +30,7 @@ class PanelDefinition:
     state_schema: dict[str, Any] | None = None
     commands: list[str] = field(default_factory=list)
     queries: list[str] = field(default_factory=list)
+    data_capabilities: list[str] = field(default_factory=list)
     default_layout: dict[str, Any] = field(default_factory=dict)
     allow_multiple: bool = True
     icon: str | None = None
@@ -43,6 +45,10 @@ class PanelDefinition:
             raise ValueError("panel definition label must be a non-empty string")
         if not self.source.strip():
             raise ValueError("panel definition source must be a non-empty string")
+        if not self.renderer.strip():
+            raise ValueError("panel definition renderer must be a non-empty string")
+        validate_json_contract(self.default_props, self.props_schema, label="default props")
+        validate_json_contract(self.default_state, self.state_schema, label="default state")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -50,6 +56,7 @@ class PanelDefinition:
             "label": self.label,
             "title": self.title or self.label,
             "source": self.source,
+            "renderer": self.renderer,
             "extension": self.extension,
             "default_props": _json_object_copy(self.default_props),
             "default_state": _json_object_copy(self.default_state),
@@ -65,6 +72,7 @@ class PanelDefinition:
             ),
             "commands": list(self.commands),
             "queries": list(self.queries),
+            "data_capabilities": list(self.data_capabilities),
             "default_layout": _json_object_copy(self.default_layout),
             "allow_multiple": self.allow_multiple,
             "icon": self.icon,
@@ -74,90 +82,52 @@ class PanelDefinition:
         }
 
 
-BUILTIN_PANEL_DEFINITIONS = (
-    PanelDefinition(
-        panel_type="samples",
-        label="Samples",
-        title="Samples",
-        source="builtin",
-        default_layout={"id": "samples", "position": "center", "order": 10},
-        commands=[
-            "workspace.panel.state.get",
-            "workspace.panel.state.patch",
-            "panel.samples.retrieval.set-anchor",
-            "panel.samples.retrieval.set-text-query",
-            "panel.samples.retrieval.set-k",
-            "panel.samples.retrieval.clear",
-        ],
-        queries=["samples.query", "samples.similar"],
-        icon="grid",
-        category="dataset",
-    ),
-    PanelDefinition(
-        panel_type="scatter",
-        label="Scatter",
-        title="Embeddings",
-        source="builtin",
-        default_props={
-            "preset": "euclidean-2d",
-            "presets": {
-                "euclidean-2d": {
-                    "label": "Euclidean",
-                    "geometry": "euclidean",
-                    "layout_dimension": 2,
-                },
-                "poincare-2d": {
-                    "label": "Hyperbolic",
-                    "geometry": "poincare",
-                    "layout_dimension": 2,
-                },
-                "spherical-2d": {
-                    "label": "Spherical",
-                    "geometry": "spherical",
-                    "layout_dimension": 2,
-                },
-                "euclidean-3d": {
-                    "label": "Euclidean 3D",
-                    "geometry": "euclidean",
-                    "layout_dimension": 3,
-                },
-                "spherical-3d": {
-                    "label": "Sphere 3D",
-                    "geometry": "spherical",
-                    "layout_dimension": 3,
-                },
-            },
-        },
-        default_layout={
-            "id": "scatter",
-            "position": "center",
-            "reference_panel_id": "samples",
-            "direction": "right",
-            "order": 20,
-            "preset": "euclidean-2d",
-        },
-        commands=["workspace.panel.state.get", "workspace.panel.state.patch"],
-        queries=["embeddings", "layouts"],
-        icon="scatter",
-        category="embedding",
-    ),
-    PanelDefinition(
-        panel_type="explorer",
-        label="Explorer",
-        title="Labels",
-        source="builtin",
-        default_layout={
-            "id": "explorer",
-            "position": "right",
-            "dock_zone": "left",
-            "order": 0,
-        },
-        commands=["workspace.panel.state.get", "workspace.panel.state.patch"],
-        icon="tags",
-        category="dataset",
-        allow_multiple=False,
-    ),
-)
+def validate_json_contract(
+    value: Any,
+    schema: dict[str, Any] | None,
+    *,
+    label: str,
+) -> None:
+    """Validate the small JSON-schema subset supported by panel manifests."""
+
+    if schema is None:
+        return
+    expected_type = schema.get("type")
+    type_checks = {
+        "object": lambda item: isinstance(item, dict),
+        "array": lambda item: isinstance(item, list),
+        "string": lambda item: isinstance(item, str),
+        "boolean": lambda item: isinstance(item, bool),
+        "integer": lambda item: isinstance(item, int) and not isinstance(item, bool),
+        "number": lambda item: isinstance(item, (int, float)) and not isinstance(item, bool),
+        "null": lambda item: item is None,
+    }
+    if isinstance(expected_type, list):
+        valid_type = any(type_checks.get(item, lambda _value: False)(value) for item in expected_type)
+    elif expected_type is None:
+        valid_type = True
+    else:
+        valid_type = type_checks.get(expected_type, lambda _value: False)(value)
+    if not valid_type:
+        raise ValueError(f"{label} must match schema type {expected_type!r}")
+    if "enum" in schema and value not in schema["enum"]:
+        raise ValueError(f"{label} must be one of {schema['enum']!r}")
+    if isinstance(value, dict):
+        properties = schema.get("properties") or {}
+        for required in schema.get("required") or []:
+            if required not in value:
+                raise ValueError(f"{label}.{required} is required")
+        if schema.get("additionalProperties") is False:
+            unexpected = sorted(set(value) - set(properties))
+            if unexpected:
+                raise ValueError(f"{label} has unsupported fields: {', '.join(unexpected)}")
+        for key, item in value.items():
+            child_schema = properties.get(key)
+            if isinstance(child_schema, dict):
+                validate_json_contract(item, child_schema, label=f"{label}.{key}")
+    if isinstance(value, list) and isinstance(schema.get("items"), dict):
+        for index, item in enumerate(value):
+            validate_json_contract(item, schema["items"], label=f"{label}[{index}]")
 
 
 def merge_default_props(

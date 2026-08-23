@@ -41,6 +41,8 @@ from hyperview.tools import ToolRecord, drain_pending_tools
 
 EXTENSION_MANIFEST_NAME = "extension.toml"
 DEFAULT_LOCAL_EXTENSIONS_DIR = ".hyperview/extensions"
+SHIPPED_EXTENSIONS_DIR = Path(__file__).with_name("shipped_extensions")
+CORE_EXTENSION_NAME = "core"
 VALID_PANEL_POSITIONS = {"center", "right", "bottom"}
 VALID_PANEL_DIRECTIONS = {"right", "left", "above", "below", "within"}
 PANEL_LAYOUT_FIELDS = (
@@ -60,7 +62,8 @@ class PanelSpecEntry:
     id: str
     title: str
     position: str = "right"
-    file: str = "panel.jsx"
+    file: str | None = "panel.jsx"
+    renderer: str | None = None
     panel_type: str | None = None
     label: str | None = None
     default_props: dict[str, object] = field(default_factory=dict)
@@ -69,6 +72,7 @@ class PanelSpecEntry:
     state_schema: dict[str, object] | None = None
     commands: list[str] = field(default_factory=list)
     queries: list[str] = field(default_factory=list)
+    data_capabilities: list[str] = field(default_factory=list)
     default_layout: dict[str, object] = field(default_factory=dict)
     allow_multiple: bool = True
     icon: str | None = None
@@ -80,12 +84,18 @@ class PanelSpecEntry:
         panel_type = (self.panel_type or "").strip()
         return panel_type or f"{extension_name}.{self.id}"
 
-    def to_definition(self, extension_name: str) -> PanelDefinition:
+    def to_definition(
+        self,
+        extension_name: str,
+        *,
+        source: str = "extension",
+    ) -> PanelDefinition:
         return PanelDefinition(
             panel_type=self.resolved_panel_type(extension_name),
             label=self.label or self.title,
             title=self.title,
-            source="extension",
+            source=source,
+            renderer=self.resolved_renderer(),
             extension=extension_name,
             default_props=dict(self.default_props),
             default_state=dict(self.default_state),
@@ -93,6 +103,7 @@ class PanelSpecEntry:
             state_schema=dict(self.state_schema) if self.state_schema is not None else None,
             commands=list(self.commands),
             queries=list(self.queries),
+            data_capabilities=list(self.data_capabilities),
             default_layout=dict(self.default_layout),
             allow_multiple=self.allow_multiple,
             icon=self.icon,
@@ -100,6 +111,20 @@ class PanelSpecEntry:
             static_compatible=self.static_compatible,
             static_reason=self.static_reason,
         )
+
+    def resolved_renderer(self) -> str:
+        renderer = (self.renderer or "").strip()
+        if renderer:
+            return renderer
+        if not self.file:
+            raise ValueError(f"Panel '{self.id}' needs either renderer or file")
+        return f"module:{self.file}"
+
+    def module_file(self) -> str | None:
+        renderer = self.resolved_renderer()
+        if not renderer.startswith("module:"):
+            return None
+        return self.file or renderer.removeprefix("module:").strip() or None
 
 
 @dataclass
@@ -151,7 +176,11 @@ class ExtensionManifest:
                     id=panel_id,
                     title=str(entry.get("title") or panel_id),
                     position=position,
-                    file=str(entry.get("file") or "panel.jsx"),
+                    file=(
+                        _optional_str(entry.get("file"))
+                        or (None if _optional_str(entry.get("renderer")) else "panel.jsx")
+                    ),
+                    renderer=_optional_str(entry.get("renderer")),
                     panel_type=_optional_str(entry.get("panel_type")),
                     label=_optional_str(entry.get("label")),
                     default_props=_dict_or_empty(entry.get("default_props")),
@@ -160,6 +189,7 @@ class ExtensionManifest:
                     state_schema=_optional_dict(entry.get("state_schema")),
                     commands=_string_list(entry.get("commands")),
                     queries=_string_list(entry.get("queries")),
+                    data_capabilities=_string_list(entry.get("data_capabilities")),
                     default_layout=_panel_default_layout(entry, position),
                     allow_multiple=bool(entry.get("allow_multiple", True)),
                     icon=_optional_str(entry.get("icon")),
@@ -312,6 +342,53 @@ def discover_local_extensions(root: Path | None = None) -> list[Path]:
     return []
 
 
+def discover_shipped_extensions() -> list[Path]:
+    """Return extension packages distributed with HyperView."""
+
+    if not SHIPPED_EXTENSIONS_DIR.is_dir():
+        return []
+    return [
+        entry.resolve()
+        for entry in sorted(SHIPPED_EXTENSIONS_DIR.iterdir())
+        if entry.name != CORE_EXTENSION_NAME
+        and entry.is_dir()
+        and (entry / EXTENSION_MANIFEST_NAME).is_file()
+    ]
+
+
+def load_core_panel_definitions() -> list[PanelDefinition]:
+    """Load native panel definitions from HyperView's packaged core manifest."""
+
+    manifest = ExtensionManifest.load(SHIPPED_EXTENSIONS_DIR / CORE_EXTENSION_NAME)
+    if manifest.name != CORE_EXTENSION_NAME:
+        raise ValueError("The packaged core extension manifest must be named 'core'")
+    definitions = [
+        panel.to_definition(manifest.name, source="shipped")
+        for panel in manifest.panels
+    ]
+    invalid = [item.panel_type for item in definitions if not item.renderer.startswith("native:")]
+    if invalid:
+        raise ValueError(
+            "Core panel renderers must use native: references: " + ", ".join(invalid)
+        )
+    return definitions
+
+
+def resolve_shipped_extension(name: str) -> Path:
+    """Resolve one shipped extension by its manifest name."""
+
+    requested = name.strip()
+    if not requested:
+        raise ValueError("shipped extension name must be a non-empty string")
+    for folder in discover_shipped_extensions():
+        manifest = ExtensionManifest.load(folder)
+        if manifest.name == requested:
+            return folder
+    available = [ExtensionManifest.load(folder).name for folder in discover_shipped_extensions()]
+    suffix = f" Available: {', '.join(available)}" if available else ""
+    raise ValueError(f"Unknown shipped extension: {requested}.{suffix}")
+
+
 def resolve_panel_source(
     folder: Path, file_name: str
 ) -> Path:
@@ -327,6 +404,7 @@ def resolve_panel_source(
 
 
 __all__ = [
+    "CORE_EXTENSION_NAME",
     "DEFAULT_LOCAL_EXTENSIONS_DIR",
     "EXTENSION_MANIFEST_NAME",
     "ExtensionManifest",
@@ -334,7 +412,10 @@ __all__ = [
     "PanelSpecEntry",
     "ToolSpecEntry",
     "discover_local_extensions",
+    "discover_shipped_extensions",
     "load_extension_tools",
+    "load_core_panel_definitions",
     "resolve_panel_source",
+    "resolve_shipped_extension",
     "unload_extension_modules",
 ]

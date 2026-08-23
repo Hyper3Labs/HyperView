@@ -1,0 +1,25 @@
+name = "reference"
+description = "HyperView v1 extension contract reference"
+
+[[tools]]
+file = "tools.py"
+
+[[panels]]
+id = "reference"
+panel_type = "hyperview.reference"
+title = "Reference"
+label = "Reference"
+position = "right"
+file = "panel.jsx"
+allow_multiple = false
+category = "system"
+icon = "puzzle"
+static_compatible = true
+commands = ["workspace.panel.state.patch"]
+queries = ["samples.query"]
+data_capabilities = ["collection:samples", "selection"]
+default_props = { heading = "Extension contract" }
+default_state = { notes = "", collection_id = "" }
+props_schema = { type = "object", properties = { heading = { type = "string" } } }
+state_schema = { type = "object", properties = { notes = { type = "string" }, collection_id = { type = "string" } } }
+default_layout = { position = "right", width = 320, min_width = 240 }

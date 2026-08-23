@@ -13,6 +13,13 @@ EXAMPLE_EXTENSIONS = ROOT / "agent-context" / "extensions"
 PANEL_SDK_SOURCE = ROOT / "frontend" / "src" / "panel-sdk" / "index.tsx"
 
 
+def test_v2_sdk_exposes_generic_similarity_hook_to_extensions() -> None:
+    sdk_source = PANEL_SDK_SOURCE.read_text(encoding="utf-8")
+
+    assert "useSimilarSamples: typeof useSimilarSamples;" in sdk_source
+    assert re.search(r"hooks:\s*\{[\s\S]*?useSimilarSamples,", sdk_source)
+
+
 def test_custom_panel_snapshot_carries_state_only_in_panel_state_map() -> None:
     ui = WorkspaceUiState(
         custom_panels=[CustomPanelSpec(id="summary", title="Summary")],
@@ -44,6 +51,8 @@ def test_custom_panel_kind_is_normalized_and_unknown_values_fail_clearly() -> No
 
     assert scatter.kind == "builtin"
     assert scatter.builtin_panel == "scatter"
+    assert scatter.source == "shipped"
+    assert scatter.renderer == "native:scatter"
     assert extension.kind == "module"
 
     with pytest.raises(
@@ -95,7 +104,6 @@ def test_example_panel_uses_only_hooks_exported_by_v2_sdk(
 
     assert 'sdk.version !== "2"' in panel_source
     assert "components" not in panel_source
-    assert "useTool" not in panel_source
     assert "usePanelSelection" not in panel_source
     assert "usePanelRuntimeState" not in panel_source
 

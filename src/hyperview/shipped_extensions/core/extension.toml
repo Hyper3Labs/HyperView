@@ -1,0 +1,58 @@
+name = "core"
+description = "HyperView native panel definitions"
+
+[[panels]]
+id = "samples"
+panel_type = "samples"
+title = "Samples"
+label = "Samples"
+position = "center"
+renderer = "native:samples"
+category = "dataset"
+icon = "grid"
+commands = [
+  "workspace.panel.state.get",
+  "workspace.panel.state.patch",
+  "panel.samples.retrieval.set-anchor",
+  "panel.samples.retrieval.set-text-query",
+  "panel.samples.retrieval.set-k",
+  "panel.samples.retrieval.clear",
+]
+queries = ["samples.query", "samples.similar"]
+data_capabilities = ["collection:samples", "selection", "text-query", "neighbors"]
+props_schema = { type = "object" }
+state_schema = { type = "object" }
+default_layout = { id = "samples", position = "center", order = 10 }
+
+[[panels]]
+id = "scatter"
+panel_type = "scatter"
+title = "Embeddings"
+label = "Scatter"
+position = "center"
+renderer = "native:scatter"
+category = "embedding"
+icon = "scatter"
+commands = ["workspace.panel.state.get", "workspace.panel.state.patch"]
+queries = ["embeddings", "layouts"]
+data_capabilities = ["layout:2d", "layout:3d", "selection", "labels"]
+props_schema = { type = "object" }
+state_schema = { type = "object" }
+default_props = { preset = "euclidean-2d", presets = { euclidean-2d = { label = "Euclidean", geometry = "euclidean", layout_dimension = 2 }, poincare-2d = { label = "Hyperbolic", geometry = "poincare", layout_dimension = 2 }, spherical-2d = { label = "Spherical", geometry = "spherical", layout_dimension = 2 }, euclidean-3d = { label = "Euclidean 3D", geometry = "euclidean", layout_dimension = 3 }, spherical-3d = { label = "Sphere 3D", geometry = "spherical", layout_dimension = 3 } } }
+default_layout = { id = "scatter", position = "center", reference_panel_id = "samples", direction = "right", order = 20, preset = "euclidean-2d" }
+
+[[panels]]
+id = "explorer"
+panel_type = "explorer"
+title = "Labels"
+label = "Explorer"
+position = "right"
+renderer = "native:explorer"
+category = "dataset"
+icon = "tags"
+allow_multiple = false
+commands = ["workspace.panel.state.get", "workspace.panel.state.patch"]
+data_capabilities = ["collection:samples", "labels"]
+props_schema = { type = "object" }
+state_schema = { type = "object" }
+default_layout = { id = "explorer", position = "right", dock_zone = "left", order = 0 }

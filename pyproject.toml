@@ -38,6 +38,7 @@ dependencies = [
     "lancedb>=0.33.0",
     "pyarrow>=22.0.0",
     "esbuild-py>=0.1.6",
+    "filelock>=3.20.3",
     "tomli>=2.0; python_version<'3.11'",
     "setuptools>=80.9.0",
 ]
