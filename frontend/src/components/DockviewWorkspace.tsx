@@ -96,13 +96,17 @@ const DEFAULT_BUILT_IN_PANEL_IDS = [
 const getContainerWidth = (api?: DockviewApi | null) => {
   const width = api?.width;
   if (typeof width === "number" && width > 0) return width;
-  return typeof window === "undefined" ? DEFAULT_CONTAINER_WIDTH : window.innerWidth;
+  // A hidden window reports innerWidth 0; sizing math derived from 0 poisons
+  // every edge-group constraint, so fall through to the default instead.
+  if (typeof window !== "undefined" && window.innerWidth > 0) return window.innerWidth;
+  return DEFAULT_CONTAINER_WIDTH;
 };
 
 const getContainerHeight = (api?: DockviewApi | null) => {
   const height = api?.height;
   if (typeof height === "number" && height > 0) return height;
-  return typeof window === "undefined" ? DEFAULT_CONTAINER_HEIGHT : window.innerHeight;
+  if (typeof window !== "undefined" && window.innerHeight > 0) return window.innerHeight;
+  return DEFAULT_CONTAINER_HEIGHT;
 };
 
 const getDefaultLeftPanelWidth = (screenWidth: number) =>
@@ -1264,27 +1268,6 @@ export function DockviewWorkspace() {
         maximumWidth: layout.maximumWidth,
         maximumHeight: layout.maximumHeight,
       });
-      // Dockview applies initialWidth/initialHeight only when the panel opens a
-      // new group; joining an existing edge group keeps that group's current
-      // size (often a degenerate one from a pre-measurement onReady). Re-assert
-      // the authored size for edge-docked panels explicitly.
-      if (!isCompactWorkspace && (panel.position === "right" || panel.position === "bottom")) {
-        const addedPanel = api.getPanel(runtimePanelId);
-        const width =
-          panel.position === "right"
-            ? layout.initialWidth ?? getDefaultRightPanelWidth(getContainerWidth(api))
-            : undefined;
-        const height =
-          panel.position === "bottom"
-            ? layout.initialHeight ?? getDefaultBottomPanelHeight(getContainerHeight(api))
-            : undefined;
-        if (addedPanel && (width !== undefined || height !== undefined)) {
-          addedPanel.api.setSize({
-            ...(width !== undefined ? { width } : {}),
-            ...(height !== undefined ? { height } : {}),
-          });
-        }
-      }
       if (panel.active) newlyAddedActivePanelIds.push(runtimePanelId);
     }
 
@@ -1296,17 +1279,64 @@ export function DockviewWorkspace() {
       api.getPanel(panelId)?.api.setActive();
     }
 
+    // Dockview applies initialWidth/initialHeight only when a panel opens a
+    // new group; joining an existing edge group keeps that group's current
+    // size (often degenerate when the group was created before the container
+    // had a real measurement), and expand() restores that stored size. After
+    // the edge groups are expanded, re-assert the authored sizes.
+    const assertEdgeDockedPanelSizes = () => {
+      if (isCompactWorkspace) return;
+      for (const panel of visibleRuntimePanels) {
+        if (panel.position !== "right" && panel.position !== "bottom") continue;
+        const dockPanel = api.getPanel(getDockPanelId(panel));
+        if (!dockPanel) continue;
+        const layout = getRuntimePanelAddLayout(panel, isCompactWorkspace);
+        const width =
+          panel.position === "right"
+            ? layout.initialWidth ?? getDefaultRightPanelWidth(getContainerWidth(api))
+            : undefined;
+        const height =
+          panel.position === "bottom"
+            ? layout.initialHeight ?? getDefaultBottomPanelHeight(getContainerHeight(api))
+            : undefined;
+        if (width !== undefined || height !== undefined) {
+          // Size the hosting edge group, not the panel: edge groups live in the
+          // shell splitview, where panel-level setSize has no effect.
+          dockPanel.group.api.setSize({
+            ...(width !== undefined ? { width } : {}),
+            ...(height !== undefined ? { height } : {}),
+          });
+        }
+      }
+    };
+
     // Closing the default Explorer can cause Dockview to restore the empty
     // left edge's previous width. Explicit views own their entire layout, so
     // collapse that empty host edge again after panel reconciliation.
     if (hasExplicitView) hideEdgeGroup(api, "left");
     showPopulatedSecondaryEdgeGroups(api);
+    assertEdgeDockedPanelSizes();
     const visibilityFrame = requestAnimationFrame(() => {
       if (hasExplicitView) hideEdgeGroup(api, "left");
       showPopulatedSecondaryEdgeGroups(api);
+      assertEdgeDockedPanelSizes();
     });
 
-    return () => cancelAnimationFrame(visibilityFrame);
+    // The panels may have been assembled while Dockview itself still measured
+    // 0×0 (hidden pane, background render). Re-assert the authored edge sizes
+    // once, the first time Dockview reports real dimensions.
+    let edgeSizesAsserted = api.width > 0 && api.height > 0;
+    const dimensionsDisposable = api.onDidLayoutChange(() => {
+      if (edgeSizesAsserted || api.width <= 0 || api.height <= 0) return;
+      edgeSizesAsserted = true;
+      showPopulatedSecondaryEdgeGroups(api);
+      assertEdgeDockedPanelSizes();
+    });
+
+    return () => {
+      dimensionsDisposable.dispose();
+      cancelAnimationFrame(visibilityFrame);
+    };
   }, [
     ctx.api,
     customPanels,
