@@ -1,8 +1,9 @@
-# Static HyperView Spaces
+# HyperView Shared Spaces
 
-Static Spaces are read-only workspace exports for public demos. They preserve
-the prepared HyperView viewing experience without running Python, LanceDB, or a
-container for each visitor.
+A Shared Space is a portable, read-only workspace export. It preserves the full
+HyperView shell and prepared viewing experience without running Python,
+LanceDB, or a container for each visitor. Use a Live Space when visitors need
+new queries, provider/model jobs, computed layouts, or durable mutation.
 
 ## Export
 
@@ -13,8 +14,8 @@ then export the workspace:
 hyperview export research --out dist/research
 ```
 
-Sample-to-sample similarity is precomputed by default. Control its bundle size
-with `--similarity-k`, or omit it entirely with `--similarity-k 0`:
+Sample-to-sample similarity is omitted by default to keep export cost and
+bundle size bounded. Enable it explicitly with `--similarity-k`:
 
 ```bash
 hyperview export research --out dist/research --similarity-k 25
@@ -28,6 +29,27 @@ and `wrangler.jsonc`.
 Re-exporting into an existing HyperView bundle replaces it. Exporting into a
 non-empty directory that is not already a HyperView bundle is rejected.
 
+The exporter reports warnings in the CLI result and in the manifest's
+`warnings` array when referenced local media or panel module source is missing.
+Treat those warnings as release blockers for public demos: the bundle remains
+browsable so it can be inspected, but affected images or panels are unavailable.
+
+By default a bundle is prepared for the origin root. To mount it below another
+static site, declare the URL path explicitly:
+
+```bash
+hyperview export research \
+  --out dist/research \
+  --mount-path /spaces/research
+```
+
+Copy the exported contents into `spaces/research/` in the containing site's
+document root. The frontend shell, static API, media, and panel modules remain
+scoped to that mount path, so several Shared Spaces can be open on one origin without
+cookies, referrer routing, or per-Space servers. Path-mounted exports omit the
+standalone Wrangler configuration because a static-assets-only Worker mounts
+its asset directory at the origin root.
+
 ## Cloudflare
 
 The generated Wrangler configuration contains only a Static Assets binding and
@@ -39,12 +61,12 @@ npx wrangler deploy --config wrangler.jsonc
 
 Cloudflare serves matching files directly and uses `index.html` as the SPA
 fallback. No HyperView request invokes Python, LanceDB, a model, or a Cloudflare
-Container. Keep Hugging Face Spaces as the full-runtime deployment when a demo
+Container. Keep a Hugging Face Live Space as the runtime-connected deployment when a demo
 needs compute, text search, Python tools, or persistent workspace mutation.
 
-## Static Capabilities
+## Shared Space capabilities
 
-Static Spaces support browsing samples and media, exported layouts, selection,
+Shared Spaces support browsing samples and media, exported layouts, selection,
 2D lasso, label filtering, materialized collections, precomputed
 sample-to-sample similarity, and browser-only extension panels. They do not
 support text-query inference, new embeddings or layouts, Python tools, 3D

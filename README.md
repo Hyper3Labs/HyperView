@@ -84,7 +84,7 @@ cd dist/imagenette-demo && npx wrangler deploy --config wrangler.jsonc
 - [Static Spaces](docs/static-spaces.md)
 - [Google Colab](docs/colab.md)
 - [Contributing](CONTRIBUTING.md)
-- [Tests](TESTS.md)
+- [Testing and linting](CONTRIBUTING.md#testing--linting)
 
 ## Why Geometry?
 

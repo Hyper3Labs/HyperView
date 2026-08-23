@@ -185,8 +185,8 @@ every phase lands green, skill docs updated. Sizes are relative
 | **P8. 3D (demand-gated)** | point-cloud renderer panel | L | robotics/AV verticals |
 
 Parallel hygiene (small, do alongside P1–P2): frontend test harness;
-LanceDB-backed pagination for every remaining `ds.samples` scan; built-in
-Samples grid rendering by `collection_id` (already a named follow-up).
+LanceDB-backed pagination for every remaining `ds.samples` scan. The built-in
+Samples grid now renders its bound `collection_id` directly.
 
 After P1–P3, HyperView is at *functional* parity with the FiftyOne workflows
 its buyers actually use (curate → filter → embed → search → evaluate →

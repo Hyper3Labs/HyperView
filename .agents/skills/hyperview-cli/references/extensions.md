@@ -110,9 +110,12 @@ Use `ctx.dataset` for active dataset reads, `ctx.workspace` for workspace UI sta
 
 ## Browser Panel
 
-Panel modules must be browser-loadable JavaScript modules. They export a default React component or named `Panel`, and use `globalThis.HyperViewPanelSDK`.
+Prefer `panel.jsx`. Modules export a default React component or named `Panel`,
+and must use only `globalThis.HyperViewPanelSDK` public hooks. Prioritize the
+data/interaction contract (props, selection, collections, sample results,
+sibling prop updates, panel state) over visual polish.
 
-```js
+```jsx
 const sdk = globalThis.HyperViewPanelSDK;
 if (!sdk) throw new Error("HyperViewPanelSDK is not available on window.");
 
@@ -128,17 +131,19 @@ export default function SelectionProfilePanel() {
     patchState({ last_selection: selectedIds });
   }, [patchState, selectionKey]);
 
-  return React.createElement(
-    "main",
-    { style: { padding: 12, font: "12px system-ui" } },
-    React.createElement("div", null, `Selected: ${selectedIds.length}`),
-    React.createElement("pre", null, JSON.stringify(state, null, 2))
+  return (
+    <main style={{ padding: 12, font: "12px system-ui" }}>
+      <div>{`Selected: ${selectedIds.length}`}</div>
+      <pre>{JSON.stringify(state, null, 2)}</pre>
+    </main>
   );
 }
 ```
 
 Available SDK hooks are intentionally thin: `useCommandClient`, `usePanelState`,
-`useSelection`, `useCollection`, `useSamples`, and `useHostAdapter`.
+`usePanelActions`, `useSelection`, `useSampleResults`, `useCollection`,
+`useSamples`, `useTool`, `listTools`, and `useHostAdapter`. See
+[panel-modules.md](panel-modules.md) for return shapes.
 
 For dataset-wide panel behavior, prefer runtime collections and
 `useSamples(collectionId)` over scanning a fixed page or hand-building API URLs
@@ -147,17 +152,22 @@ set, run `collection.filter.set`, `collection.neighbors.create`, or
 `panel.samples.retrieval.*` through `useCommandClient()`.
 
 Use `useSelection()` for synchronized selection state. Use `usePanelState()` for
-panel-owned props/state. Use `useHostAdapter()` only for transient host actions
-such as focus; durable layout/state changes should go through `workspace.*`
-commands. In static exports, mutating commands are disabled, while selection and
-panel state patches remain client-side and ephemeral.
+panel-owned props/state. Use `usePanelActions().updateProps(...)` for documented
+sibling panel prop changes (including prepared-case switching in static exports).
+For two independent prepared result panes, construct each native Samples panel
+with `props={{"mode": "results", "collectionId": collection_id}}`; then switch
+the bound collection with `updateProps(panelId, { mode: "results", collectionId })`.
+Result mode preserves prepared order, shows rank numbers, and suppresses the
+live text-search bar. Use `useSampleResults()` instead when one canonical
+Samples panel should own the shared result surface.
+Use `useHostAdapter()` only for transient host actions such as focus; durable
+layout/state changes should go through `workspace.*` commands. In static
+exports, mutating backend commands are disabled, while selection and panel
+state patches remain client-side and ephemeral.
 
 Do not use browser globals such as `window.dispatchEvent` to synchronize panels,
-and use SDK commands for control-plane writes. Use `usePanelState()` for durable
-panel-owned state. Run `workspace.panel.update` when a panel needs to update
-another runtime panel instance's documented props. Python tools are invoked from
-the CLI/API with `hyperview tools run` or by higher-level extension flows; do not
-assume a browser `useTool` hook is present in the thin SDK.
+and use SDK commands for control-plane writes. Python tools are invoked with
+`hyperview tools run` or from the panel via `useTool()` when the host exposes it.
 
 ## CLI Workflow
 
@@ -177,6 +187,19 @@ hyperview extension add .hyperview/extensions/selection-profile \
 
 Installing an extension registers its tools and panel definitions. To instantiate
 a panel from the CLI, add an extension-backed panel instance:
+
+Extensions distributed with HyperView use the same folder, manifest, panel,
+tool, props, state, command, query, and static-export contracts. Install one by
+name without locating its package folder:
+
+```bash
+hyperview extension add --shipped <extension-name> \
+  --workspace research \
+  --json
+```
+
+Promotion from repo-local to shipped distribution must not require changes to
+the extension's panel or tool source.
 
 ```bash
 hyperview ui panel add \

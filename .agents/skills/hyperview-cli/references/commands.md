@@ -215,20 +215,34 @@ hyperview figure export figures/embedding-panel-a.png \
   --title "ArcFace spherical embeddings"
 ```
 
-## Static Demo Bundles
+## Shared Spaces
 
-Export a read-only, self-contained bundle for a workspace:
+Export a read-only, self-contained Shared Space for a workspace:
 
 ```bash
 hyperview export research --out dist/research-demo
 ```
 
-Limit precomputed sample similarity, or omit it when the demo does not expose
-nearest-neighbor browsing:
+When the bundle will be copied below another static site, declare its stable
+mount path during export:
+
+```bash
+hyperview export research \
+  --out dist/research-demo \
+  --mount-path /spaces/research
+```
+
+The exporter rebases the frontend shell and records `/spaces/research` in
+`hyperview-static.json`. Copy the bundle contents into that exact directory
+inside the containing site's document root. Static API, media, and panel-module
+requests remain scoped to the mounted bundle; no proxy, cookie, or referrer
+routing is required.
+
+Sample similarity is omitted by default. Enable a bounded precomputed index
+when the demo exposes nearest-neighbor browsing:
 
 ```bash
 hyperview export research --out dist/research-demo --similarity-k 25
-hyperview export research --out dist/research-demo --similarity-k 0
 ```
 
 The bundle contains the packaged static frontend, `api/runtime.json`,
@@ -244,9 +258,12 @@ npx wrangler deploy --config wrangler.jsonc
 ```
 
 The generated `index.html` sets `window.__HYPERVIEW_STATIC__ = true`. In this
-mode the frontend reads JSON files from the bundle, keeps selection and panel
-state changes client-side, and disables mutations with the visible notice
-`Read-only demo — pip install hyperview for the full workbench`.
+mode the frontend reads JSON files from the bundle. Selection, prepared-case
+panel prop changes, panel state, filtering, and result presentation remain
+ephemeral client-side interactions. Durable workspace writes, Python tools,
+model execution, and arbitrary inference/search are unavailable; controls for
+those capabilities are hidden. The host shows the notice
+`Shared Space`.
 
 Python launch/session code can export the same bundle:
 
@@ -300,6 +317,10 @@ commands or the matching Python `session.ui` helpers in examples.
 
 ```bash
 hyperview extension add .hyperview/extensions/label-histogram \
+  --workspace research
+
+# The same manifest/source format can be distributed with HyperView.
+hyperview extension add --shipped <extension-name> \
   --workspace research
 
 hyperview ui panel add \
@@ -457,6 +478,14 @@ command ids.
 Use panel collection shortcuts when the desired outcome is a Samples panel collection:
 
 ```bash
+hyperview panel samples show-results \
+  --workspace research \
+  --sample-id sample-1 \
+  --sample-id sample-8 \
+  --json
+
+hyperview panel samples reset --workspace research --json
+
 hyperview panel samples show-neighbors \
   --workspace research \
   --sample-id <sample-id> \

@@ -1,6 +1,7 @@
 # Panel & Control Refactor Plan — July 2026
 
-Status: active. Branch: `refactor/panel-control-2026-07` (WIP snapshot committed as baseline).
+Status: implementation substantially complete on `codex/hyperview-v1`; deferred work is
+tracked in `docs/hyperview-v1-execution-2026-07.md`.
 
 ## Why
 
@@ -91,10 +92,10 @@ special cases.
    backend, paged via `GET /api/collections/{id}/items`. **Done** (1fc55fe).
 2. Samples panel renders whatever `collection_id` it is pointed at; retrieval
    commands produce/update collections instead of panel-local result state.
-   **Done for the SDK surface** (51a712f): `useSamples(collectionId)` pages
+   **Done**: `useSamples(collectionId)` pages
    through the endpoint for `all`/`filter`/`neighbors`/`search` kinds (live
-   and static bundles). The built-in Samples grid still renders through the
-   host view model; pointing it at a `collection_id` is follow-up work.
+   and static bundles), and the built-in Samples grid renders the bound
+   `collection_id` directly. The legacy host view model has been removed.
 3. Split `space_key` into representation/index per architecture doc.
    **First landing done** (contract level): `/api/dataset` exposes derived
    `representations[]`/`indexes[]`, and `index_id` (`space:<space_key>`) is
@@ -135,4 +136,4 @@ snapshots (Phase 1.4).
 - Do not change the LanceDB storage backend.
 - Every phase lands with green `uv run pytest` and a green
   `cd frontend && npm run build`, committed on
-  `refactor/panel-control-2026-07`.
+  `codex/hyperview-v1`.

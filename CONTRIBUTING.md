@@ -75,7 +75,11 @@ cd frontend
 npm run dev
 ```
 
-The frontend automatically proxies API requests (`/api/*`) to the backend.
+In development, the frontend sends API requests directly to the backend on
+port 6262. The backend allows the documented frontend development origins.
+The backend prints a URL containing its session token; open the frontend on
+port 6363 with the same query string, for example
+`http://localhost:6363/?token=<session-token>`.
 
 ## Common Tasks
 
@@ -84,13 +88,14 @@ Please ensure all checks pass before submitting a PR.
 
 ```bash
 # Python
-uv run pytest             # Run unit tests
-uv run ruff format .      # formatting
-uv run ruff check . --fix # Linting
+uv lock --check
+uv run pytest -q
+uv run ruff check src tests examples
 
 # Frontend
 cd frontend
 npm run lint
+npm run build
 ```
 
 ### Exporting the Frontend

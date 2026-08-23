@@ -26,6 +26,8 @@ pass before the next wave starts.
 | W5a | Multimodal M1: `add_texts` + HF/CLI `--text-key`, provider image/text capability split, mixed-modality spaces, hybrid vector+FTS text search | multimodal M1 | **done** (Wave 5) |
 | W5b | Multimodal M2 (core): tile renderer dispatch (text/video/metadata), null-dimension aspect bucket | multimodal M2/D4 | **done** (Wave 5) |
 | W5c | SSE event-driven wakeup; jobs persistence + FIFO worker + `jobs.cancel` command | arch review #2a, #4 | **done** (Wave 5) |
+| W6a | Remove legacy frontend sample/neighbor bootstrap; make Samples universally collection-backed; narrow store subscriptions; keyboard-accessible sample tiles | branch audit | **done** (Wave 6) |
+| W6b | Compact workspace listings; opt-in static similarity; dependency audit; PR CI; docs sync | branch audit | **done** (Wave 6) |
 | Later | SSE delta encoding (#2c), thumbnail path consolidation (#5), god-module splits (#6), repo boundaries (#8), M2 extension renderers, M3 video | arch review + multimodal plan | deferred |
 
 Waves 1–4 landed 2026-07-11 (`1a3beb7`, `a4b9e8b`, `8824e15`, `f69e947`); Wave 5
@@ -34,6 +36,38 @@ mid-run; the orchestrator finished the DockviewWorkspace refactor, the CLI test
 double, and the Phase 7 test suite by hand. Wave 5 orchestrator additions: 3.10
 `asyncio.TimeoutError` compat fix in `wait_for_version`, and the `jobs.cancel`
 control command + test (the minion left `cancel_job` unwired).
+
+Wave 6 completed the branch audit cleanup: panels are now the only owners of paged
+sample data, static similarity is explicit opt-in, workspace list output is compact,
+production npm audit is clean, and pull requests run Python and frontend CI checks.
+Fresh workspaces seed an all-samples collection, and Dockview layout restores no longer
+turn synchronization removals into runtime panel deletes.
+
+## Acceptance audit (2026-08-20)
+
+The wave inventory records implementation work; it is not the v1 release gate. The
+completion criteria in `docs/hyperview-v1.md` remain authoritative.
+
+| Criterion | Status | Evidence / remaining work |
+|---|---|---|
+| Local extension promotes without source changes | **implemented, automated** | Packaged `reference` extension and local/shipped/static promotion test. |
+| Built-in panels use the extension SDK boundary | **implemented, automated** | Samples, Scatter, and Explorer use SDK hooks; ESLint rejects store, raw API, and Dockview imports in panel implementations. Browser behavior still needs full QA. |
+| Runtime registry describes every visible panel | **partial** | Header metadata now comes from runtime definitions; native renderer and tab lookup remain frontend implementation adapters. Shipped built-ins still use a separate Python tuple. |
+| Props, state, commands, queries, capabilities are discoverable | **partial** | The transport supports props/state schemas, commands, queries, and static compatibility, but built-in schemas and accepted data capabilities are incomplete. |
+| One mutation path across CLI, Python, HTTP, and SDK | **partial** | Workspace/panel mutations use commands. A route and call-site audit plus CLI smoke coverage remain. |
+| Supported collections use one read path | **partial** | Samples and Explorer are collection-backed; cross-panel and static/live parity need browser verification. |
+| Complete View is inspectable and reproducible | **partial** | Panel instances and serialized Dockview layout are runtime-managed. Reproduction and responsive-layout browser tests remain. |
+| No panel imports frontend stores, Dockview, or raw APIs | **implemented, automated** | Enforced in `frontend/eslint.config.mjs`. |
+| Snapshot has one panel/retrieval source of truth | **implemented, automated** | Durable panel state lives under `workspace.ui.panels`; legacy compatibility requires final audit. |
+| Reference extension passes local and shipped unchanged | **implemented, automated** | `tests/test_shipped_extension_contract.py`. |
+| Static export supports or rejects every panel explicitly | **implemented, automated** | Definition metadata, exported status, source modules, and unavailable reasons are covered; full browser matrix remains. |
+| Examples and installed skill match public APIs | **partial** | Hygiene tests exist; every checked-in demo and documented command still needs execution. |
+| Unrelated browser cannot mutate runtime | **implemented, automated** | Origin allowlist and session-token tests pass; browser verification remains. |
+
+Release verification still required: full CLI command matrix, live UI workflows,
+representative local demos, static Shared Spaces, Cloudflare-style hosting, Hugging Face
+Spaces code/deployments, package build/install, supported Python versions, and an
+independent review pass.
 
 ## Waves
 
