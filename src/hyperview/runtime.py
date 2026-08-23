@@ -16,18 +16,22 @@ from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
 
+from filelock import FileLock
+
 from hyperview.core.dataset import Dataset
 from hyperview.extensions import (
     ExtensionManifest,
     LoadedExtension,
+    load_core_panel_definitions,
     load_extension_tools,
     resolve_panel_source,
+    resolve_shipped_extension,
     unload_extension_modules,
 )
 from hyperview.panel_definitions import (
-    BUILTIN_PANEL_DEFINITIONS,
     PanelDefinition,
     merge_default_props,
+    validate_json_contract,
 )
 from hyperview.storage.config import StorageConfig
 from hyperview.storage.schema import (
@@ -120,6 +124,20 @@ def _json_object_copy(value: dict[str, Any]) -> dict[str, Any]:
     """Return a JSON-safe copy and reject non-serializable state early."""
 
     return json.loads(json.dumps(value))
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any], *, default: Any = None) -> None:
+    """Replace registry JSON without exposing a truncated intermediate file."""
+
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(payload, indent=2, sort_keys=True, default=default),
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _json_merge_patch(current: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
@@ -227,7 +245,7 @@ class ProviderRegistry:
                 for provider in sorted(self._providers.values(), key=lambda item: item.alias)
             ]
         }
-        self.path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+        _atomic_write_json(self.path, payload)
 
     def list(self) -> list[ProviderRegistration]:
         return [self._providers[key] for key in sorted(self._providers)]
@@ -312,6 +330,7 @@ class CustomPanelSpec:
     kind: Literal["module", "builtin"] = "module"
     panel_type: str | None = None
     source: str | None = None
+    renderer: str | None = None
     builtin_panel: str | None = None
     extension: str | None = None
     extension_panel: str | None = None
@@ -328,6 +347,7 @@ class CustomPanelSpec:
     max_width: int | None = None
     max_height: int | None = None
     visible: bool = True
+    active: bool = False
     props: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -335,13 +355,20 @@ class CustomPanelSpec:
             self.kind = "builtin"
             self.builtin_panel = self.builtin_panel or "scatter"
             self.panel_type = self.panel_type or "scatter"
-            self.source = self.source or "builtin"
+            self.source = self.source or "shipped"
+            self.renderer = self.renderer or "native:scatter"
         elif self.kind == "extension":
             self.kind = "module"
         elif self.kind not in {"module", "builtin"}:
             raise ValueError(
                 f"Unsupported panel kind '{self.kind}'; expected 'builtin' or 'module'"
             )
+        if self.kind == "builtin":
+            native_type = self.builtin_panel or self.panel_type
+            self.renderer = self.renderer or (f"native:{native_type}" if native_type else None)
+            self.source = "shipped" if self.source in {None, "builtin"} else self.source
+        elif self.renderer is None and self.module_file:
+            self.renderer = f"module:{Path(self.module_file).name}"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CustomPanelSpec:
@@ -399,6 +426,7 @@ class CustomPanelSpec:
             kind=kind,  # type: ignore[arg-type]
             panel_type=data.get("panel_type"),
             source=data.get("source"),
+            renderer=data.get("renderer"),
             builtin_panel=builtin_panel,  # type: ignore[arg-type]
             extension=data.get("extension"),
             extension_panel=data.get("extension_panel"),
@@ -415,6 +443,7 @@ class CustomPanelSpec:
             max_width=positive_int("max_width"),
             max_height=positive_int("max_height"),
             visible=bool(data.get("visible", True)),
+            active=bool(data.get("active", False)),
             props=dict(data.get("props") or {}),
         )
 
@@ -422,6 +451,7 @@ class CustomPanelSpec:
         payload = asdict(self)
         payload["panel_type"] = self.resolved_panel_type()
         payload["source"] = self.resolved_source()
+        payload["renderer"] = self.resolved_renderer()
         payload["layout"] = self.layout_dict()
         return payload
 
@@ -438,10 +468,19 @@ class CustomPanelSpec:
         if self.source:
             return self.source
         if self.kind == "builtin":
-            return "builtin"
+            return "shipped"
         if self.extension:
             return "extension"
         return "module"
+
+    def resolved_renderer(self) -> str:
+        if self.renderer:
+            return self.renderer
+        if self.kind == "builtin":
+            return f"native:{self.builtin_panel or self.resolved_panel_type()}"
+        if self.module_file:
+            return f"module:{Path(self.module_file).name}"
+        return "module:unknown"
 
     def layout_dict(self) -> dict[str, Any]:
         return {
@@ -685,6 +724,28 @@ def _samples_filter_state(collection: CollectionState) -> dict[str, Any]:
     }
 
 
+def _samples_selection_state(
+    collection: CollectionState,
+    *,
+    focus: bool,
+    state_revision: int,
+) -> dict[str, Any]:
+    state: dict[str, Any] = {
+        "mode": "collection",
+        "retrieval": None,
+        **_samples_collection_state(collection),
+    }
+    if focus:
+        state["focus_request"] = {
+            "kind": "selection",
+            "collection_id": collection.id,
+            "revision": state_revision,
+        }
+    else:
+        state["focus_request"] = None
+    return state
+
+
 def _samples_retrieval_state(
     query: SimilarityQueryState,
     collection: CollectionState | None = None,
@@ -891,15 +952,48 @@ class WorkspaceRegistry:
             for entry in list(data.get("workspaces") or [])
         }
 
-    def _save(self) -> None:
+    def _save(
+        self,
+        *,
+        changed_workspace_ids: set[str] | None = None,
+        deleted_workspace_ids: set[str] | None = None,
+    ) -> None:
+        """Persist workspace changes without clobbering sibling runtimes.
+
+        Multiple HyperView Spaces commonly run as separate processes while sharing
+        the default registry. Each process has an in-memory snapshot, so rewriting
+        every workspace would restore stale copies of workspaces owned by the other
+        processes. Merge only the workspaces changed by this registry while holding
+        an inter-process lock.
+        """
+
+        changed_ids = set(self._workspaces) if changed_workspace_ids is None else set(changed_workspace_ids)
+        deleted_ids = set(deleted_workspace_ids or ())
         payload = {
             "active_workspace_id": self.active_workspace_id,
-            "workspaces": [
-                workspace.to_dict()
-                for workspace in sorted(self._workspaces.values(), key=lambda item: item.id)
-            ],
+            "workspaces": [],
         }
-        self.path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+        lock = FileLock(str(self.path) + ".lock")
+        with lock:
+            persisted: dict[str, WorkspaceState] = {}
+            if self.path.exists():
+                data = json.loads(self.path.read_text())
+                persisted = {
+                    entry["id"]: WorkspaceState.from_dict(entry)
+                    for entry in list(data.get("workspaces") or [])
+                }
+            for workspace_id in deleted_ids:
+                persisted.pop(workspace_id, None)
+            for workspace_id in changed_ids:
+                workspace = self._workspaces.get(workspace_id)
+                if workspace is not None:
+                    persisted[workspace_id] = workspace
+            self._workspaces = persisted
+            payload["workspaces"] = [
+                workspace.to_dict()
+                for workspace in sorted(persisted.values(), key=lambda item: item.id)
+            ]
+            _atomic_write_json(self.path, payload)
 
     def list(self) -> list[WorkspaceState]:
         return [self._workspaces[key] for key in sorted(self._workspaces)]
@@ -918,7 +1012,7 @@ class WorkspaceRegistry:
         self._workspaces[workspace_id] = workspace
         if activate or self.active_workspace_id is None:
             self.active_workspace_id = workspace_id
-        self._save()
+        self._save(changed_workspace_ids={workspace_id})
         return workspace
 
     def ensure_workspace(self, workspace_id: str, *, activate: bool = False) -> WorkspaceState:
@@ -926,8 +1020,9 @@ class WorkspaceRegistry:
         if workspace is not None:
             if activate:
                 self.active_workspace_id = workspace_id
-                self._save()
+                self._save(changed_workspace_ids=set())
             return workspace
+
         return self.create_workspace(workspace_id, activate=activate)
 
     def set_active_workspace(self, workspace_id: str) -> WorkspaceState:
@@ -935,7 +1030,7 @@ class WorkspaceRegistry:
         if workspace is None:
             raise ValueError(f"Unknown workspace: {workspace_id}")
         self.active_workspace_id = workspace_id
-        self._save()
+        self._save(changed_workspace_ids=set())
         return workspace
 
     def delete_workspace(self, workspace_id: str) -> WorkspaceState | None:
@@ -951,7 +1046,7 @@ class WorkspaceRegistry:
             remaining_ids = sorted(self._workspaces)
             self.active_workspace_id = remaining_ids[0] if remaining_ids else None
 
-        self._save()
+        self._save(changed_workspace_ids=set(), deleted_workspace_ids={workspace_id})
         if self.active_workspace_id is None:
             return None
         return self._workspaces[self.active_workspace_id]
@@ -959,12 +1054,12 @@ class WorkspaceRegistry:
     def set_dataset(self, workspace_id: str, dataset_name: str) -> WorkspaceState:
         workspace = self.ensure_workspace(workspace_id)
         workspace.dataset_name = dataset_name
-        self._save()
+        self._save(changed_workspace_ids={workspace_id})
         return workspace
 
     def update_workspace(self, workspace: WorkspaceState) -> None:
         self._workspaces[workspace.id] = workspace
-        self._save()
+        self._save(changed_workspace_ids={workspace.id})
 
 
 @dataclass
@@ -1047,7 +1142,7 @@ class JobRegistry:
                 for job in sorted(self._jobs.values(), key=lambda item: item.id)
             ]
         }
-        self.path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str))
+        _atomic_write_json(self.path, payload, default=str)
 
     def list(self) -> list[JobState]:
         return [self._jobs[key] for key in sorted(self._jobs)]
@@ -1071,6 +1166,7 @@ class ExtensionInstallation:
     manifest: ExtensionManifest
     loaded: LoadedExtension
     workspace_id: str
+    source: Literal["extension", "shipped"] = "extension"
     panel_ids: list[str] = field(default_factory=list)
     add_panels: bool = False
 
@@ -1080,9 +1176,10 @@ class ExtensionInstallation:
             "folder": str(self.manifest.folder),
             "description": self.manifest.description,
             "workspace_id": self.workspace_id,
+            "source": self.source,
             "panels": list(self.panel_ids),
             "panel_definitions": [
-                panel.to_definition(self.manifest.name).to_dict()
+                panel.to_definition(self.manifest.name, source=self.source).to_dict()
                 for panel in self.manifest.panels
             ],
             "tools": [record.to_dict() for record in self.loaded.tools],
@@ -1106,6 +1203,7 @@ class HyperViewRuntime:
             self.workspace_registry.path.with_name("jobs.json")
         )
         self.tools = ToolRegistry()
+        self._core_panel_definitions = tuple(load_core_panel_definitions())
         self._extensions: dict[str, ExtensionInstallation] = {}
         self._dataset_cache: dict[str, Dataset] = {}
         self._panel_module_revisions: dict[tuple[str, str, str], str] = {}
@@ -1230,6 +1328,8 @@ class HyperViewRuntime:
                 workspace.ui.panels = {}
                 workspace.ui.layout_views = {}
                 workspace.collections = {}
+                for panel in workspace.ui.custom_panels:
+                    self._seed_default_panel_state_locked(workspace, panel)
                 self.workspace_registry.update_workspace(workspace)
             if activate_workspace:
                 self.workspace_registry.set_active_workspace(workspace_id)
@@ -1238,6 +1338,12 @@ class HyperViewRuntime:
     def create_workspace(self, workspace_id: str, *, activate: bool = False) -> WorkspaceState:
         with self._lock:
             workspace = self.workspace_registry.create_workspace(workspace_id, activate=activate)
+            self._bump_version()
+            return workspace
+
+    def delete_workspace(self, workspace_id: str) -> WorkspaceState | None:
+        with self._lock:
+            workspace = self.workspace_registry.delete_workspace(workspace_id)
             self._bump_version()
             return workspace
 
@@ -1264,6 +1370,8 @@ class HyperViewRuntime:
                 workspace.ui.panels = {}
                 workspace.ui.layout_views = {}
                 workspace.collections = {}
+                for panel in workspace.ui.custom_panels:
+                    self._seed_default_panel_state_locked(workspace, panel)
                 self.workspace_registry.update_workspace(workspace)
             self._bump_version()
             return workspace
@@ -1336,14 +1444,13 @@ class HyperViewRuntime:
         panel: CustomPanelSpec,
     ) -> None:
         definition = self._definition_for_panel_spec_locked(panel)
-        if (
-            definition is not None
-            and definition.default_state
-            and panel.id not in workspace.ui.panels
-        ):
-            workspace.ui.panels[panel.id] = PanelStateEntry(
-                state=_json_object_copy(definition.default_state)
-            )
+        if definition is None or panel.id in workspace.ui.panels:
+            return
+        state = _json_object_copy(definition.default_state)
+        if definition.panel_type == "samples" and workspace.dataset_name:
+            state.update(_samples_collection_state(self._build_all_collection_locked(workspace)))
+        if state:
+            workspace.ui.panels[panel.id] = PanelStateEntry(state=state)
 
     def get_panel_state(
         self,
@@ -1392,6 +1499,12 @@ class HyperViewRuntime:
                 _json_object_copy(patch)
                 if replace_state
                 else _json_merge_patch(entry.state, patch)
+            )
+            definition = self._definition_for_panel_id_locked(workspace, resolved_panel_id)
+            validate_json_contract(
+                next_state,
+                definition.state_schema if definition is not None else None,
+                label=f"panel {resolved_panel_id!r} state",
             )
             if next_state == entry.state:
                 return workspace
@@ -1459,6 +1572,16 @@ class HyperViewRuntime:
         workspace.collections[collection.id] = collection
         return collection
 
+    def _build_all_collection_locked(self, workspace: WorkspaceState) -> CollectionState:
+        collection = CollectionState(
+            id=_stable_collection_id("all", {}),
+            dataset_id=self._workspace_dataset_id_locked(workspace),
+            entity_set_id="samples",
+            kind="all",
+            query={},
+        )
+        return self._store_collection_locked(workspace, collection)
+
     def _build_label_filter_collection_locked(
         self,
         workspace: WorkspaceState,
@@ -1483,6 +1606,25 @@ class HyperViewRuntime:
             dataset_id=dataset_id,
             entity_set_id="samples",
             kind="filter",
+            query=query,
+        )
+        return self._store_collection_locked(workspace, collection)
+
+    def _build_selection_collection_locked(
+        self,
+        workspace: WorkspaceState,
+        *,
+        sample_ids: list[str],
+        source: str | None = None,
+    ) -> CollectionState:
+        query: dict[str, Any] = {"ids": list(sample_ids)}
+        if source:
+            query["source"] = source
+        collection = CollectionState(
+            id=_stable_collection_id("selection", query),
+            dataset_id=self._workspace_dataset_id_locked(workspace),
+            entity_set_id="samples",
+            kind="selection",
             query=query,
         )
         return self._store_collection_locked(workspace, collection)
@@ -1554,12 +1696,11 @@ class HyperViewRuntime:
                 or _samples_panel_collection_kind(entry.state) != "filter"
             ):
                 return False
-            next_state = _json_merge_patch(
-                entry.state,
-                {
-                    "mode": None,
-                    **_clear_samples_collection_state_patch(),
-                },
+            next_state = _json_object_copy(entry.state)
+            next_state.pop("mode", None)
+            next_state.pop("retrieval", None)
+            next_state.update(
+                _samples_collection_state(self._build_all_collection_locked(workspace))
             )
         else:
             next_state = _json_merge_patch(entry.state, _samples_filter_state(collection))
@@ -1590,15 +1731,14 @@ class HyperViewRuntime:
                 entry.state.get("mode") == "retrieval"
                 or _samples_panel_collection_kind(entry.state) in {"neighbors", "search"}
             )
-            clear_patch: dict[str, Any] = {"retrieval": None}
-            if should_clear_collection:
-                clear_patch.update(_clear_samples_collection_state_patch())
-            next_state = _json_merge_patch(
-                entry.state,
-                clear_patch,
-            )
+            next_state = _json_object_copy(entry.state)
+            next_state.pop("retrieval", None)
             if next_state.get("mode") == "retrieval":
                 next_state.pop("mode", None)
+            if should_clear_collection:
+                next_state.update(
+                    _samples_collection_state(self._build_all_collection_locked(workspace))
+                )
         else:
             collection = self._build_neighbors_collection_locked(workspace, query)
             next_state = _json_object_copy(entry.state)
@@ -1657,10 +1797,70 @@ class HyperViewRuntime:
         with self._lock:
             workspace = self.get_workspace(workspace_id)
             workspace.ui.selected_ids = list(dict.fromkeys(sample_ids))
-            active_retrieval = _samples_panel_retrieval_query(workspace.ui.panels)
-            if active_retrieval is not None and active_retrieval.query_text is None:
-                if active_retrieval.anchor_sample_id not in workspace.ui.selected_ids:
-                    self._set_samples_retrieval_locked(workspace, None)
+            self.workspace_registry.update_workspace(workspace)
+            self._bump_version()
+            return workspace
+
+    def set_samples_selection(
+        self,
+        workspace_id: str,
+        sample_ids: list[str],
+        *,
+        focus: bool = True,
+        source: str | None = None,
+    ) -> WorkspaceState:
+        """Atomically show explicit rows in Samples and synchronize map selection."""
+
+        unique_ids = list(dict.fromkeys(str(item).strip() for item in sample_ids if str(item).strip()))
+        dataset = self.get_dataset(workspace_id=workspace_id)
+        existing_ids = {sample.id for sample in dataset.get_samples_by_ids(unique_ids)}
+        missing_ids = [sample_id for sample_id in unique_ids if sample_id not in existing_ids]
+        if missing_ids:
+            preview = ", ".join(missing_ids[:5])
+            suffix = "" if len(missing_ids) <= 5 else f", and {len(missing_ids) - 5} more"
+            raise KeyError(f"Samples not found: {preview}{suffix}")
+
+        with self._lock:
+            workspace = self.get_workspace(workspace_id)
+            resolved_panel_id, entry = self._get_panel_state_entry_locked(
+                workspace,
+                SAMPLES_PANEL_STATE_ID,
+                create=True,
+            )
+            next_revision = entry.state_revision + 1
+            next_state = _json_object_copy(entry.state)
+            next_state.pop("retrieval", None)
+            if unique_ids:
+                collection = self._build_selection_collection_locked(
+                    workspace,
+                    sample_ids=unique_ids,
+                    source=source,
+                )
+                next_state.update(
+                    _samples_selection_state(
+                        collection,
+                        focus=focus,
+                        state_revision=next_revision,
+                    )
+                )
+            else:
+                collection = self._build_all_collection_locked(workspace)
+                next_state.update(
+                    {
+                        "mode": "collection",
+                        "retrieval": None,
+                        **_samples_collection_state(collection),
+                        "focus_request": (
+                            {"kind": "all", "revision": next_revision} if focus else None
+                        ),
+                    }
+                )
+
+            workspace.ui.selected_ids = unique_ids
+            workspace.ui.panels[resolved_panel_id] = PanelStateEntry(
+                state=next_state,
+                state_revision=next_revision,
+            )
             self.workspace_registry.update_workspace(workspace)
             self._bump_version()
             return workspace
@@ -1788,12 +1988,52 @@ class HyperViewRuntime:
         if not text:
             raise ValueError("query_text must be a non-empty string")
 
+        requested_context = any((layout_key, index_id, space_key))
         resolved_layout_key, resolved_space_key = self._resolve_retrieval_context(
             workspace_id=workspace_id,
             layout_key=layout_key,
             index_id=index_id,
             space_key=space_key,
         )
+
+        dataset = self.get_dataset(workspace_id=workspace_id)
+        spaces = dataset.list_spaces()
+        from hyperview.embeddings.engine import get_engine
+
+        engine = get_engine(provider_registry=self.provider_registry)
+
+        def supports_text(candidate_space_key: str | None) -> bool:
+            if candidate_space_key is None:
+                return False
+            try:
+                spec = dataset._embedding_spec_for_space(candidate_space_key)
+                return "text" in engine.supported_modalities(spec)
+            except (ImportError, KeyError, RuntimeError, ValueError):
+                return False
+
+        if not supports_text(resolved_space_key):
+            if requested_context:
+                raise ValueError(
+                    f"Embedding space {resolved_space_key!r} does not support text queries"
+                )
+            compatible_space = next(
+                (space for space in spaces if supports_text(space.space_key)),
+                None,
+            )
+            if compatible_space is None:
+                raise ValueError("No text-capable embedding space is available")
+            resolved_space_key = compatible_space.space_key
+            matching_layout = next(
+                (
+                    item
+                    for item in dataset.list_layouts()
+                    if item.space_key == resolved_space_key
+                ),
+                None,
+            )
+            resolved_layout_key = (
+                matching_layout.layout_key if matching_layout is not None else None
+            )
 
         try:
             limit = int(k)
@@ -1918,7 +2158,7 @@ class HyperViewRuntime:
 
         if kind == "builtin":
             builtin_panel_type = str(builtin_panel or "").strip()
-            definition = self.get_panel_definition(builtin_panel_type, source="builtin")
+            definition = self.get_panel_definition(builtin_panel_type, source="shipped")
             if definition is None:
                 raise ValueError(f"Unknown built-in panel type: {builtin_panel_type}")
             layout = _panel_layout_fields(
@@ -1933,16 +2173,19 @@ class HyperViewRuntime:
                 max_width=max_width,
                 max_height=max_height,
             )
+            merged_props = merge_default_props(definition, props)
+            validate_json_contract(merged_props, definition.props_schema, label="panel props")
             return CustomPanelSpec(
                 id=panel_id,
                 title=title or definition.title or definition.label,
                 kind="builtin",
                 panel_type=definition.panel_type,
                 source=definition.source,
+                renderer=definition.renderer,
                 builtin_panel=definition.panel_type,
                 **layout,
                 visible=visible,
-                props=merge_default_props(definition, props),
+                props=merged_props,
             )
 
         if kind == "extension":
@@ -1959,11 +2202,16 @@ class HyperViewRuntime:
             )
             if manifest_panel is None:
                 raise LookupError(f"Extension panel not found: {extension}/{extension_panel}")
-            module_file = resolve_panel_source(
-                installation.manifest.folder,
-                manifest_panel.file,
+            module_name = manifest_panel.module_file()
+            if module_name is None:
+                raise ValueError(
+                    f"Extension panel '{extension}/{extension_panel}' does not declare a module renderer"
+                )
+            module_file = resolve_panel_source(installation.manifest.folder, module_name)
+            definition = manifest_panel.to_definition(
+                installation.manifest.name,
+                source=installation.source,
             )
-            definition = manifest_panel.to_definition(installation.manifest.name)
             layout = _panel_layout_fields(
                 definition.default_layout,
                 position=position,
@@ -1976,18 +2224,21 @@ class HyperViewRuntime:
                 max_width=max_width,
                 max_height=max_height,
             )
+            merged_props = merge_default_props(definition, props)
+            validate_json_contract(merged_props, definition.props_schema, label="panel props")
             return CustomPanelSpec(
                 id=panel_id,
                 title=title or definition.title or definition.label,
                 kind="module",
                 panel_type=definition.panel_type,
                 source=definition.source,
+                renderer=definition.renderer,
                 extension=extension,
                 extension_panel=extension_panel,
                 module_file=str(module_file),
                 **layout,
                 visible=visible,
-                props=merge_default_props(definition, props),
+                props=merged_props,
             )
 
         if kind == "scatter":
@@ -2034,12 +2285,16 @@ class HyperViewRuntime:
                 max_width=max_width,
                 max_height=max_height,
             )
+            definition = self.get_panel_definition("scatter", source="shipped")
+            if definition is None:
+                raise RuntimeError("Packaged scatter panel definition is unavailable")
             return CustomPanelSpec(
                 id=panel_id,
                 title=title,
                 kind="builtin",
                 panel_type="scatter",
-                source="builtin",
+                source=definition.source,
+                renderer=definition.renderer,
                 builtin_panel="scatter",
                 layout_key=layout_key,
                 geometry=geometry,
@@ -2047,7 +2302,7 @@ class HyperViewRuntime:
                 **layout,
                 visible=visible,
                 props=merge_default_props(
-                    self.get_panel_definition("scatter", source="builtin"),
+                    definition,
                     props,
                 ),
             )
@@ -2205,6 +2460,12 @@ class HyperViewRuntime:
                     next_panel = replace(next_panel, visible=visible)
                     changed = True
                 if props is not None and props != panel.props:
+                    definition = self._definition_for_panel_spec_locked(panel)
+                    validate_json_contract(
+                        props,
+                        definition.props_schema if definition is not None else None,
+                        label=f"panel {panel_id!r} props",
+                    )
                     next_panel = replace(next_panel, props=dict(props))
                     changed = True
                 next_panels.append(next_panel)
@@ -2252,14 +2513,25 @@ class HyperViewRuntime:
             ):
                 raise ValueError(f"Active panel is not in the view: {next_active_panel_id}")
 
-            if [panel.to_dict() for panel in workspace.ui.custom_panels] == [
-                panel.to_dict() for panel in next_panels
-            ] and workspace.ui.has_explicit_view == next_has_explicit_view and workspace.ui.active_panel_id == next_active_panel_id:
+            panels_changed = [
+                panel.to_dict() for panel in workspace.ui.custom_panels
+            ] != [panel.to_dict() for panel in next_panels]
+            view_mode_changed = workspace.ui.has_explicit_view != next_has_explicit_view
+            persisted_layout_changed = workspace.ui.layout is not None
+            if (
+                not panels_changed
+                and not view_mode_changed
+                and not persisted_layout_changed
+                and workspace.ui.active_panel_id == next_active_panel_id
+            ):
                 return workspace
 
             workspace.ui.custom_panels = next_panels
             workspace.ui.has_explicit_view = next_has_explicit_view
             workspace.ui.active_panel_id = next_active_panel_id
+            if panels_changed or view_mode_changed or persisted_layout_changed:
+                workspace.ui.layout = None
+                workspace.ui.layout_revision += 1
             self._prune_panel_states_locked(workspace)
             for panel in next_panels:
                 self._seed_default_panel_state_locked(workspace, panel)
@@ -2547,10 +2819,13 @@ class HyperViewRuntime:
 
     def list_panel_definitions(self) -> list[PanelDefinition]:
         with self._lock:
-            definitions = list(BUILTIN_PANEL_DEFINITIONS)
+            definitions = list(self._core_panel_definitions)
             for installation in self._extensions.values():
                 definitions.extend(
-                    panel.to_definition(installation.manifest.name)
+                    panel.to_definition(
+                        installation.manifest.name,
+                        source=installation.source,
+                    )
                     for panel in installation.manifest.panels
                 )
             return sorted(
@@ -2579,10 +2854,13 @@ class HyperViewRuntime:
         source: str | None = None,
         extension: str | None = None,
     ) -> PanelDefinition | None:
-        definitions = list(BUILTIN_PANEL_DEFINITIONS)
+        definitions = list(self._core_panel_definitions)
         for installation in self._extensions.values():
             definitions.extend(
-                panel.to_definition(installation.manifest.name)
+                panel.to_definition(
+                    installation.manifest.name,
+                    source=installation.source,
+                )
                 for panel in installation.manifest.panels
             )
         for definition in definitions:
@@ -2602,7 +2880,7 @@ class HyperViewRuntime:
         if panel.kind == "builtin":
             return self._get_panel_definition_locked(
                 panel.resolved_panel_type(),
-                source="builtin",
+                source="shipped",
             )
         if panel.extension and panel.extension_panel:
             installation = self._extensions.get(panel.extension)
@@ -2618,8 +2896,21 @@ class HyperViewRuntime:
             )
             if manifest_panel is None:
                 return None
-            return manifest_panel.to_definition(installation.manifest.name)
+            return manifest_panel.to_definition(
+                installation.manifest.name,
+                source=installation.source,
+            )
         return None
+
+    def _definition_for_panel_id_locked(
+        self,
+        workspace: WorkspaceState,
+        panel_id: str,
+    ) -> PanelDefinition | None:
+        if panel_id == SAMPLES_PANEL_STATE_ID:
+            return self._get_panel_definition_locked("samples", source="shipped")
+        panel = next((item for item in workspace.ui.custom_panels if item.id == panel_id), None)
+        return self._definition_for_panel_spec_locked(panel) if panel is not None else None
 
     def install_extension(
         self,
@@ -2627,15 +2918,25 @@ class HyperViewRuntime:
         folder: Path,
         *,
         add_panels: bool = False,
+        source: Literal["extension", "shipped"] = "extension",
     ) -> ExtensionInstallation:
         """Load an extension folder and register its tools + panels."""
+
+        if source not in {"extension", "shipped"}:
+            raise ValueError(f"Unsupported extension source: {source}")
 
         manifest = ExtensionManifest.load(folder)
         loaded = load_extension_tools(manifest)
         prepared_panels: list[CustomPanelSpec] = []
         for panel_entry in manifest.panels:
-            panel_file = resolve_panel_source(manifest.folder, panel_entry.file)
-            definition = panel_entry.to_definition(manifest.name)
+            module_name = panel_entry.module_file()
+            if module_name is None:
+                raise ValueError(
+                    f"Installable extension panel '{manifest.name}/{panel_entry.id}' "
+                    "must declare a module renderer"
+                )
+            panel_file = resolve_panel_source(manifest.folder, module_name)
+            definition = panel_entry.to_definition(manifest.name, source=source)
             layout = _panel_layout_fields(
                 definition.default_layout,
                 position=None,
@@ -2654,6 +2955,7 @@ class HyperViewRuntime:
                     title=definition.title or definition.label,
                     panel_type=definition.panel_type,
                     source=definition.source,
+                    renderer=definition.renderer,
                     extension=manifest.name,
                     extension_panel=panel_entry.id,
                     module_file=str(panel_file),
@@ -2692,6 +2994,7 @@ class HyperViewRuntime:
                     manifest=manifest,
                     loaded=loaded,
                     workspace_id=workspace_id,
+                    source=source,
                     panel_ids=list(installed_panel_ids),
                     add_panels=add_panels,
                 )
@@ -2732,6 +3035,22 @@ class HyperViewRuntime:
 
                 raise
 
+    def install_shipped_extension(
+        self,
+        workspace_id: str,
+        name: str,
+        *,
+        add_panels: bool = False,
+    ) -> ExtensionInstallation:
+        """Install an extension package distributed with HyperView."""
+
+        return self.install_extension(
+            workspace_id,
+            resolve_shipped_extension(name),
+            add_panels=add_panels,
+            source="shipped",
+        )
+
     def uninstall_extension(self, name: str) -> ExtensionInstallation | None:
         with self._lock:
             return self._uninstall_extension_locked(name)
@@ -2770,7 +3089,13 @@ class HyperViewRuntime:
             folder = installation.manifest.folder
             workspace_id = installation.workspace_id
             add_panels = installation.add_panels
-        return self.install_extension(workspace_id, folder, add_panels=add_panels)
+            source = installation.source
+        return self.install_extension(
+            workspace_id,
+            folder,
+            add_panels=add_panels,
+            source=source,
+        )
 
     def _add_custom_panel_locked(self, workspace_id: str, panel: CustomPanelSpec) -> None:
         workspace = self.get_workspace(workspace_id)

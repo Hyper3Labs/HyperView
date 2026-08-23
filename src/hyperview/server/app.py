@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict
 from hyperview._version import __version__
 from hyperview.control import (
     CommandEnvelope,
+    CommandResult,
     ControlService,
     create_default_command_registry,
 )
@@ -26,10 +27,7 @@ from hyperview.core.selection import (
     points_in_polygon,
     select_ids_for_3d_lasso,
 )
-from hyperview.runtime import (
-    HyperViewRuntime,
-    LayoutViewState,
-)
+from hyperview.runtime import HyperViewRuntime
 from hyperview.server.security import auth_disabled, mint_api_token
 from hyperview.storage.metrics import distance_metric_for_space
 from hyperview.storage.schema import parse_layout_dimension, space_key_from_index_ref
@@ -178,7 +176,8 @@ class ToolRunRequest(BaseModel):
 
 class ExtensionInstallRequest(BaseModel):
     workspace_id: str
-    folder: str
+    folder: str | None = None
+    shipped: str | None = None
     add_panels: bool = False
 
 
@@ -188,6 +187,28 @@ class ExtensionRemoveRequest(BaseModel):
 
 def _control_service(runtime: HyperViewRuntime) -> ControlService:
     return ControlService(runtime, create_default_command_registry())
+
+
+def _run_compat_command(
+    runtime: HyperViewRuntime,
+    command: str,
+    *,
+    target: dict[str, Any],
+    args: dict[str, Any] | None = None,
+) -> CommandResult:
+    """Dispatch a legacy write route through the canonical command service."""
+
+    result = _control_service(runtime).run(
+        CommandEnvelope(command=command, target=target, args=args or {})
+    )
+    if result.ok:
+        return result
+    error = result.error
+    status_code = 404 if error is not None and error.code == "not_found" else 400
+    raise HTTPException(
+        status_code=status_code,
+        detail=error.message if error is not None else f"Command failed: {command}",
+    )
 
 
 class SampleResponse(BaseModel):
@@ -453,6 +474,16 @@ def _resolve_collection_items(
         page = matches[offset : offset + limit]
         return [(sample, None) for sample in page], total, offset + limit < total
 
+    if collection.kind == "selection":
+        raw_ids = query.get("ids") or []
+        if not isinstance(raw_ids, list):
+            raise ValueError("Selection collection ids must be a list")
+        sample_ids = [str(sample_id) for sample_id in raw_ids]
+        total = len(sample_ids)
+        page_ids = sample_ids[offset : offset + limit]
+        samples = ds.get_samples_by_ids(page_ids)
+        return [(sample, None) for sample in samples], total, offset + limit < total
+
     if collection.kind == "all":
         samples, total = ds.get_samples_paginated(offset=offset, limit=limit)
         return [(sample, None) for sample in samples], total, offset + limit < total
@@ -700,98 +731,90 @@ def create_app(
         request: ProviderRegisterRequest,
         runtime_dep: HyperViewRuntime = Depends(get_runtime),
     ):
-        try:
-            registration = runtime_dep.provider_registry.register_python(
-                request.alias,
-                request.import_path,
-                description=request.description,
-                defaults=request.defaults,
-                overwrite=request.overwrite,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        runtime_dep._bump_version()
-        return {"provider": registration.to_dict()}
+        result = _run_compat_command(
+            runtime_dep,
+            "provider.register",
+            target={"alias": request.alias},
+            args=request.model_dump(exclude={"alias"}),
+        )
+        return {"provider": result.result["provider"]}
 
     @app.post("/api/control/workspaces/create")
     async def create_workspace_endpoint(
         request: WorkspaceCreateRequest,
         runtime_dep: HyperViewRuntime = Depends(get_runtime),
     ):
-        try:
-            workspace = runtime_dep.create_workspace(request.workspace_id, activate=request.activate)
-            if request.dataset_name:
-                workspace = runtime_dep.set_workspace_dataset(request.workspace_id, request.dataset_name)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"workspace": workspace.to_dict()}
+        result = _run_compat_command(
+            runtime_dep,
+            "workspace.create",
+            target={"workspace_id": request.workspace_id},
+            args=request.model_dump(exclude={"workspace_id"}),
+        )
+        return {"workspace": result.workspace}
 
     @app.post("/api/control/workspaces/set-active")
     async def set_active_workspace_endpoint(
         request: WorkspaceActivateRequest,
         runtime_dep: HyperViewRuntime = Depends(get_runtime),
     ):
-        try:
-            workspace = runtime_dep.set_active_workspace(request.workspace_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return {"workspace": workspace.to_dict()}
+        result = _run_compat_command(
+            runtime_dep,
+            "workspace.activate",
+            target={"workspace_id": request.workspace_id},
+        )
+        return {"workspace": result.workspace}
 
     @app.post("/api/control/embeddings/compute")
     async def compute_embeddings_endpoint(
         request: EmbeddingsComputeRequest,
         runtime_dep: HyperViewRuntime = Depends(get_runtime),
     ):
-        job = runtime_dep.submit_embedding_job(
-            workspace_id=request.workspace_id,
-            dataset_name=request.dataset_name,
-            model=request.model,
-            provider=request.provider,
-            checkpoint=request.checkpoint,
-            provider_kwargs=request.provider_kwargs,
-            layouts=request.layouts,
-            method=request.method,
-            n_neighbors=request.n_neighbors,
-            min_dist=request.min_dist,
-            metric=request.metric,
-            activate_layout=request.activate_layout,
+        result = _run_compat_command(
+            runtime_dep,
+            "embeddings.compute",
+            target={"workspace_id": request.workspace_id},
+            args=request.model_dump(exclude={"workspace_id"}),
         )
-        return {"job": job.to_dict()}
+        return {"job": result.result["job"]}
 
     @app.post("/api/control/layouts/compute")
     async def compute_layouts_endpoint(
         request: LayoutComputeRequest,
         runtime_dep: HyperViewRuntime = Depends(get_runtime),
     ):
-        job = runtime_dep.submit_layout_job(
-            workspace_id=request.workspace_id,
-            dataset_name=request.dataset_name,
-            space_key=request.space_key,
-            layouts=request.layouts,
-            method=request.method,
-            n_neighbors=request.n_neighbors,
-            min_dist=request.min_dist,
-            metric=request.metric,
-            activate_layout=request.activate_layout,
+        result = _run_compat_command(
+            runtime_dep,
+            "layouts.compute",
+            target={"workspace_id": request.workspace_id},
+            args=request.model_dump(exclude={"workspace_id"}),
         )
-        return {"job": job.to_dict()}
+        return {"job": result.result["job"]}
 
     @app.post("/api/control/ui/layout")
     async def set_ui_layout_endpoint(
         request: UiLayoutRequest,
         runtime_dep: HyperViewRuntime = Depends(get_runtime),
     ):
-        workspace = runtime_dep.set_active_layout(request.workspace_id, request.layout_key)
-        return {"workspace": workspace.to_dict()}
+        result = _run_compat_command(
+            runtime_dep,
+            "workspace.active-layout.set",
+            target={"workspace_id": request.workspace_id},
+            args={"layout_key": request.layout_key},
+        )
+        return {"workspace": result.workspace}
 
     @app.post("/api/control/ui/selection")
     async def set_ui_selection_endpoint(
         request: UiSelectionRequest,
         runtime_dep: HyperViewRuntime = Depends(get_runtime),
     ):
-        workspace = runtime_dep.set_selection(request.workspace_id, request.sample_ids)
-        return {"workspace": workspace.to_dict()}
+        result = _run_compat_command(
+            runtime_dep,
+            "workspace.selection.set",
+            target={"workspace_id": request.workspace_id},
+            args={"sample_ids": request.sample_ids},
+        )
+        return {"workspace": result.workspace}
 
     @app.post("/api/control/ui/selection/query")
     async def set_ui_selection_query_endpoint(
@@ -815,40 +838,39 @@ def create_app(
         samples = _query_samples(dataset, query)
         if request.limit is not None:
             samples = samples[: max(0, request.limit)]
-        workspace = runtime_dep.set_selection(request.workspace_id, [sample.id for sample in samples])
-        return {"workspace": workspace.to_dict()}
+        result = _run_compat_command(
+            runtime_dep,
+            "workspace.selection.set",
+            target={"workspace_id": request.workspace_id},
+            args={"sample_ids": [sample.id for sample in samples]},
+        )
+        return {"workspace": result.workspace}
 
     @app.patch("/api/control/ui/state")
     async def patch_ui_state_endpoint(
         request: UiStatePatchRequest,
         runtime_dep: HyperViewRuntime = Depends(get_runtime),
     ):
-        try:
-            workspace = runtime_dep.patch_ui_state(
-                request.workspace_id,
-                set_active_layout=request.set_active_layout,
-                active_layout_key=request.active_layout_key,
-                set_selection=request.set_selection,
-                selected_ids=request.selected_ids,
-                source_client_id=request.client_id,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"workspace": workspace.to_dict()}
+        result = _run_compat_command(
+            runtime_dep,
+            "workspace.state.patch",
+            target={"workspace_id": request.workspace_id},
+            args=request.model_dump(exclude={"workspace_id"}),
+        )
+        return {"workspace": result.workspace}
 
     @app.post("/api/control/ui/layout-view")
     async def set_ui_layout_view_endpoint(
         request: UiLayoutViewRequest,
         runtime_dep: HyperViewRuntime = Depends(get_runtime),
     ):
-        workspace = runtime_dep.set_layout_view(
-            request.workspace_id,
-            request.layout_key,
-            LayoutViewState(
-                camera_3d=request.camera_3d.model_dump() if request.camera_3d is not None else None
-            ),
+        result = _run_compat_command(
+            runtime_dep,
+            "workspace.layout-view.set",
+            target={"workspace_id": request.workspace_id},
+            args=request.model_dump(exclude={"workspace_id"}),
         )
-        return {"workspace": workspace.to_dict()}
+        return {"workspace": result.workspace}
 
     @app.get("/api/control/commands")
     async def list_control_commands_endpoint(
@@ -912,34 +934,59 @@ def create_app(
         request: ExtensionInstallRequest,
         runtime_dep: HyperViewRuntime = Depends(get_runtime),
     ):
-        folder = Path(request.folder).expanduser().resolve()
-        if not folder.exists() or not folder.is_dir():
-            raise HTTPException(status_code=400, detail=f"Extension folder not found: {folder}")
-        try:
-            installation = runtime_dep.install_extension(
-                request.workspace_id,
-                folder,
-                add_panels=request.add_panels,
-            )
-        except (FileNotFoundError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"extension": installation.to_dict()}
+        result = _run_compat_command(
+            runtime_dep,
+            "extension.install",
+            target={"workspace_id": request.workspace_id},
+            args=request.model_dump(exclude={"workspace_id"}),
+        )
+        return {"extension": result.result["extension"]}
 
     @app.delete("/api/control/extensions/remove")
     async def remove_extension_endpoint(
         request: ExtensionRemoveRequest,
         runtime_dep: HyperViewRuntime = Depends(get_runtime),
     ):
-        installation = runtime_dep.uninstall_extension(request.name)
-        if installation is None:
-            raise HTTPException(status_code=404, detail=f"Unknown extension: {request.name}")
-        return {"extension": installation.to_dict()}
+        result = _run_compat_command(
+            runtime_dep,
+            "extension.remove",
+            target={"name": request.name},
+        )
+        return {"extension": result.result["extension"]}
 
     @app.get("/api/dataset", response_model=DatasetResponse)
-    async def get_dataset_info(ds: Dataset = Depends(get_dataset)):
+    async def get_dataset_info(
+        ds: Dataset = Depends(get_dataset),
+        runtime_dep: HyperViewRuntime = Depends(get_runtime),
+    ):
         """Get dataset metadata."""
         spaces = ds.list_spaces()
         space_dicts = [s.to_api_dict() for s in spaces]
+
+        # Persisted modality describes how a representation was originally
+        # produced. Query modes describe what the provider attached to this
+        # runtime can execute now. Derive the latter dynamically so legacy
+        # workspaces cannot advertise a text box that will only fail at submit.
+        from hyperview.embeddings.engine import get_engine
+
+        engine = get_engine(provider_registry=runtime_dep.provider_registry)
+        index_dicts: list[dict[str, Any]] = []
+        for space in spaces:
+            index = space.to_index_dict()
+            try:
+                spec = ds._embedding_spec_for_space(space.space_key)
+                supported = engine.supported_modalities(spec)
+            except (ImportError, KeyError, RuntimeError, ValueError):
+                # Custom providers may be unavailable while inspecting an old
+                # dataset. Preserve the stored contract in that case rather
+                # than making dataset discovery fail completely.
+                supported = None
+            if supported is not None:
+                index["query_modes"] = [
+                    "nearest",
+                    *(["text"] if "text" in supported else []),
+                ]
+            index_dicts.append(index)
 
         layouts = ds.list_layouts()
         layout_dicts = [layout.to_api_dict() for layout in layouts]
@@ -951,7 +998,7 @@ def create_app(
             fields=ds.fields,
             spaces=space_dicts,
             representations=[s.to_representation_dict() for s in spaces],
-            indexes=[s.to_index_dict() for s in spaces],
+            indexes=index_dicts,
             layouts=layout_dicts,
         )
 

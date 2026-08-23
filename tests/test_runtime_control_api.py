@@ -553,7 +553,8 @@ def test_runtime_snapshot_panel_contract_includes_state_and_layout(tmp_path: Pat
 
     assert panel["id"] == "samples"
     assert panel["panel_type"] == "samples"
-    assert panel["source"] == "builtin"
+    assert panel["source"] == "shipped"
+    assert panel["renderer"] == "native:samples"
     assert panel["props"] == {"mode": "browse"}
     assert "state" not in panel
     assert panel["state_revision"] == 1
@@ -568,10 +569,14 @@ def test_runtime_snapshot_panel_contract_includes_state_and_layout(tmp_path: Pat
         "max_width": None,
         "max_height": None,
     }
-    assert snapshot["workspace"]["ui"]["panels"]["samples"] == {
-        "state": {"view": {"density": "compact"}},
-        "state_revision": 1,
-    }
+    samples_panel_state = snapshot["workspace"]["ui"]["panels"]["samples"]
+    assert samples_panel_state["state_revision"] == 1
+    assert samples_panel_state["state"]["view"] == {"density": "compact"}
+    assert samples_panel_state["state"]["collection"]["kind"] == "all"
+    assert (
+        samples_panel_state["state"]["collection_id"]
+        == samples_panel_state["state"]["collection"]["id"]
+    )
 
 
 def test_extension_panel_definition_drives_runtime_panel_defaults(
@@ -868,7 +873,7 @@ def test_health_reports_package_version() -> None:
     assert response.json()["version"] == __version__
 
 
-def test_ui_similarity_query_is_explicit_and_cleared_with_selection(tmp_path: Path) -> None:
+def test_ui_similarity_query_is_explicit_and_preserved_with_selection(tmp_path: Path) -> None:
     workspace_id = f"similarity-ui-{time.time_ns()}"
     dataset = _make_dataset()
     ids = [sample.id for sample in dataset]
@@ -923,7 +928,10 @@ def test_ui_similarity_query_is_explicit_and_cleared_with_selection(tmp_path: Pa
     assert selection_response.status_code == 200
     selection_ui = selection_response.json()["workspace"]["ui"]
     assert "similarity_query" not in selection_ui
-    assert selection_ui["panels"]["samples"]["state"] == {}
+    selection_samples_state = selection_ui["panels"]["samples"]["state"]
+    assert selection_samples_state["collection"]["kind"] == "neighbors"
+    assert selection_samples_state["retrieval"] == expected_retrieval
+    assert selection_ui["selected_ids"] == ["sample-3"]
 
     clear_response = _run_control_command(
         client,

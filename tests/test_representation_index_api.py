@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 from fastapi.testclient import TestClient
@@ -132,6 +133,17 @@ def test_image_only_space_index_has_no_text_query_mode() -> None:
     assert payload["indexes"][0]["query_modes"] == ["nearest"]
 
 
+def test_dataset_info_uses_runtime_provider_capabilities_for_query_modes() -> None:
+    dataset, _space_key = _make_dataset()
+    client = _client(dataset)
+
+    engine = SimpleNamespace(supported_modalities=lambda _spec: frozenset({"image"}))
+    with patch("hyperview.embeddings.engine.get_engine", return_value=engine):
+        payload = client.get("/api/dataset").json()
+
+    assert payload["indexes"][0]["query_modes"] == ["nearest"]
+
+
 def test_similarity_endpoint_accepts_index_id() -> None:
     dataset, space_key = _make_dataset()
     client = _client(dataset)
@@ -202,27 +214,31 @@ def test_retrieval_commands_accept_index_id_and_warn_for_space_key() -> None:
     dataset, space_key = _make_dataset()
     client = _client(dataset)
     index_id = index_id_for_space_key(space_key)
+    engine = SimpleNamespace(
+        supported_modalities=lambda _spec: frozenset({"image", "text"})
+    )
 
-    for command, args in (
-        ("panel.samples.retrieval.set-anchor", {"sample_id": "s0", "index_id": index_id}),
-        ("collection.neighbors.create", {"sample_id": "s0", "index_id": index_id}),
-        (
-            "panel.samples.retrieval.set-text-query",
-            {"query_text": "a cat", "index_id": index_id},
-        ),
-        ("collection.search.create", {"query_text": "a cat", "index_id": index_id}),
-    ):
-        response = client.post(
-            "/api/control/commands/run",
-            json={"command": command, "target": {"workspace_id": "default"}, "args": args},
-        )
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["ok"] is True
-        assert "messages" not in payload
-        collection = payload["result"]["collection"]
-        assert collection["query"]["indexId"] == index_id
-        assert collection["query"]["spaceKey"] == space_key
+    with patch("hyperview.embeddings.engine.get_engine", return_value=engine):
+        for command, args in (
+            ("panel.samples.retrieval.set-anchor", {"sample_id": "s0", "index_id": index_id}),
+            ("collection.neighbors.create", {"sample_id": "s0", "index_id": index_id}),
+            (
+                "panel.samples.retrieval.set-text-query",
+                {"query_text": "a cat", "index_id": index_id},
+            ),
+            ("collection.search.create", {"query_text": "a cat", "index_id": index_id}),
+        ):
+            response = client.post(
+                "/api/control/commands/run",
+                json={"command": command, "target": {"workspace_id": "default"}, "args": args},
+            )
+            assert response.status_code == 200
+            payload = response.json()
+            assert payload["ok"] is True
+            assert "messages" not in payload
+            collection = payload["result"]["collection"]
+            assert collection["query"]["indexId"] == index_id
+            assert collection["query"]["spaceKey"] == space_key
 
     deprecated = client.post(
         "/api/control/commands/run",

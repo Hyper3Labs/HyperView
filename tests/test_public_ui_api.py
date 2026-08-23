@@ -36,6 +36,34 @@ def _make_dataset() -> hv.Dataset:
     return dataset
 
 
+def test_launch_view_requires_visualization_only_for_scatter_content() -> None:
+    extension = hv.ui.ExtensionPanel(
+        id="evidence",
+        extension="evidence",
+        panel="summary",
+    )
+    samples = hv.ui.Samples(id="records")
+    scatter = hv.ui.Scatter(
+        id="map",
+        title="Map",
+        layout_key="layout-a",
+    )
+
+    assert hv_api._view_requires_visualization(None) is False
+    assert hv_api._view_requires_visualization(hv.ui.View(extension)) is False
+    assert hv_api._view_requires_visualization(hv.ui.View(samples)) is False
+    assert hv_api._view_requires_visualization(hv.ui.View(scatter)) is True
+    assert hv_api._view_requires_visualization(
+        hv.ui.View(hv.ui.Tabs(extension, hv.ui.Vertical(samples, scatter)))
+    ) is True
+
+
+def test_sample_is_available_from_the_top_level_public_api() -> None:
+    from hyperview.core import Sample
+
+    assert hv.Sample is Sample
+
+
 def test_public_ui_view_applies_runtime_panel_composition(tmp_path: Path) -> None:
     extension_dir = tmp_path / ".hyperview" / "extensions" / "readout"
     extension_dir.mkdir(parents=True)
@@ -178,6 +206,36 @@ def test_public_ui_view_can_place_builtin_samples_panel() -> None:
     assert samples_panel["kind"] == "builtin"
     assert samples_panel["builtin_panel"] == "samples"
     assert samples_panel["data"]["module_src"] is None
+
+
+def test_public_ui_tabs_mark_the_authored_active_panel() -> None:
+    view = hv.ui.View(
+        hv.ui.Tabs(
+            hv.ui.Samples(id="results", title="Results"),
+            hv.ui.Scatter(id="map", title="Map", layout_key="layout-a"),
+            active_tab="results",
+        )
+    )
+
+    panels = hv.ui.compile_view(view)
+
+    assert [panel.id for panel in panels] == ["results", "map"]
+    assert panels[0].active is True
+    assert panels[1].active is False
+    assert panels[1].reference_panel_id == "results"
+    assert panels[1].direction == "within"
+
+
+def test_public_ui_tabs_reject_an_unknown_active_panel() -> None:
+    view = hv.ui.View(
+        hv.ui.Tabs(
+            hv.ui.Samples(id="results", title="Results"),
+            active_tab="missing",
+        )
+    )
+
+    with pytest.raises(ValueError, match="active_tab panel id is not in the container"):
+        hv.ui.compile_view(view)
 
 
 def test_public_ui_view_rejects_duplicate_panel_ids() -> None:
@@ -419,7 +477,10 @@ file = "panel.js"
     }
 
     assert {"samples", "scatter", "analysis.summary"}.issubset(definitions)
+    assert definitions["samples"]["source"] == "shipped"
+    assert definitions["samples"]["renderer"] == "native:samples"
     assert definitions["analysis.summary"]["source"] == "extension"
+    assert definitions["analysis.summary"]["renderer"] == "module:panel.js"
     assert definitions["analysis.summary"]["extension"] == "readout"
     assert definitions["analysis.summary"]["label"] == "Summary card"
 
@@ -524,6 +585,27 @@ def test_public_ui_state_helpers_update_workspace() -> None:
     workspace = runtime.get_workspace("demo")
     assert workspace.ui.active_layout_key == "layout-a"
     assert workspace.ui.selected_ids == ["sample-1", "sample-3"]
+
+
+def test_public_ui_show_and_reset_samples_use_result_collection_contract() -> None:
+    runtime = HyperViewRuntime()
+    runtime.attach_dataset_instance("demo", _make_dataset(), activate_workspace=True)
+    session = hv.Session(runtime, "127.0.0.1", 6262)
+
+    shown = session.ui.show_samples(
+        ["sample-3", "sample-1"],
+        workspace_id="demo",
+        source="test",
+    )
+
+    workspace = runtime.get_workspace("demo")
+    assert shown["selected_ids"] == ["sample-3", "sample-1"]
+    assert workspace.ui.selected_ids == ["sample-3", "sample-1"]
+    assert workspace.ui.panels["samples"].state["collection"]["kind"] == "selection"
+
+    reset = session.ui.reset_samples(workspace_id="demo")
+    assert reset["selected_ids"] == []
+    assert runtime.get_workspace("demo").ui.panels["samples"].state["collection"]["kind"] == "all"
 
 
 def test_reused_launch_rejects_launch_view(monkeypatch: pytest.MonkeyPatch) -> None:

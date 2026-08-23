@@ -67,7 +67,7 @@ def test_text_only_sample_round_trips_api_and_static_export_without_pil(tmp_path
         (out_dir / "api" / "samples" / "shards" / "000000.json").read_text()
     )
     assert shard["samples"][0]["text"] == "A text-only record"
-    assert shard["samples"][0]["filepath"] is None
+    assert "filepath" not in shard["samples"][0]
     assert not (out_dir / "api" / "samples" / "text-1" / "content").exists()
 
 

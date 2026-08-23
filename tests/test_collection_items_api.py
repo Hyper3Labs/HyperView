@@ -103,6 +103,31 @@ def test_filter_collection_items_are_paged(tmp_path: Path) -> None:
     assert all(item["score"] is None for item in body["items"])
 
 
+def test_selection_collection_items_preserve_requested_order(tmp_path: Path) -> None:
+    service = _service_with_dataset(tmp_path)
+    result = service.run(
+        CommandEnvelope(
+            command="collection.selection.set",
+            target={"workspace_id": "default"},
+            args={"sample_ids": ["s4", "s1", "s3"], "source": "test"},
+        )
+    )
+    assert result.ok is True
+    collection_id = result.result["collection"]["id"]
+    client = TestClient(create_app(runtime=service.runtime))
+
+    response = client.get(
+        f"/api/collections/{collection_id}/items", params={"offset": 0, "limit": 2}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["kind"] == "selection"
+    assert body["total"] == 3
+    assert body["has_more"] is True
+    assert [item["id"] for item in body["items"]] == ["s4", "s1"]
+
+
 def test_collection_items_404_for_unknown_collection(tmp_path: Path) -> None:
     service = _service_with_dataset(tmp_path)
     client = TestClient(create_app(runtime=service.runtime))

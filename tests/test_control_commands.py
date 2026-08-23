@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 
@@ -49,6 +51,67 @@ def _service_with_dataset(tmp_path: Path) -> ControlService:
     )
     runtime.attach_dataset_instance("default", dataset)
     return ControlService(runtime, create_default_command_registry())
+
+
+def _add_space(dataset: Dataset, key: str, *, modality: str) -> None:
+    dataset._storage.ensure_space(
+        model_id=f"{key}-model",
+        dim=2,
+        config={"provider": "test", "geometry": "euclidean", "modality": modality},
+        space_key=key,
+    )
+    dataset._storage.add_embeddings(
+        key,
+        ["s0", "s1", "s2"],
+        np.asarray([[1.0, 0.0], [0.9, 0.1], [-1.0, 0.0]], dtype=np.float32),
+    )
+
+
+def test_text_query_selects_a_text_capable_space(tmp_path: Path) -> None:
+    service = _service_with_dataset(tmp_path)
+    dataset = service.runtime.get_dataset(workspace_id="default")
+    _add_space(dataset, "text_space", modality="multimodal")
+    engine = SimpleNamespace(
+        supported_modalities=lambda spec: (
+            frozenset({"image", "text"})
+            if spec.model_id == "text_space-model"
+            else frozenset({"image"})
+        )
+    )
+
+    with patch("hyperview.embeddings.engine.get_engine", return_value=engine):
+        result = service.run(
+            CommandEnvelope(
+                command="panel.samples.retrieval.set-text-query",
+                target={"workspace_id": "default"},
+                args={"query_text": "red shirt", "k": 3},
+            )
+        )
+
+    assert result.ok is True
+    assert result.result["collection"]["query"]["spaceKey"] == "text_space"
+
+
+def test_text_query_rejects_explicit_image_only_space(tmp_path: Path) -> None:
+    service = _service_with_dataset(tmp_path)
+    engine = SimpleNamespace(supported_modalities=lambda _spec: frozenset({"image"}))
+
+    with patch("hyperview.embeddings.engine.get_engine", return_value=engine):
+        result = service.run(
+            CommandEnvelope(
+                command="panel.samples.retrieval.set-text-query",
+                target={"workspace_id": "default"},
+                args={
+                    "query_text": "red shirt",
+                    "space_key": "test_space",
+                    "k": 3,
+                },
+            )
+        )
+
+    assert result.ok is False
+    assert result.error is not None
+    assert "does not support text queries" in result.error.message
 
 
 def test_panel_resize_command_mutates_runtime_panel_layout(tmp_path: Path) -> None:
@@ -372,9 +435,13 @@ def test_labels_filter_command_creates_filter_collection(tmp_path: Path) -> None
         )
     )
     assert clear_result.ok is True
-    assert clear_result.result["collection_id"] is None
+    assert clear_result.result["collection_id"] == clear_result.result["collection"]["id"]
+    assert clear_result.result["collection"]["kind"] == "all"
     assert clear_result.workspace is not None
-    assert clear_result.workspace["ui"]["panels"]["samples"]["state"] == {}
+    assert (
+        clear_result.workspace["ui"]["panels"]["samples"]["state"]["collection"]["kind"]
+        == "all"
+    )
 
 
 def test_samples_neighbors_command_creates_neighbors_collection(tmp_path: Path) -> None:
@@ -406,6 +473,66 @@ def test_samples_neighbors_command_creates_neighbors_collection(tmp_path: Path) 
     assert "layoutId" in samples_state["collection"]["query"]
     assert samples_state["retrieval"]["space_key"] == "test_space"
     assert "similarity_query" not in result.workspace["ui"]
+
+
+def test_samples_selection_command_atomically_presents_and_resets_results(tmp_path: Path) -> None:
+    service = _service_with_dataset(tmp_path)
+
+    result = service.run(
+        CommandEnvelope(
+            command="collection.selection.set",
+            target={"workspace_id": "default"},
+            args={"sample_ids": ["s2", "s0", "s2"], "source": "test"},
+        )
+    )
+
+    assert result.ok is True
+    assert result.workspace is not None
+    assert result.workspace["ui"]["selected_ids"] == ["s2", "s0"]
+    collection = result.result["collection"]
+    assert collection["kind"] == "selection"
+    assert collection["query"] == {"ids": ["s2", "s0"], "source": "test"}
+    samples_state = result.workspace["ui"]["panels"]["samples"]
+    assert samples_state["state"]["collection_id"] == collection["id"]
+    assert samples_state["state"]["focus_request"] == {
+        "kind": "selection",
+        "collection_id": collection["id"],
+        "revision": samples_state["state_revision"],
+    }
+
+    reset = service.run(
+        CommandEnvelope(
+            command="collection.selection.set",
+            target={"workspace_id": "default"},
+            args={"clear": True},
+        )
+    )
+
+    assert reset.ok is True
+    assert reset.workspace is not None
+    assert reset.workspace["ui"]["selected_ids"] == []
+    reset_state = reset.workspace["ui"]["panels"]["samples"]
+    assert reset_state["state"]["collection"]["kind"] == "all"
+    assert reset_state["state"]["focus_request"] == {
+        "kind": "all",
+        "revision": reset_state["state_revision"],
+    }
+
+
+def test_samples_selection_command_rejects_unknown_ids(tmp_path: Path) -> None:
+    service = _service_with_dataset(tmp_path)
+
+    result = service.run(
+        CommandEnvelope(
+            command="collection.selection.set",
+            target={"workspace_id": "default"},
+            args={"sample_ids": ["missing"]},
+        )
+    )
+
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.code == "validation_error"
 
 
 def test_labels_filter_clear_does_not_clear_neighbors_collection(tmp_path: Path) -> None:
@@ -501,6 +628,13 @@ def test_samples_retrieval_commands_own_samples_panel_state(tmp_path: Path) -> N
     assert result.result["panel_id"] == "samples"
     assert result.result["collection_id"] == samples_state["collection_id"]
 
+    service.runtime.set_selection("default", ["s1"])
+    selected_workspace = service.runtime.get_workspace("default")
+    selected_state = selected_workspace.ui.panels["samples"].state
+    assert selected_workspace.ui.selected_ids == ["s1"]
+    assert selected_state["mode"] == "retrieval"
+    assert selected_state["collection_id"] == samples_state["collection_id"]
+
     set_k = service.run(
         CommandEnvelope(
             command="panel.samples.retrieval.set-k",
@@ -522,10 +656,8 @@ def test_samples_retrieval_commands_own_samples_panel_state(tmp_path: Path) -> N
     )
     assert clear.ok is True
     assert clear.workspace is not None
-    assert clear.result == {
-        "panel_id": "samples",
-        "collection_id": None,
-        "collection": None,
-    }
+    assert clear.result["panel_id"] == "samples"
+    assert clear.result["collection_id"] == clear.result["collection"]["id"]
+    assert clear.result["collection"]["kind"] == "all"
     assert "similarity_query" not in clear.workspace["ui"]
-    assert clear.workspace["ui"]["panels"]["samples"]["state"] == {}
+    assert clear.workspace["ui"]["panels"]["samples"]["state"]["collection"]["kind"] == "all"

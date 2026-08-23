@@ -224,6 +224,8 @@ def _compile_item(
         return _compile_container(
             item,
             default_position=default_position,
+            reference_panel_id=reference_panel_id,
+            direction=direction,
             runtime=runtime,
             workspace_id=workspace_id,
         )
@@ -246,6 +248,8 @@ def _compile_container(
     container: Container,
     *,
     default_position: PanelPosition | None,
+    reference_panel_id: str | None,
+    direction: PanelDirection | None,
     runtime: HyperViewRuntime | None,
     workspace_id: str | None,
 ) -> list[CustomPanelSpec]:
@@ -257,14 +261,37 @@ def _compile_container(
         child_specs = _compile_item(
             child,
             default_position=default_position or "center",
-            reference_panel_id=previous_panel_id,
-            direction=child_direction if previous_panel_id is not None else None,
+            reference_panel_id=previous_panel_id or reference_panel_id,
+            direction=(
+                child_direction
+                if previous_panel_id is not None
+                else direction if reference_panel_id is not None else None
+            ),
             runtime=runtime,
             workspace_id=workspace_id,
         )
         specs.extend(child_specs)
         if child_specs:
             previous_panel_id = child_specs[0].id
+
+    if container.kind == "tabs" and specs:
+        active_tab = container.active_tab
+        if active_tab is None:
+            active_index = 0
+        elif isinstance(active_tab, int):
+            if active_tab < 0 or active_tab >= len(specs):
+                raise ValueError(
+                    f"Tabs active_tab index {active_tab} is outside 0..{len(specs) - 1}"
+                )
+            active_index = active_tab
+        else:
+            active_index = next(
+                (index for index, spec in enumerate(specs) if spec.id == active_tab),
+                -1,
+            )
+            if active_index < 0:
+                raise ValueError(f"Tabs active_tab panel id is not in the container: {active_tab}")
+        specs[active_index].active = True
 
     return specs
 

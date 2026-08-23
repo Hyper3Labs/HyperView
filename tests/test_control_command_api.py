@@ -57,6 +57,7 @@ def test_control_commands_endpoint_lists_backend_panel_commands(tmp_path: Path) 
         "panel.samples.retrieval.set-k",
         "collection.filter.set",
         "collection.neighbors.create",
+        "collection.selection.set",
     }.issubset(command_ids)
     commands = {command["id"]: command for command in response.json()["commands"]}
     add_kind_schema = commands["workspace.panel.add"]["args_schema"]["properties"]["kind"]

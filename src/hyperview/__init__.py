@@ -5,8 +5,9 @@ from ._compat import disable_blocked_datasets_torch_shared_memory
 
 disable_blocked_datasets_torch_shared_memory()
 
-from . import api as _api
-from . import ui as ui
+from . import api as _api  # noqa: E402
+from . import ui as ui  # noqa: E402
+from .core import Sample as Sample  # noqa: E402
 
 Dataset = _api.Dataset
 Session = _api.Session
@@ -19,6 +20,7 @@ __version__ = _version.__version__
 __all__ = [
     "Dataset",
     "Session",
+    "Sample",
     "launch",
     "export_workspace",
     "register_provider",

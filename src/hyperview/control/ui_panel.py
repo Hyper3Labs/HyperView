@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from hyperview.control.models import CommandError
 from hyperview.control.registry import CommandExecution, CommandRegistry, CommandSpec, EmptyArgs
+from hyperview.control.runtime_commands import runtime_command_specs
 from hyperview.runtime import HyperViewRuntime, SimilarityQueryState
 
 PositivePanelDimension = Annotated[int, Field(gt=0)]
@@ -193,6 +194,24 @@ class LabelsFilterArgs(BaseModel):
         return self
 
 
+class SamplesSelectionSetArgs(BaseModel):
+    """Present an explicit sample result set across Samples and scatter panels."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sample_ids: list[str] = Field(default_factory=list, max_length=2000)
+    clear: bool = False
+    focus: bool = True
+    source: str | None = None
+
+    @model_validator(mode="after")
+    def require_samples_unless_clear(self) -> SamplesSelectionSetArgs:
+        self.sample_ids = list(dict.fromkeys(item.strip() for item in self.sample_ids if item.strip()))
+        if not self.clear and not self.sample_ids:
+            raise ValueError("Sample selection requires sample_ids unless clear=true")
+        return self
+
+
 def _panel_target(target: BaseModel) -> PanelTarget:
     if not isinstance(target, PanelTarget):
         raise CommandError("validation_error", "Invalid panel target")
@@ -276,6 +295,12 @@ def _samples_retrieval_set_text_args(args: BaseModel) -> SamplesRetrievalSetText
 def _labels_filter_args(args: BaseModel) -> LabelsFilterArgs:
     if not isinstance(args, LabelsFilterArgs):
         raise CommandError("validation_error", "Invalid labels filter args")
+    return args
+
+
+def _samples_selection_set_args(args: BaseModel) -> SamplesSelectionSetArgs:
+    if not isinstance(args, SamplesSelectionSetArgs):
+        raise CommandError("validation_error", "Invalid samples selection args")
     return args
 
 
@@ -668,9 +693,34 @@ def _filter_labels(
     )
 
 
+def _set_samples_selection(
+    runtime: HyperViewRuntime,
+    target: BaseModel,
+    args: BaseModel,
+) -> CommandExecution:
+    workspace_target = _workspace_target(target)
+    selection_args = _samples_selection_set_args(args)
+    try:
+        workspace = runtime.set_samples_selection(
+            workspace_target.workspace_id,
+            [] if selection_args.clear else selection_args.sample_ids,
+            focus=selection_args.focus,
+            source=selection_args.source,
+        )
+    except (KeyError, ValueError) as exc:
+        raise CommandError("validation_error", str(exc)) from exc
+    result = _samples_panel_collection_result(workspace)
+    result["selected_ids"] = list(workspace.ui.selected_ids)
+    return CommandExecution(
+        workspace=workspace,
+        result=result,
+        revision=workspace.ui.view_revision,
+    )
+
+
 def create_default_command_registry() -> CommandRegistry:
     registry = CommandRegistry()
-    for spec in (
+    for spec in (*runtime_command_specs(),
         CommandSpec(
             id="workspace.panel.add",
             owner="backend",
@@ -830,6 +880,14 @@ def create_default_command_registry() -> CommandRegistry:
             target_model=WorkspaceTarget,
             args_model=LabelsFilterArgs,
             handler=_filter_labels,
+        ),
+        CommandSpec(
+            id="collection.selection.set",
+            owner="backend",
+            summary="Present an explicit sample result set and synchronized selection.",
+            target_model=WorkspaceTarget,
+            args_model=SamplesSelectionSetArgs,
+            handler=_set_samples_selection,
         ),
         CommandSpec(
             id="jobs.cancel",

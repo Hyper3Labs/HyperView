@@ -192,13 +192,6 @@ def _run_control_command(
     return cast(dict[str, Any], payload)
 
 
-def _workspace_payload_from_command(payload: dict[str, Any]) -> dict[str, Any]:
-    workspace = payload.get("workspace")
-    if not isinstance(workspace, dict):
-        raise RuntimeError("Command did not return a workspace")
-    return {"workspace": workspace}
-
-
 def _add_dataset_source_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--hf-dataset")
     parser.add_argument("--split", default=None)
@@ -225,9 +218,7 @@ def _validate_dataset_source_args(
         if not args.split:
             parser.error("--split is required when using --hf-dataset.")
         if not args.image_key and not args.text_key:
-            parser.error(
-                "--image-key or --text-key is required when using --hf-dataset."
-            )
+            parser.error("--image-key or --text-key is required when using --hf-dataset.")
         if args.hf_shuffle_buffer_size < 1:
             parser.error("--hf-shuffle-buffer-size must be at least 1.")
 
@@ -281,7 +272,12 @@ def _build_control_parser() -> argparse.ArgumentParser:
         "--similarity-k",
         type=int,
         default=DEFAULT_SIMILARITY_EXPORT_K,
-        help="Precompute this many neighbors per sample and space; use 0 to omit similarity.",
+        help="Precompute this many neighbors per sample and space (disabled by default).",
+    )
+    export_parser.add_argument(
+        "--mount-path",
+        default="/",
+        help="URL path where the static bundle will be hosted (for example /spaces/demo).",
     )
     _add_json_flag(export_parser)
 
@@ -384,9 +380,7 @@ def _build_control_parser() -> argparse.ArgumentParser:
     _add_json_flag(jobs_inspect)
 
     commands_parser = subparsers.add_parser("commands")
-    commands_subparsers = commands_parser.add_subparsers(
-        dest="commands_command", required=True
-    )
+    commands_subparsers = commands_parser.add_subparsers(dest="commands_command", required=True)
     commands_list = commands_subparsers.add_parser("list")
     _add_server_flags(commands_list)
     _add_json_flag(commands_list)
@@ -435,6 +429,17 @@ def _build_control_parser() -> argparse.ArgumentParser:
     panel_samples_neighbors.add_argument("--space-key")
     panel_samples_neighbors.add_argument("--k", type=int, default=18)
     _add_json_flag(panel_samples_neighbors)
+    panel_samples_show = panel_samples_subparsers.add_parser("show-results")
+    _add_server_flags(panel_samples_show)
+    panel_samples_show.add_argument("--workspace", required=True)
+    panel_samples_show.add_argument("--sample-id", action="append", required=True)
+    panel_samples_show.add_argument("--no-focus", action="store_true")
+    _add_json_flag(panel_samples_show)
+    panel_samples_reset = panel_samples_subparsers.add_parser("reset")
+    _add_server_flags(panel_samples_reset)
+    panel_samples_reset.add_argument("--workspace", required=True)
+    panel_samples_reset.add_argument("--no-focus", action="store_true")
+    _add_json_flag(panel_samples_reset)
 
     panel_labels = panel_subparsers.add_parser("labels")
     panel_labels_subparsers = panel_labels.add_subparsers(
@@ -484,9 +489,7 @@ def _build_control_parser() -> argparse.ArgumentParser:
     _add_json_flag(ui_selection_clear)
 
     ui_samples = ui_subparsers.add_parser("samples")
-    ui_samples_subparsers = ui_samples.add_subparsers(
-        dest="ui_samples_command", required=True
-    )
+    ui_samples_subparsers = ui_samples.add_subparsers(dest="ui_samples_command", required=True)
     ui_samples_retrieval = ui_samples_subparsers.add_parser("retrieval")
     ui_samples_retrieval_subparsers = ui_samples_retrieval.add_subparsers(
         dest="ui_samples_retrieval_command", required=True
@@ -553,7 +556,9 @@ def _build_control_parser() -> argparse.ArgumentParser:
     ui_panel_update.add_argument("--title")
     ui_panel_update.add_argument("--position", choices=["center", "right", "bottom"])
     ui_panel_update.add_argument("--reference-panel-id")
-    ui_panel_update.add_argument("--direction", choices=["right", "left", "above", "below", "within"])
+    ui_panel_update.add_argument(
+        "--direction", choices=["right", "left", "above", "below", "within"]
+    )
     _add_panel_layout_flags(ui_panel_update)
     visibility = ui_panel_update.add_mutually_exclusive_group()
     visibility.add_argument("--visible", action="store_true")
@@ -627,7 +632,11 @@ def _build_control_parser() -> argparse.ArgumentParser:
 
     extension_add = extension_subparsers.add_parser("add")
     _add_server_flags(extension_add)
-    extension_add.add_argument("folder")
+    extension_add.add_argument("folder", nargs="?")
+    extension_add.add_argument(
+        "--shipped",
+        help="Install a named extension distributed with HyperView.",
+    )
     extension_add.add_argument("--workspace", default=None)
     extension_add.add_argument(
         "--add-panels",
@@ -726,7 +735,12 @@ def _run_status_command(args: argparse.Namespace) -> None:
 
 
 def _run_export_command(args: argparse.Namespace) -> None:
-    result = export_workspace(args.workspace_id, args.out, similarity_k=args.similarity_k)
+    result = export_workspace(
+        args.workspace_id,
+        args.out,
+        similarity_k=args.similarity_k,
+        mount_path=args.mount_path,
+    )
     payload = {"export": result.to_dict()}
     if args.json:
         _print_output(payload, as_json=True)
@@ -736,6 +750,8 @@ def _run_export_command(args: argparse.Namespace) -> None:
         f"({result.num_samples} samples, {result.num_layouts} layouts, "
         f"{result.num_files} files, {result.bundle_bytes} bytes)"
     )
+    for warning in result.warnings:
+        print(f"Warning: {warning}", file=sys.stderr)
 
 
 def _run_dataset_command(args: argparse.Namespace) -> None:
@@ -815,6 +831,14 @@ def _run_provider_command(args: argparse.Namespace) -> None:
 
 def _run_workspace_command(args: argparse.Namespace) -> None:
     registry = WorkspaceRegistry()
+
+    def workspace_summary(workspace: Any) -> dict[str, Any]:
+        return {
+            "id": workspace.id,
+            "dataset_name": workspace.dataset_name,
+            "created_at": workspace.created_at,
+        }
+
     if args.workspace_command == "create":
         workspace = registry.create_workspace(args.workspace_id, activate=args.activate)
         if args.dataset:
@@ -824,7 +848,7 @@ def _run_workspace_command(args: argparse.Namespace) -> None:
     if args.workspace_command == "list":
         payload = {
             "active_workspace_id": registry.active_workspace_id,
-            "workspaces": [workspace.to_dict() for workspace in registry.list()],
+            "workspaces": [workspace_summary(workspace) for workspace in registry.list()],
         }
         _print_output(payload, as_json=args.json)
         return
@@ -847,7 +871,7 @@ def _run_workspace_command(args: argparse.Namespace) -> None:
         payload = {
             "deleted_workspace_id": args.workspace_id,
             "active_workspace_id": registry.active_workspace_id,
-            "workspaces": [workspace.to_dict() for workspace in registry.list()],
+            "workspaces": [workspace_summary(workspace) for workspace in registry.list()],
         }
         if active_workspace is not None:
             payload["workspace"] = active_workspace.to_dict()
@@ -858,10 +882,11 @@ def _run_workspace_command(args: argparse.Namespace) -> None:
 
 def _run_embeddings_command(args: argparse.Namespace) -> None:
     base_url = _server_base_url(args.host, args.port)
-    payload = _http_send_json(
-        f"{base_url}/api/control/embeddings/compute",
-        {
-            "workspace_id": args.workspace,
+    command_result = _run_control_command(
+        base_url,
+        "embeddings.compute",
+        target={"workspace_id": args.workspace},
+        args={
             "dataset_name": args.dataset,
             "model": args.model_id,
             "provider": args.provider,
@@ -874,6 +899,7 @@ def _run_embeddings_command(args: argparse.Namespace) -> None:
             "metric": args.metric,
         },
     )
+    payload = {"job": command_result["result"]["job"]}
     if args.no_wait:
         _print_output(payload, as_json=args.json)
         return
@@ -882,10 +908,11 @@ def _run_embeddings_command(args: argparse.Namespace) -> None:
 
 def _run_layouts_command(args: argparse.Namespace) -> None:
     base_url = _server_base_url(args.host, args.port)
-    payload = _http_send_json(
-        f"{base_url}/api/control/layouts/compute",
-        {
-            "workspace_id": args.workspace,
+    command_result = _run_control_command(
+        base_url,
+        "layouts.compute",
+        target={"workspace_id": args.workspace},
+        args={
             "dataset_name": args.dataset,
             "space_key": args.space_key,
             "layouts": args.layouts,
@@ -895,6 +922,7 @@ def _run_layouts_command(args: argparse.Namespace) -> None:
             "metric": args.metric,
         },
     )
+    payload = {"job": command_result["result"]["job"]}
     if args.no_wait:
         _print_output(payload, as_json=args.json)
         return
@@ -1037,6 +1065,30 @@ def _run_panel_command(args: argparse.Namespace) -> None:
         _print_output(payload, as_json=args.json)
         return
 
+    if args.panel_command == "samples" and args.panel_samples_command == "show-results":
+        payload = _run_control_command(
+            base_url,
+            "collection.selection.set",
+            target=target,
+            args={
+                "sample_ids": args.sample_id,
+                "focus": not args.no_focus,
+                "source": "cli",
+            },
+        )
+        _print_output(payload, as_json=args.json)
+        return
+
+    if args.panel_command == "samples" and args.panel_samples_command == "reset":
+        payload = _run_control_command(
+            base_url,
+            "collection.selection.set",
+            target=target,
+            args={"clear": True, "focus": not args.no_focus, "source": "cli"},
+        )
+        _print_output(payload, as_json=args.json)
+        return
+
     if args.panel_command == "labels" and args.panel_labels_command == "filter":
         command_args: dict[str, Any] = {
             "field": args.field,
@@ -1066,88 +1118,87 @@ def _run_panel_command(args: argparse.Namespace) -> None:
 def _run_ui_command(args: argparse.Namespace) -> None:
     base_url = _server_base_url(args.host, args.port)
     if args.ui_command == "workspace" and args.ui_workspace_command == "set":
-        payload = _http_send_json(
-            f"{base_url}/api/control/workspaces/set-active",
-            {"workspace_id": args.workspace_id},
+        payload = _run_control_command(
+            base_url,
+            "workspace.activate",
+            target={"workspace_id": args.workspace_id},
         )
         _print_output(payload, as_json=args.json)
         return
     if args.ui_command == "layout" and args.ui_layout_command == "set":
-        payload = _http_send_json(
-            f"{base_url}/api/control/ui/layout",
-            {"workspace_id": args.workspace, "layout_key": args.layout_key},
+        payload = _run_control_command(
+            base_url,
+            "workspace.active-layout.set",
+            target={"workspace_id": args.workspace},
+            args={"layout_key": args.layout_key},
         )
         _print_output(payload, as_json=args.json)
         return
     if args.ui_command == "selection" and args.ui_selection_command == "set":
         sample_ids = [value for value in args.ids.split(",") if value]
-        payload = _http_send_json(
-            f"{base_url}/api/control/ui/selection",
-            {"workspace_id": args.workspace, "sample_ids": sample_ids},
+        payload = _run_control_command(
+            base_url,
+            "workspace.selection.set",
+            target={"workspace_id": args.workspace},
+            args={"sample_ids": sample_ids},
         )
         _print_output(payload, as_json=args.json)
         return
     if args.ui_command == "selection" and args.ui_selection_command == "clear":
-        payload = _http_send_json(
-            f"{base_url}/api/control/ui/selection",
-            {"workspace_id": args.workspace, "sample_ids": []},
+        payload = _run_control_command(
+            base_url,
+            "workspace.selection.set",
+            target={"workspace_id": args.workspace},
+            args={"sample_ids": []},
         )
         _print_output(payload, as_json=args.json)
         return
     if args.ui_command == "samples" and args.ui_samples_command == "retrieval":
         target = {"workspace_id": args.workspace}
         if args.ui_samples_retrieval_command == "set-anchor":
-            payload = _workspace_payload_from_command(
-                _run_control_command(
-                    base_url,
-                    "panel.samples.retrieval.set-anchor",
-                    target=target,
-                    args={
-                        "sample_id": args.sample_id,
-                        "layout_key": args.layout_key,
-                        "space_key": args.space_key,
-                        "k": args.k,
-                        "source": "cli",
-                    },
-                )
+            payload = _run_control_command(
+                base_url,
+                "panel.samples.retrieval.set-anchor",
+                target=target,
+                args={
+                    "sample_id": args.sample_id,
+                    "layout_key": args.layout_key,
+                    "space_key": args.space_key,
+                    "k": args.k,
+                    "source": "cli",
+                },
             )
             _print_output(payload, as_json=args.json)
             return
         if args.ui_samples_retrieval_command == "set-k":
-            payload = _workspace_payload_from_command(
-                _run_control_command(
-                    base_url,
-                    "panel.samples.retrieval.set-k",
-                    target=target,
-                    args={"k": args.k},
-                )
+            payload = _run_control_command(
+                base_url,
+                "panel.samples.retrieval.set-k",
+                target=target,
+                args={"k": args.k},
             )
             _print_output(payload, as_json=args.json)
             return
         if args.ui_samples_retrieval_command == "set-text":
-            payload = _workspace_payload_from_command(
-                _run_control_command(
-                    base_url,
-                    "panel.samples.retrieval.set-text-query",
-                    target=target,
-                    args={
-                        "query_text": args.query,
-                        "layout_key": args.layout_key,
-                        "space_key": args.space_key,
-                        "k": args.k,
-                        "source": "cli",
-                    },
-                )
+            payload = _run_control_command(
+                base_url,
+                "panel.samples.retrieval.set-text-query",
+                target=target,
+                args={
+                    "query_text": args.query,
+                    "layout_key": args.layout_key,
+                    "space_key": args.space_key,
+                    "k": args.k,
+                    "source": "cli",
+                },
             )
             _print_output(payload, as_json=args.json)
             return
         if args.ui_samples_retrieval_command == "clear":
-            payload = _workspace_payload_from_command(
-                _run_control_command(
-                    base_url,
-                    "panel.samples.retrieval.clear",
-                    target=target,
-                )
+            payload = _run_control_command(
+                base_url,
+                "panel.samples.retrieval.clear",
+                target=target,
             )
             _print_output(payload, as_json=args.json)
             return
@@ -1175,27 +1226,25 @@ def _run_ui_command(args: argparse.Namespace) -> None:
             raise RuntimeError("Scatter panels require --title")
         props = _parse_json_object(args.props_json, label="--props-json")
         layout_payload = _panel_layout_payload(args)
-        payload = _workspace_payload_from_command(
-            _run_control_command(
-                base_url,
-                "workspace.panel.add",
-                target={"workspace_id": args.workspace},
-                args={
-                    "panel_id": args.panel_id,
-                    "title": args.title,
-                    "kind": panel_kind,
-                    "builtin_panel": args.builtin_panel,
-                    "extension": args.extension,
-                    "extension_panel": args.extension_panel,
-                    "layout_key": args.layout_key,
-                    "position": args.position,
-                    "reference_panel_id": args.reference_panel_id,
-                    "direction": args.direction,
-                    **layout_payload,
-                    "visible": not args.hidden,
-                    "props": props,
-                },
-            )
+        payload = _run_control_command(
+            base_url,
+            "workspace.panel.add",
+            target={"workspace_id": args.workspace},
+            args={
+                "panel_id": args.panel_id,
+                "title": args.title,
+                "kind": panel_kind,
+                "builtin_panel": args.builtin_panel,
+                "extension": args.extension,
+                "extension_panel": args.extension_panel,
+                "layout_key": args.layout_key,
+                "position": args.position,
+                "reference_panel_id": args.reference_panel_id,
+                "direction": args.direction,
+                **layout_payload,
+                "visible": not args.hidden,
+                "props": props,
+            },
         )
         _print_output(payload, as_json=args.json)
         return
@@ -1229,13 +1278,11 @@ def _run_ui_command(args: argparse.Namespace) -> None:
             update_payload["visible"] = visible
         if props is not None:
             update_payload["props"] = props
-        payload = _workspace_payload_from_command(
-            _run_control_command(
-                base_url,
-                "workspace.panel.update",
-                target={"workspace_id": args.workspace, "panel_id": args.panel_id},
-                args=update_payload,
-            )
+        payload = _run_control_command(
+            base_url,
+            "workspace.panel.update",
+            target={"workspace_id": args.workspace, "panel_id": args.panel_id},
+            args=update_payload,
         )
         _print_output(payload, as_json=args.json)
         return
@@ -1243,58 +1290,48 @@ def _run_ui_command(args: argparse.Namespace) -> None:
         layout_payload = _panel_layout_payload(args)
         if not layout_payload:
             raise RuntimeError("Panel resize requires at least one size or constraint flag")
-        payload = _workspace_payload_from_command(
-            _run_control_command(
-                base_url,
-                "workspace.panel.resize",
-                target={"workspace_id": args.workspace, "panel_id": args.panel_id},
-                args=layout_payload,
-            )
+        payload = _run_control_command(
+            base_url,
+            "workspace.panel.resize",
+            target={"workspace_id": args.workspace, "panel_id": args.panel_id},
+            args=layout_payload,
         )
         _print_output(payload, as_json=args.json)
         return
     if args.ui_command == "panel" and args.ui_panel_command == "move":
-        payload = _workspace_payload_from_command(
-            _run_control_command(
-                base_url,
-                "workspace.panel.move",
-                target={"workspace_id": args.workspace, "panel_id": args.panel_id},
-                args={
-                    "position": args.position,
-                    "reference_panel_id": args.reference_panel_id,
-                    "direction": args.direction,
-                },
-            )
+        payload = _run_control_command(
+            base_url,
+            "workspace.panel.move",
+            target={"workspace_id": args.workspace, "panel_id": args.panel_id},
+            args={
+                "position": args.position,
+                "reference_panel_id": args.reference_panel_id,
+                "direction": args.direction,
+            },
         )
         _print_output(payload, as_json=args.json)
         return
     if args.ui_command == "panel" and args.ui_panel_command == "focus":
-        payload = _workspace_payload_from_command(
-            _run_control_command(
-                base_url,
-                "workspace.panel.focus",
-                target={"workspace_id": args.workspace, "panel_id": args.panel_id},
-            )
+        payload = _run_control_command(
+            base_url,
+            "workspace.panel.focus",
+            target={"workspace_id": args.workspace, "panel_id": args.panel_id},
         )
         _print_output(payload, as_json=args.json)
         return
     if args.ui_command == "panel" and args.ui_panel_command == "close":
-        payload = _workspace_payload_from_command(
-            _run_control_command(
-                base_url,
-                "workspace.panel.close",
-                target={"workspace_id": args.workspace, "panel_id": args.panel_id},
-            )
+        payload = _run_control_command(
+            base_url,
+            "workspace.panel.close",
+            target={"workspace_id": args.workspace, "panel_id": args.panel_id},
         )
         _print_output(payload, as_json=args.json)
         return
     if args.ui_command == "panel" and args.ui_panel_command == "show":
-        payload = _workspace_payload_from_command(
-            _run_control_command(
-                base_url,
-                "workspace.panel.show",
-                target={"workspace_id": args.workspace, "panel_id": args.panel_id},
-            )
+        payload = _run_control_command(
+            base_url,
+            "workspace.panel.show",
+            target={"workspace_id": args.workspace, "panel_id": args.panel_id},
         )
         _print_output(payload, as_json=args.json)
         return
@@ -1324,12 +1361,10 @@ def _run_ui_command(args: argparse.Namespace) -> None:
             _print_output(payload, as_json=args.json)
             return
     if args.ui_command == "panel" and args.ui_panel_command == "remove":
-        payload = _workspace_payload_from_command(
-            _run_control_command(
-                base_url,
-                "workspace.panel.remove",
-                target={"workspace_id": args.workspace, "panel_id": args.panel_id},
-            )
+        payload = _run_control_command(
+            base_url,
+            "workspace.panel.remove",
+            target={"workspace_id": args.workspace, "panel_id": args.panel_id},
         )
         _print_output(payload, as_json=args.json)
         return
@@ -1349,23 +1384,36 @@ def _active_workspace_id(base_url: str, explicit: str | None) -> str:
 def _run_extension_command(args: argparse.Namespace) -> None:
     base_url = _server_base_url(args.host, args.port)
     if args.extension_command == "add":
-        folder = str(Path(args.folder).expanduser().resolve())
+        if bool(args.folder) == bool(args.shipped):
+            raise RuntimeError("Provide exactly one extension folder or --shipped NAME")
         workspace_id = _active_workspace_id(base_url, args.workspace)
-        payload = _http_send_json(
-            f"{base_url}/api/control/extensions/install",
-            {"workspace_id": workspace_id, "folder": folder, "add_panels": args.add_panels},
+        request: dict[str, object] = {
+            "workspace_id": workspace_id,
+            "add_panels": args.add_panels,
+        }
+        if args.shipped:
+            request["shipped"] = args.shipped
+        else:
+            request["folder"] = str(Path(args.folder).expanduser().resolve())
+        command_result = _run_control_command(
+            base_url,
+            "extension.install",
+            target={"workspace_id": workspace_id},
+            args={key: value for key, value in request.items() if key != "workspace_id"},
         )
+        payload = {"extension": command_result["result"]["extension"]}
         _print_output(payload, as_json=args.json)
         return
     if args.extension_command == "list":
         _print_output(_http_get_json(f"{base_url}/api/extensions"), as_json=args.json)
         return
     if args.extension_command == "remove":
-        payload = _http_send_json(
-            f"{base_url}/api/control/extensions/remove",
-            {"name": args.name},
-            method="DELETE",
+        command_result = _run_control_command(
+            base_url,
+            "extension.remove",
+            target={"name": args.name},
         )
+        payload = {"extension": command_result["result"]["extension"]}
         _print_output(payload, as_json=args.json)
         return
     if args.extension_command == "reload":
@@ -1375,14 +1423,16 @@ def _run_extension_command(args: argparse.Namespace) -> None:
         match = next((item for item in ext_list if item.get("name") == args.name), None)
         if match is None:
             raise RuntimeError(f"Unknown extension: {args.name}")
-        payload = _http_send_json(
-            f"{base_url}/api/control/extensions/install",
-            {
-                "workspace_id": match.get("workspace_id") or workspace_id,
+        command_result = _run_control_command(
+            base_url,
+            "extension.install",
+            target={"workspace_id": match.get("workspace_id") or workspace_id},
+            args={
                 "folder": match["folder"],
                 "add_panels": bool(match.get("panels")),
             },
         )
+        payload = {"extension": command_result["result"]["extension"]}
         _print_output(payload, as_json=args.json)
         return
     raise RuntimeError(f"Unsupported extension command: {args.extension_command}")

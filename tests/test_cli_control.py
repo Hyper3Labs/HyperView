@@ -51,6 +51,53 @@ def test_cli_rejects_legacy_top_level_flags(capsys) -> None:
     assert "invalid choice" in capsys.readouterr().err
 
 
+def test_cli_export_passes_mount_path(monkeypatch, tmp_path: Path, capsys) -> None:
+    recorded: dict[str, object] = {}
+
+    class ExportResult:
+        output_dir = tmp_path / "bundle"
+        num_samples = 3
+        num_layouts = 1
+        num_files = 10
+        bundle_bytes = 100
+        warnings: tuple[str, ...] = ()
+
+        def to_dict(self) -> dict[str, object]:
+            return {"mount_path": "/spaces/demo"}
+
+    def fake_export(
+        workspace_id: str,
+        out: str,
+        *,
+        similarity_k: int,
+        mount_path: str,
+    ) -> ExportResult:
+        recorded.update(
+            workspace_id=workspace_id,
+            out=out,
+            similarity_k=similarity_k,
+            mount_path=mount_path,
+        )
+        return ExportResult()
+
+    monkeypatch.setattr("hyperview.cli.export_workspace", fake_export)
+
+    main(
+        [
+            "export",
+            "demo",
+            "--out",
+            str(tmp_path / "bundle"),
+            "--mount-path",
+            "/spaces/demo/",
+            "--json",
+        ]
+    )
+
+    assert recorded["mount_path"] == "/spaces/demo/"
+    assert json.loads(capsys.readouterr().out)["export"]["mount_path"] == "/spaces/demo"
+
+
 def test_cli_provider_and_workspace_commands_use_persistent_registries(
     tmp_path: Path,
     monkeypatch,
@@ -99,6 +146,12 @@ def test_cli_provider_and_workspace_commands_use_persistent_registries(
     create_with_dataset_payload = json.loads(capsys.readouterr().out)
     assert create_with_dataset_payload["workspace"]["dataset_name"] == "cars"
 
+    main(["workspace", "list", "--json"])
+    list_payload = json.loads(capsys.readouterr().out)
+    assert list_payload["active_workspace_id"] == "research"
+    assert list_payload["workspaces"]
+    assert set(list_payload["workspaces"][0]) == {"id", "dataset_name", "created_at"}
+
 
 def test_cli_embeddings_compute_posts_runtime_job(monkeypatch, capsys) -> None:
     recorded: dict[str, object] = {}
@@ -107,7 +160,7 @@ def test_cli_embeddings_compute_posts_runtime_job(monkeypatch, capsys) -> None:
         recorded["url"] = url
         recorded["payload"] = payload
         recorded["method"] = method
-        return {"job": {"id": "job-123"}}
+        return {"ok": True, "result": {"job": {"id": "job-123"}}}
 
     def fake_wait(base_url: str, job_id: str) -> dict[str, object]:
         return {"id": job_id, "status": "completed", "result": {"space_key": "space-a"}}
@@ -140,19 +193,22 @@ def test_cli_embeddings_compute_posts_runtime_job(monkeypatch, capsys) -> None:
     output = json.loads(capsys.readouterr().out)
     assert output["job"]["status"] == "completed"
     assert recorded["method"] == "POST"
-    assert recorded["url"] == "http://127.0.0.1:6262/api/control/embeddings/compute"
+    assert recorded["url"] == "http://127.0.0.1:6262/api/control/commands/run"
     assert recorded["payload"] == {
-        "workspace_id": "default",
-        "dataset_name": "birds",
-        "model": "experiment-a",
-        "provider": "custom-provider",
-        "checkpoint": "/tmp/checkpoint.json",
-        "provider_kwargs": {"dim": 4},
-        "layouts": ["euclidean:2d"],
-        "method": "umap",
-        "n_neighbors": 15,
-        "min_dist": 0.1,
-        "metric": "cosine",
+        "command": "embeddings.compute",
+        "target": {"workspace_id": "default"},
+        "args": {
+            "dataset_name": "birds",
+            "model": "experiment-a",
+            "provider": "custom-provider",
+            "checkpoint": "/tmp/checkpoint.json",
+            "provider_kwargs": {"dim": 4},
+            "layouts": ["euclidean:2d"],
+            "method": "umap",
+            "n_neighbors": 15,
+            "min_dist": 0.1,
+            "metric": "cosine",
+        },
     }
 
 
@@ -425,6 +481,44 @@ def test_cli_panel_definitions_lists_runtime_panel_contracts(monkeypatch, capsys
     assert output["panel_definitions"][0]["panel_type"] == "samples"
 
 
+@pytest.mark.parametrize(
+    ("source_args", "expected_source"),
+    [
+        ([".hyperview/extensions/readout"], {"folder": str(Path(".hyperview/extensions/readout").resolve())}),
+        (["--shipped", "reference"], {"shipped": "reference"}),
+    ],
+)
+def test_cli_extension_add_posts_local_or_shipped_source(
+    monkeypatch,
+    capsys,
+    source_args: list[str],
+    expected_source: dict[str, str],
+) -> None:
+    recorded: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "hyperview.cli._active_workspace_id",
+        lambda _base_url, explicit: explicit or "default",
+    )
+
+    def fake_send(url: str, payload: dict[str, object], method: str = "POST") -> dict[str, object]:
+        recorded.update(url=url, payload=payload, method=method)
+        return {"ok": True, "result": {"extension": {"name": "reference"}}}
+
+    monkeypatch.setattr("hyperview.cli._http_send_json", fake_send)
+
+    main(["extension", "add", *source_args, "--workspace", "demo", "--add-panels", "--json"])
+
+    assert json.loads(capsys.readouterr().out)["extension"]["name"] == "reference"
+    assert recorded["url"] == "http://127.0.0.1:6262/api/control/commands/run"
+    assert recorded["method"] == "POST"
+    assert recorded["payload"] == {
+        "command": "extension.install",
+        "target": {"workspace_id": "demo"},
+        "args": {"add_panels": True, **expected_source},
+    }
+
+
 def test_cli_panel_update_posts_runtime_panel_props(monkeypatch, capsys) -> None:
     recorded: dict[str, object] = {}
 
@@ -584,6 +678,36 @@ def test_cli_panel_layout_commands_patch_runtime_panel_state(monkeypatch, capsys
         "target": {"workspace_id": "default", "panel_id": "readout"},
         "args": {},
     }
+
+
+def test_cli_ui_mutation_preserves_command_result_envelope(monkeypatch, capsys) -> None:
+    command_result = {
+        "ok": True,
+        "command": "workspace.selection.set",
+        "result": {"selected_ids": ["sample-1"]},
+        "workspace": {"id": "default"},
+        "snapshot": {"workspace": {"id": "default"}},
+        "revision": 7,
+    }
+    monkeypatch.setattr(
+        "hyperview.cli._http_send_json",
+        lambda _url, _payload, method="POST": command_result,
+    )
+
+    main(
+        [
+            "ui",
+            "selection",
+            "set",
+            "--workspace",
+            "default",
+            "--ids",
+            "sample-1",
+            "--json",
+        ]
+    )
+
+    assert json.loads(capsys.readouterr().out) == command_result
 
 
 def test_cli_generic_command_runner_posts_command_envelope(monkeypatch, capsys) -> None:
@@ -1025,6 +1149,7 @@ def test_cli_workspace_delete_removes_stale_workspace(
     assert payload["deleted_workspace_id"] == "stale-demo"
     assert payload["active_workspace_id"] == "research"
     assert [workspace["id"] for workspace in payload["workspaces"]] == ["default", "research"]
+    assert all(set(workspace) == {"id", "dataset_name", "created_at"} for workspace in payload["workspaces"])
 
 
 def test_cli_skill_install_copies_hyperview_skill(

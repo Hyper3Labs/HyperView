@@ -93,6 +93,28 @@ def _resolve_default_launch_layout(dataset: Dataset) -> str:
     return "poincare:2d"
 
 
+def _view_requires_visualization(view: ui_module.View | None) -> bool:
+    """Return whether launching ``view`` requires a dataset layout.
+
+    The default workspace includes visualization panels, but an explicit view
+    may intentionally contain only Samples or extension panels. Those panels
+    operate on dataset records and should not force callers to manufacture an
+    unrelated embedding layout.
+    """
+
+    if view is None:
+        return False
+
+    def item_requires_visualization(item: object) -> bool:
+        if isinstance(item, ui_module.Scatter):
+            return True
+        if isinstance(item, ui_module.Container):
+            return any(item_requires_visualization(child) for child in item.contents)
+        return False
+
+    return any(item_requires_visualization(item) for item in view.contents)
+
+
 def register_provider(
     alias: str,
     import_path: str,
@@ -337,6 +359,7 @@ class Session:
         *,
         workspace_id: str = "default",
         similarity_k: int = DEFAULT_SIMILARITY_EXPORT_K,
+        mount_path: str = "/",
     ) -> dict[str, Any]:
         """Export a read-only static bundle for a workspace in this session."""
 
@@ -345,6 +368,7 @@ class Session:
             workspace_id,
             out,
             similarity_k=similarity_k,
+            mount_path=mount_path,
         ).to_dict()
 
 
@@ -638,6 +662,42 @@ class SessionUiController:
 
         self._runtime().set_selection(workspace_id, list(sample_ids))
 
+    def show_samples(
+        self,
+        sample_ids: Iterable[str],
+        *,
+        workspace_id: str = "default",
+        focus: bool = True,
+        source: str = "python",
+    ) -> dict[str, object]:
+        """Show explicit result rows in Samples and synchronize map selection."""
+
+        payload = self._session.control.run(
+            "collection.selection.set",
+            target={"workspace_id": workspace_id},
+            args={
+                "sample_ids": list(sample_ids),
+                "focus": focus,
+                "source": source,
+            },
+        )
+        return dict(payload.get("result") or {})
+
+    def reset_samples(
+        self,
+        *,
+        workspace_id: str = "default",
+        focus: bool = True,
+    ) -> dict[str, object]:
+        """Restore the full Samples collection and clear synchronized selection."""
+
+        payload = self._session.control.run(
+            "collection.selection.set",
+            target={"workspace_id": workspace_id},
+            args={"clear": True, "focus": focus, "source": "python"},
+        )
+        return dict(payload.get("result") or {})
+
     def show_similar(
         self,
         sample_id: str,
@@ -728,13 +788,15 @@ class SessionUiController:
                 "source": source,
             },
         )
-        dataset = self._runtime().get_dataset(workspace_id=workspace_id)
+        runtime = self._runtime()
+        dataset = runtime.get_dataset(workspace_id=workspace_id)
+        resolved_query = runtime.get_samples_retrieval_query(workspace_id)
         return dataset.find_similar_by_text(
             query_text,
             k=k,
-            space_key=space_key,
-            layout_key=layout_key,
-            _provider_registry=self._runtime().provider_registry,
+            space_key=resolved_query.space_key if resolved_query is not None else space_key,
+            layout_key=resolved_query.layout_key if resolved_query is not None else layout_key,
+            _provider_registry=runtime.provider_registry,
         )
 
     def add_extension(
@@ -754,6 +816,21 @@ class SessionUiController:
         return self._runtime().install_extension(
             workspace_id,
             Path(folder),
+            add_panels=add_panels,
+        )
+
+    def add_shipped_extension(
+        self,
+        name: str,
+        *,
+        workspace_id: str = "default",
+        add_panels: bool = False,
+    ):
+        """Register an extension distributed with HyperView."""
+
+        return self._runtime().install_shipped_extension(
+            workspace_id,
+            name,
             add_panels=add_panels,
         )
 
@@ -781,9 +858,11 @@ def launch(
     """Launch the HyperView visualization server.
 
     Note:
-        HyperView needs at least one visualization to display. If no layouts
-        exist yet but embedding spaces do, this function computes one default
-        layout automatically.
+        Explicit views containing scatter panels need at least one visualization.
+        If the default workspace has embedding spaces but no layouts, this
+        function computes one default layout automatically. A dataset with only
+        records opens as a sample browser, and explicit Samples- or
+        extension-only views can also launch directly from dataset rows.
 
     Args:
         dataset: The dataset to visualize.
@@ -886,7 +965,10 @@ def launch(
     layouts = dataset.list_layouts()
     spaces = dataset.list_spaces()
 
-    if not layouts and not spaces:
+    explicit_scatter_view = _view_requires_visualization(view)
+    needs_visualization = explicit_scatter_view or (view is None and bool(spaces))
+
+    if explicit_scatter_view and not layouts and not spaces:
         raise ValueError(
             "HyperView launch requires at least one visualization or embedding space. "
             "No visualizations or embedding spaces were found. "
@@ -894,7 +976,7 @@ def launch(
             "or `dataset.set_coords()` before `hv.launch()`."
         )
 
-    if not layouts:
+    if needs_visualization and not layouts:
         default_layout = _resolve_default_launch_layout(dataset)
 
         print(f"No visualizations found. Computing {default_layout} visualization...")
