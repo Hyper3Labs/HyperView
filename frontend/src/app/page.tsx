@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { useHomeData } from "./useHomeData";
 
 export default function Home() {
-  const { samplesView, error, isLoading, retry } = useHomeData();
+  const { error, isLoading, retry } = useHomeData();
 
   if (error) {
     return (
@@ -43,7 +43,7 @@ export default function Home() {
   }
 
   return (
-    <DockviewProvider samplesView={samplesView}>
+    <DockviewProvider>
       <div className="h-screen flex flex-col bg-background">
         <Header />
 

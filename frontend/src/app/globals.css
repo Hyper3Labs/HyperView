@@ -55,6 +55,17 @@
     --text-subtle: 215 10% 46%;     /* #6e7681 */
     --accent-cyan: 176 60% 53%;     /* #39d3cc */
     --accent-orange: 27 86% 59%;    /* #f0883e */
+
+    /* Stable, resolved color aliases for extension panel modules. Panels may
+       ignore these entirely; they exist only when matching host chrome helps. */
+    --hv-color-background: hsl(var(--background));
+    --hv-color-foreground: hsl(var(--foreground));
+    --hv-color-surface: hsl(var(--card));
+    --hv-color-surface-muted: hsl(var(--muted));
+    --hv-color-border: hsl(var(--border));
+    --hv-color-accent: hsl(var(--primary));
+    --hv-color-accent-contrast: hsl(var(--primary-foreground));
+    --hv-color-muted-foreground: hsl(var(--muted-foreground));
   }
 }
 

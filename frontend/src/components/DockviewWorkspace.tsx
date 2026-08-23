@@ -34,7 +34,6 @@ import {
   removeRuntimePanel,
   runControlCommand,
 } from "@/lib/api";
-import type { SamplesViewModel } from "@/lib/sampleCollections";
 import {
   CENTER_PANEL_TAB_COMPONENTS,
   getPanelTabComponent,
@@ -62,6 +61,7 @@ import { PanelHost } from "./PanelHost";
 
 const DEFAULT_CONTAINER_WIDTH = 1200;
 const DEFAULT_CONTAINER_HEIGHT = 800;
+const COMPACT_WORKSPACE_BREAKPOINT = 720;
 const MIN_SIDE_PANEL_WIDTH = 120;
 const MIN_BOTTOM_PANEL_HEIGHT = 150;
 const OPEN_COPY_TITLE = "Open copy to the right";
@@ -93,13 +93,17 @@ const DEFAULT_BUILT_IN_PANEL_IDS = [
   PANEL.SCATTER,
 ] as const;
 
-const getContainerWidth = (api?: DockviewApi | null) =>
-  api?.width ??
-  (typeof window === "undefined" ? DEFAULT_CONTAINER_WIDTH : window.innerWidth);
+const getContainerWidth = (api?: DockviewApi | null) => {
+  const width = api?.width;
+  if (typeof width === "number" && width > 0) return width;
+  return typeof window === "undefined" ? DEFAULT_CONTAINER_WIDTH : window.innerWidth;
+};
 
-const getContainerHeight = (api?: DockviewApi | null) =>
-  api?.height ??
-  (typeof window === "undefined" ? DEFAULT_CONTAINER_HEIGHT : window.innerHeight);
+const getContainerHeight = (api?: DockviewApi | null) => {
+  const height = api?.height;
+  if (typeof height === "number" && height > 0) return height;
+  return typeof window === "undefined" ? DEFAULT_CONTAINER_HEIGHT : window.innerHeight;
+};
 
 const getDefaultLeftPanelWidth = (screenWidth: number) =>
   Math.round(Math.min(0.35 * screenWidth, 200));
@@ -140,6 +144,21 @@ function defaultPanelProps(definition: RuntimePanelDefinition) {
   return props;
 }
 
+function compareDefaultPanelCreationOrder(
+  left: RuntimePanelDefinition,
+  right: RuntimePanelDefinition
+) {
+  const leftLayout = definitionLayout(left);
+  const rightLayout = definitionLayout(right);
+  const leftPriority = leftLayout.position === "center" ? 0 : 1;
+  const rightPriority = rightLayout.position === "center" ? 0 : 1;
+  if (leftPriority !== rightPriority) return leftPriority - rightPriority;
+  const leftOrder = leftLayout.order;
+  const rightOrder = rightLayout.order;
+  return (typeof leftOrder === "number" ? leftOrder : 0) -
+    (typeof rightOrder === "number" ? rightOrder : 0);
+}
+
 function panelDefinition(
   definitions: RuntimePanelDefinition[],
   panel: RuntimePanel
@@ -149,16 +168,24 @@ function panelDefinition(
 
 function getCenterAnchorPanel(api: DockviewApi) {
   for (const id of CENTER_ANCHOR_PANEL_IDS) {
-    const panel = api.getPanel(id);
+    const panel = api.getPanel(id) ?? api.getPanel(`${RUNTIME_PANEL_PREFIX}${id}`);
     if (panel) {
       return panel;
     }
   }
 
-  return api.panels.find((panel) => !NON_ANCHOR_PANEL_IDS.has(panel.id)) ?? null;
+  const edgeGroupIds = new Set<string>(Object.values(EDGE_GROUP_IDS));
+  return api.panels.find((panel) => {
+    const panelId = stripRuntimePanelPrefix(panel.id);
+    return !edgeGroupIds.has(panel.group.id) && !NON_ANCHOR_PANEL_IDS.has(panelId);
+  }) ?? null;
 }
 
-function getEdgeGroupOptions(api: DockviewApi, zone: DockviewEdgeZone) {
+function getEdgeGroupOptions(
+  api: DockviewApi,
+  zone: DockviewEdgeZone,
+  preferredSize?: number
+) {
   const containerWidth = getContainerWidth(api);
   const containerHeight = getContainerHeight(api);
 
@@ -174,29 +201,46 @@ function getEdgeGroupOptions(api: DockviewApi, zone: DockviewEdgeZone) {
   }
 
   if (zone === "right") {
+    const defaultWidth = getDefaultRightPanelWidth(containerWidth);
+    const maximumWidth = Math.round(containerWidth * 0.65);
+    const targetWidth = Math.min(preferredSize ?? defaultWidth, maximumWidth);
     return {
       id: EDGE_GROUP_IDS.right,
-      initialSize: getDefaultRightPanelWidth(containerWidth),
-      minimumSize: MIN_SIDE_PANEL_WIDTH,
-      maximumSize: Math.round(containerWidth * 0.65),
+      initialSize: targetWidth,
+      minimumSize: targetWidth,
+      maximumSize: maximumWidth,
       collapsed: false,
     };
   }
 
+  const maximumHeight = getBottomPanelMaxHeight(containerHeight);
+  const targetHeight = Math.min(
+    preferredSize ?? getDefaultBottomPanelHeight(containerHeight),
+    maximumHeight
+  );
   return {
     id: EDGE_GROUP_IDS.bottom,
-    initialSize: getDefaultBottomPanelHeight(containerHeight),
-    minimumSize: MIN_BOTTOM_PANEL_HEIGHT,
-    maximumSize: getBottomPanelMaxHeight(containerHeight),
+    initialSize: targetHeight,
+    minimumSize: targetHeight,
+    maximumSize: maximumHeight,
     collapsed: false,
   };
 }
 
 function ensureEdgeGroup(
   api: DockviewApi,
-  zone: DockviewEdgeZone
+  zone: DockviewEdgeZone,
+  preferredSize?: number
 ): DockviewGroupPanelApi {
-  const group = api.getEdgeGroup(zone) ?? api.addEdgeGroup(zone, getEdgeGroupOptions(api, zone));
+  if (!api.getEdgeGroup(zone) && (api.width <= 0 || api.height <= 0)) {
+    api.layout(getContainerWidth(api), getContainerHeight(api), true);
+  }
+  let group = api.getEdgeGroup(zone);
+  if (group && preferredSize !== undefined && !edgeGroupHasPanels(api, zone)) {
+    api.removeEdgeGroup(zone);
+    group = undefined;
+  }
+  group ??= api.addEdgeGroup(zone, getEdgeGroupOptions(api, zone, preferredSize));
   if (zone !== "left") {
     group.setHeaderPosition("top");
   }
@@ -209,15 +253,23 @@ function ensureEdgeGroups(api: DockviewApi) {
   }
 }
 
-function showEdgeGroup(api: DockviewApi, zone: DockviewEdgeZone) {
-  const group = ensureEdgeGroup(api, zone);
+function showEdgeGroup(
+  api: DockviewApi,
+  zone: DockviewEdgeZone,
+  preferredSize?: number
+) {
+  const group = ensureEdgeGroup(api, zone, preferredSize);
   api.setEdgeGroupVisible(zone, true);
   group.expand();
   return group;
 }
 
 function hideEdgeGroup(api: DockviewApi, zone: DockviewEdgeZone) {
-  if (!api.getEdgeGroup(zone)) return;
+  const group = api.getEdgeGroup(zone);
+  if (!group) return;
+  // Preserve the expanded size while the splitview makes the hidden edge 0px.
+  // Otherwise Dockview records 0px as the next expansion target.
+  group.collapse();
   api.setEdgeGroupVisible(zone, false);
 }
 
@@ -236,8 +288,19 @@ function hideEmptySecondaryEdgeGroups(api: DockviewApi) {
   }
 }
 
-function getEdgeZonePosition(api: DockviewApi, zone: DockviewEdgeZone) {
-  const group = showEdgeGroup(api, zone);
+function showPopulatedSecondaryEdgeGroups(api: DockviewApi) {
+  for (const zone of ["right", "bottom"] as const) {
+    if (!edgeGroupHasPanels(api, zone)) continue;
+    showEdgeGroup(api, zone);
+  }
+}
+
+function getEdgeZonePosition(
+  api: DockviewApi,
+  zone: DockviewEdgeZone,
+  preferredSize?: number
+) {
+  const group = showEdgeGroup(api, zone, preferredSize);
   return { referenceGroup: group.id };
 }
 
@@ -261,8 +324,9 @@ function getRuntimePanelNumber(
   return getPositivePanelNumber(panel[field]);
 }
 
-function getRuntimePanelPlacementKey(panel: RuntimePanel) {
+function getRuntimePanelPlacementKey(panel: RuntimePanel, compact: boolean) {
   return JSON.stringify([
+    compact ? "compact" : "authored",
     panel.position,
     panel.reference_panel_id ?? null,
     panel.direction ?? null,
@@ -275,7 +339,11 @@ function getRuntimePanelPlacementKey(panel: RuntimePanel) {
   ]);
 }
 
-function getRuntimePanelAddLayout(spec: RuntimePanel) {
+function getRuntimePanelAddLayout(spec: RuntimePanel, compact: boolean) {
+  // Authored pixel constraints describe the desktop composition. On a narrow
+  // viewport all explicit-view panels become tabs in one full-width group, so
+  // carrying those constraints across would make the group overflow.
+  if (compact) return {};
   return {
     initialWidth: getRuntimePanelNumber(spec, "width"),
     initialHeight: getRuntimePanelNumber(spec, "height"),
@@ -289,8 +357,12 @@ function getRuntimePanelAddLayout(spec: RuntimePanel) {
 function getRuntimePanelPosition(
   api: DockviewApi,
   zone: "center" | "left" | "right" | "bottom",
-  panel?: RuntimePanel
+  panel?: RuntimePanel,
+  compact = false
 ) {
+  if (compact) {
+    return getCenterTabPosition(api) ?? undefined;
+  }
   if (panel?.reference_panel_id && panel.direction) {
     const referencePanel = resolveRuntimeReferencePanel(api, panel.reference_panel_id);
     if (referencePanel) {
@@ -302,11 +374,16 @@ function getRuntimePanelPosition(
     return getCenterTabPosition(api) ?? undefined;
   }
 
-  return getEdgeZonePosition(api, zone);
+  const preferredSize = panel
+    ? zone === "right"
+      ? getRuntimePanelNumber(panel, "width")
+      : getRuntimePanelNumber(panel, "height")
+    : undefined;
+  return getEdgeZonePosition(api, zone, preferredSize);
 }
 
 function resolveRuntimeReferencePanel(api: DockviewApi, panelId: string) {
-  return api.getPanel(panelId) ?? api.getPanel(`${RUNTIME_PANEL_PREFIX}${panelId}`) ?? null;
+  return api.getPanel(`${RUNTIME_PANEL_PREFIX}${panelId}`) ?? api.getPanel(panelId) ?? null;
 }
 
 function makePanelInstanceId(baseId: string) {
@@ -366,16 +443,26 @@ function getSamplesRankFromPanelState(panelState?: RuntimePanelStateEntry) {
 
 function getRuntimeSamplesPanelParams(
   panel: RuntimePanel,
-  panelState?: RuntimePanelStateEntry
+  panelState: RuntimePanelStateEntry | undefined,
+  compact: boolean
 ) {
   const stateMode = panelState?.state.mode;
-  const mode = stateMode === "retrieval" ? "ranked" : panel.props?.mode;
   const rank = getSamplesRankFromPanelState(panelState) ?? panel.props?.rank;
+  const hasAnchorRank =
+    isRecord(rank) &&
+    typeof rank.anchorSampleId === "string" &&
+    rank.anchorSampleId.length > 0;
+  const mode =
+    stateMode === "retrieval"
+      ? hasAnchorRank
+        ? "ranked"
+        : "auto"
+      : panel.props?.mode;
   return {
     panelId: panel.id,
-    runtimePlacementKey: getRuntimePanelPlacementKey(panel),
+    runtimePlacementKey: getRuntimePanelPlacementKey(panel, compact),
     mode:
-      mode === "auto" || mode === "browse" || mode === "ranked"
+      mode === "auto" || mode === "browse" || mode === "ranked" || mode === "results"
         ? mode
         : undefined,
     rank: rank && typeof rank === "object" && !Array.isArray(rank) ? rank : undefined,
@@ -384,13 +471,15 @@ function getRuntimeSamplesPanelParams(
 
 function getRuntimePanelHostParams(
   panel: RuntimePanel,
-  panelState?: RuntimePanelStateEntry
+  panelState: RuntimePanelStateEntry | undefined,
+  compact: boolean
 ) {
   const baseParams = {
     ...(panel.props ?? {}),
     panelId: panel.id,
     builtinPanelType: panel.builtin_panel ?? panel.panel_type,
-    runtimePlacementKey: getRuntimePanelPlacementKey(panel),
+    renderer: panel.renderer,
+    runtimePlacementKey: getRuntimePanelPlacementKey(panel, compact),
   };
 
   if (panel.panel_type === "scatter") {
@@ -415,7 +504,7 @@ function getRuntimePanelHostParams(
   if (panel.builtin_panel === "samples" || panel.panel_type === "samples") {
     return {
       ...baseParams,
-      ...getRuntimeSamplesPanelParams(panel, panelState),
+      ...getRuntimeSamplesPanelParams(panel, panelState, compact),
     };
   }
 
@@ -636,13 +725,9 @@ function applyZonePolicies(api: DockviewApi) {
 
 interface DockviewProviderProps {
   children: ReactNode;
-  samplesView: SamplesViewModel;
 }
 
-export function DockviewProvider({
-  children,
-  samplesView,
-}: DockviewProviderProps) {
+export function DockviewProvider({ children }: DockviewProviderProps) {
   const [api, setApi] = useState<DockviewApi | null>(null);
   const [edgeStateRevision, setEdgeStateRevision] = useState(0);
   const notifyEdgeStateChange = useCallback(() => {
@@ -655,9 +740,8 @@ export function DockviewProvider({
       setApi,
       edgeStateRevision,
       notifyEdgeStateChange,
-      samplesView,
     }),
-    [api, edgeStateRevision, notifyEdgeStateChange, samplesView]
+    [api, edgeStateRevision, notifyEdgeStateChange]
   );
 
   useEffect(() => {
@@ -689,17 +773,56 @@ export function DockviewWorkspace() {
   const bootstrappingWorkspace = useRef<string | null>(null);
   const restoredLayoutRevision = useRef<number | null>(null);
   const layoutSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const applyingRuntimeLayout = useRef(false);
+  const applyingRuntimeLayoutFrame = useRef<number | null>(null);
+  const lastSubmittedLayoutSignature = useRef<string | null>(null);
+  const workspaceLayoutSignature = workspaceLayout ? JSON.stringify(workspaceLayout) : null;
+  const workspaceLayoutSignatureRef = useRef<string | null>(workspaceLayoutSignature);
+  const workspaceElementRef = useRef<HTMLDivElement | null>(null);
+  const [isCompactWorkspace, setIsCompactWorkspace] = useState(false);
+  const [workspaceHasSize, setWorkspaceHasSize] = useState(false);
+  if (
+    workspaceLayoutSignatureRef.current !== workspaceLayoutSignature &&
+    lastSubmittedLayoutSignature.current !== workspaceLayoutSignature
+  ) {
+    lastSubmittedLayoutSignature.current = null;
+  }
+  workspaceLayoutSignatureRef.current = workspaceLayoutSignature;
+
+  useEffect(() => {
+    const element = workspaceElementRef.current;
+    if (!element) return;
+    const updateCompactMode = () => {
+      // A hidden or not-yet-laid-out container measures 0 wide. That carries no
+      // information about the viewport, so keep the previous mode and defer
+      // layout construction until a real measurement arrives; otherwise a page
+      // opened in a background tab builds a degenerate 0-width layout.
+      const elementWidth = element.getBoundingClientRect().width;
+      if (elementWidth <= 0) return;
+      const viewportWidth =
+        typeof window === "undefined" || window.innerWidth <= 0
+          ? DEFAULT_CONTAINER_WIDTH
+          : window.innerWidth;
+      setWorkspaceHasSize(true);
+      setIsCompactWorkspace(
+        Math.min(elementWidth, viewportWidth) < COMPACT_WORKSPACE_BREAKPOINT
+      );
+    };
+    updateCompactMode();
+    const observer = new ResizeObserver(updateCompactMode);
+    observer.observe(element);
+    window.addEventListener("resize", updateCompactMode);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updateCompactMode);
+    };
+  }, []);
 
   const buildDefaultLayout = useCallback(
     (api: DockviewApi) => {
       const orderedDefinitions = panelDefinitions
         .filter((definition) => typeof definitionLayout(definition).id === "string")
-        .toSorted((left, right) => {
-          const leftOrder = definitionLayout(left).order;
-          const rightOrder = definitionLayout(right).order;
-          return (typeof leftOrder === "number" ? leftOrder : 0) -
-            (typeof rightOrder === "number" ? rightOrder : 0);
-        });
+        .toSorted(compareDefaultPanelCreationOrder);
 
       for (const definition of orderedDefinitions) {
         const id = defaultPanelId(definition);
@@ -730,6 +853,7 @@ export function DockviewWorkspace() {
           params: {
             panelId: id,
             builtinPanelType: definition.panel_type,
+            renderer: definition.renderer,
             definitionProps: defaultPanelProps(definition),
             definitionTitle: definition.title,
           },
@@ -746,12 +870,39 @@ export function DockviewWorkspace() {
     [panelDefinitions]
   );
 
+  const restoreDockviewLayout = useCallback(
+    (api: DockviewApi, layout: Record<string, unknown>) => {
+      const runtimePanelIds = api.panels
+        .map((panel) => panel.id)
+        .filter((panelId) => panelId.startsWith(RUNTIME_PANEL_PREFIX))
+        .map(stripRuntimePanelPrefix);
+      runtimePanelIds.forEach((panelId) => runtimeSyncClosedPanels.current.add(panelId));
+      applyingRuntimeLayout.current = true;
+      if (applyingRuntimeLayoutFrame.current !== null) {
+        cancelAnimationFrame(applyingRuntimeLayoutFrame.current);
+      }
+      try {
+        api.fromJSON(layout as unknown as SerializedDockview);
+      } finally {
+        runtimePanelIds.forEach((panelId) => runtimeSyncClosedPanels.current.delete(panelId));
+        // Dockview may emit its normalized layout change after fromJSON returns.
+        // Keep the suppression through the next paint so a remote/runtime
+        // layout cannot be mistaken for a local user resize.
+        applyingRuntimeLayoutFrame.current = requestAnimationFrame(() => {
+          applyingRuntimeLayout.current = false;
+          applyingRuntimeLayoutFrame.current = null;
+        });
+      }
+    },
+    []
+  );
+
   const onReady = useCallback(
     (event: DockviewReadyEvent) => {
       ctx.setApi(event.api);
       if (workspaceLayout) {
         try {
-          event.api.fromJSON(workspaceLayout as unknown as SerializedDockview);
+          restoreDockviewLayout(event.api, workspaceLayout);
           restoredLayoutRevision.current = workspaceLayoutRevision;
 
           if (event.api.totalPanels === 0) {
@@ -769,14 +920,12 @@ export function DockviewWorkspace() {
         }
       }
 
-      if (isStaticBundle() && !hasExplicitView && event.api.totalPanels === 0) {
-        buildDefaultLayout(event.api);
-      }
     },
     [
       buildDefaultLayout,
       ctx,
       hasExplicitView,
+      restoreDockviewLayout,
       workspaceLayout,
       workspaceLayoutRevision,
     ]
@@ -784,20 +933,73 @@ export function DockviewWorkspace() {
 
   useEffect(() => {
     const api = ctx.api;
+    if (
+      !api ||
+      !workspaceHasSize ||
+      !isStaticBundle() ||
+      !activeWorkspaceId ||
+      hasExplicitView ||
+      panelDefinitions.length === 0 ||
+      api.totalPanels > 0
+    ) {
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      const state = useStore.getState();
+      if (
+        state.activeWorkspaceId !== activeWorkspaceId ||
+        state.hasExplicitView ||
+        state.customPanels.length > 0 ||
+        api.totalPanels > 0
+      ) {
+        return;
+      }
+      buildDefaultLayout(api);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [
+    activeWorkspaceId,
+    buildDefaultLayout,
+    ctx.api,
+    hasExplicitView,
+    panelDefinitions,
+    workspaceHasSize,
+  ]);
+
+  useEffect(() => {
+    const api = ctx.api;
     if (!api) return;
 
     const disposable = api.onDidLayoutChange(() => {
-      if (api.totalPanels === 0) return;
+      if (api.totalPanels === 0 || applyingRuntimeLayout.current) return;
       const nextLayout = api.toJSON() as unknown as Record<string, unknown>;
+      const nextLayoutSignature = JSON.stringify(nextLayout);
+      // Applying a runtime snapshot through Dockview's fromJSON emits its own
+      // layout-change event. Persisting that identical layout creates a
+      // feedback loop: layout.set -> snapshot -> fromJSON -> layout.set. Skip
+      // the no-op before touching local state or scheduling a command.
+      if (
+        nextLayoutSignature === workspaceLayoutSignatureRef.current ||
+        nextLayoutSignature === lastSubmittedLayoutSignature.current
+      ) return;
+      lastSubmittedLayoutSignature.current = nextLayoutSignature;
       setWorkspaceLayoutLocal(nextLayout);
       if (layoutSaveTimer.current) clearTimeout(layoutSaveTimer.current);
-      if (isStaticBundle() || !activeWorkspaceId) return;
+      // An explicit hv.ui.View is already the durable, runtime-owned layout
+      // contract. Raw Dockview JSON contains viewport-specific pixel sizes;
+      // sharing it between clients of different sizes makes them continually
+      // overwrite one another. Direct manipulation remains local, while
+      // semantic workspace.panel.* commands update the declared view.
+      if (isStaticBundle() || !activeWorkspaceId || hasExplicitView) return;
       layoutSaveTimer.current = setTimeout(() => {
         void runControlCommand({
           command: "workspace.layout.set",
           target: { workspace_id: activeWorkspaceId },
           args: { layout: nextLayout, client_id: getRuntimeClientId() },
         }).catch((error) => {
+          if (lastSubmittedLayoutSignature.current === nextLayoutSignature) {
+            lastSubmittedLayoutSignature.current = null;
+          }
           console.error("Failed to persist workspace layout:", error);
         });
       }, 150);
@@ -806,15 +1008,20 @@ export function DockviewWorkspace() {
     return () => {
       disposable.dispose();
       if (layoutSaveTimer.current) clearTimeout(layoutSaveTimer.current);
+      if (applyingRuntimeLayoutFrame.current !== null) {
+        cancelAnimationFrame(applyingRuntimeLayoutFrame.current);
+        applyingRuntimeLayoutFrame.current = null;
+      }
+      applyingRuntimeLayout.current = false;
     };
-  }, [activeWorkspaceId, ctx.api, setWorkspaceLayoutLocal]);
+  }, [activeWorkspaceId, ctx.api, hasExplicitView, setWorkspaceLayoutLocal]);
 
   useEffect(() => {
     const api = ctx.api;
     if (!api || !workspaceLayout) return;
     if (restoredLayoutRevision.current === workspaceLayoutRevision) return;
     try {
-      api.fromJSON(workspaceLayout as unknown as SerializedDockview);
+      restoreDockviewLayout(api, workspaceLayout);
       restoredLayoutRevision.current = workspaceLayoutRevision;
       ensureEdgeGroups(api);
       hideEmptySecondaryEdgeGroups(api);
@@ -822,7 +1029,7 @@ export function DockviewWorkspace() {
     } catch (error) {
       console.warn("Failed to apply runtime workspace layout:", error);
     }
-  }, [ctx.api, workspaceLayout, workspaceLayoutRevision]);
+  }, [ctx.api, restoreDockviewLayout, workspaceLayout, workspaceLayoutRevision]);
 
   useEffect(() => {
     if (
@@ -839,12 +1046,7 @@ export function DockviewWorkspace() {
     const existingIds = new Set(customPanels.map((panel) => panel.id));
     const defaults = panelDefinitions
       .filter((definition) => typeof definitionLayout(definition).id === "string")
-      .toSorted((left, right) => {
-        const leftOrder = definitionLayout(left).order;
-        const rightOrder = definitionLayout(right).order;
-        return (typeof leftOrder === "number" ? leftOrder : 0) -
-          (typeof rightOrder === "number" ? rightOrder : 0);
-      });
+      .toSorted(compareDefaultPanelCreationOrder);
 
     void (async () => {
       try {
@@ -970,35 +1172,42 @@ export function DockviewWorkspace() {
 
   useEffect(() => {
     const api = ctx.api;
-    if (!api) return;
+    if (!api || !workspaceHasSize) return;
 
     const visibleRuntimePanels = customPanels.filter((panel) => panel.visible !== false);
     const desiredPanelIds = new Set(
-      visibleRuntimePanels.map((panel) => `${RUNTIME_PANEL_PREFIX}${panel.id}`)
+      visibleRuntimePanels.map(getDockPanelId)
     );
 
     if (hasExplicitView) {
       for (const panelId of DEFAULT_BUILT_IN_PANEL_IDS) {
+        if (desiredPanelIds.has(panelId)) continue;
         api.getPanel(panelId)?.api.close();
       }
       hideEdgeGroup(api, "left");
     }
 
     for (const panel of api.panels) {
-      if (!panel.id.startsWith(RUNTIME_PANEL_PREFIX)) continue;
+      const runtimePlacementKey = (panel.api.getParameters() as {
+        runtimePlacementKey?: string;
+      }).runtimePlacementKey;
+      if (!panel.id.startsWith(RUNTIME_PANEL_PREFIX) && runtimePlacementKey === undefined) {
+        continue;
+      }
       if (desiredPanelIds.has(panel.id)) continue;
       runtimeSyncClosedPanels.current.add(stripRuntimePanelPrefix(panel.id));
       panel.api.close();
     }
 
+    const newlyAddedActivePanelIds: string[] = [];
     for (const panel of visibleRuntimePanels) {
-      const runtimePanelId = `${RUNTIME_PANEL_PREFIX}${panel.id}`;
+      const runtimePanelId = getDockPanelId(panel);
       let existingPanel = api.getPanel(runtimePanelId);
       if (existingPanel) {
         const state = existingPanel.toJSON();
         const currentComponent = state.contentComponent ?? existingPanel.api.component;
         const expectedComponent = getExpectedRuntimePanelComponent(panel);
-        const placementKey = getRuntimePanelPlacementKey(panel);
+        const placementKey = getRuntimePanelPlacementKey(panel, isCompactWorkspace);
         const existingPlacementKey = (existingPanel.api.getParameters() as {
           runtimePlacementKey?: string;
         }).runtimePlacementKey;
@@ -1011,28 +1220,43 @@ export function DockviewWorkspace() {
         } else {
           existingPanel.api.setTitle(panel.title);
           existingPanel.api.updateParameters(
-            getRuntimePanelHostParams(panel, panelStates[panel.id])
+            getRuntimePanelHostParams(
+              panel,
+              panelStates[panel.id],
+              isCompactWorkspace
+            )
           );
           continue;
         }
       }
 
       const builtInPanelType = panel.builtin_panel ?? panel.panel_type;
-      const layout = getRuntimePanelAddLayout(panel);
+      const layout = getRuntimePanelAddLayout(panel, isCompactWorkspace);
       api.addPanel({
         id: runtimePanelId,
         component: "panelHost",
         title: panel.title,
         tabComponent:
           panel.kind === "module" ? undefined : getPanelTabComponent(builtInPanelType),
-        params: getRuntimePanelHostParams(panel, panelStates[panel.id]),
-        position: getRuntimePanelPosition(api, panel.position, panel),
+        params: getRuntimePanelHostParams(
+          panel,
+          panelStates[panel.id],
+          isCompactWorkspace
+        ),
+        position: getRuntimePanelPosition(
+          api,
+          panel.position,
+          panel,
+          isCompactWorkspace
+        ),
         initialWidth:
           layout.initialWidth ??
-          (panel.position === "right" ? getDefaultRightPanelWidth(getContainerWidth(api)) : undefined),
+          (!isCompactWorkspace && panel.position === "right"
+            ? getDefaultRightPanelWidth(getContainerWidth(api))
+            : undefined),
         initialHeight:
           layout.initialHeight ??
-          (panel.position === "bottom"
+          (!isCompactWorkspace && panel.position === "bottom"
             ? getDefaultBottomPanelHeight(getContainerHeight(api))
             : undefined),
         minimumWidth: layout.minimumWidth,
@@ -1040,9 +1264,37 @@ export function DockviewWorkspace() {
         maximumWidth: layout.maximumWidth,
         maximumHeight: layout.maximumHeight,
       });
+      if (panel.active) newlyAddedActivePanelIds.push(runtimePanelId);
     }
 
-  }, [ctx.api, customPanels, datasetInfo, hasExplicitView, panelStates]);
+    // Creating a later `within` panel makes it the visible tab in Dockview.
+    // Restore each authored tab group's explicit default after the complete
+    // layout has been assembled. This only runs for newly created panels, so
+    // subsequent user tab choices are not overwritten by unrelated updates.
+    for (const panelId of newlyAddedActivePanelIds) {
+      api.getPanel(panelId)?.api.setActive();
+    }
+
+    // Closing the default Explorer can cause Dockview to restore the empty
+    // left edge's previous width. Explicit views own their entire layout, so
+    // collapse that empty host edge again after panel reconciliation.
+    if (hasExplicitView) hideEdgeGroup(api, "left");
+    showPopulatedSecondaryEdgeGroups(api);
+    const visibilityFrame = requestAnimationFrame(() => {
+      if (hasExplicitView) hideEdgeGroup(api, "left");
+      showPopulatedSecondaryEdgeGroups(api);
+    });
+
+    return () => cancelAnimationFrame(visibilityFrame);
+  }, [
+    ctx.api,
+    customPanels,
+    datasetInfo,
+    hasExplicitView,
+    isCompactWorkspace,
+    panelStates,
+    workspaceHasSize,
+  ]);
 
   useEffect(() => {
     const api = ctx.api;
@@ -1054,7 +1306,7 @@ export function DockviewWorkspace() {
   }, [activePanelId, ctx.api, customPanels]);
 
   return (
-    <div className="h-full w-full">
+    <div ref={workspaceElementRef} className="h-full w-full">
       <DockviewReact
         components={COMPONENTS}
         tabComponents={TAB_COMPONENTS}

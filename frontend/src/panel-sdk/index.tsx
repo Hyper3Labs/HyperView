@@ -12,6 +12,9 @@ import {
   fetchEmbeddings,
   fetchLassoSelection,
   fetchRuntimeState,
+  fetchSamplesBatch,
+  fetchSimilarSamples,
+  fetchStaticBundleManifest,
   getRuntimeClientId,
   isAbortError,
   isStaticBundle,
@@ -20,7 +23,9 @@ import {
   runTool as runRuntimeTool,
   runtimeSnapshotFromCommandResult,
   setLayoutView,
+  updateStaticSelection,
   type ControlCommandResult,
+  type CollectionItem,
   type OrbitView3DRequest,
   type ToolMetadata,
 } from "@/lib/api";
@@ -60,6 +65,81 @@ export interface HyperViewCommandClient {
     layoutKey: string,
     camera3d: OrbitView3DRequest | null
   ) => Promise<RuntimeSnapshot>;
+}
+
+/** Whether natural-language text-query inference is available in this runtime. */
+export function supportsTextSearch(dataset?: DatasetInfo | null): boolean {
+  if (isStaticBundle()) return false;
+  return Boolean(
+    dataset?.indexes?.some((index) => index.query_modes.includes("text"))
+  );
+}
+
+/** Hydration-safe reactive form of {@link supportsTextSearch}. */
+export function useSupportsTextSearch(): boolean {
+  const dataset = useStore((state) => state.datasetInfo);
+  return supportsTextSearch(dataset);
+}
+
+/** Whether image-query similarity can be computed by this runtime. */
+export function supportsSampleSimilarity(dataset?: DatasetInfo | null): boolean {
+  return Boolean(
+    dataset?.indexes?.some((index) => index.query_modes.includes("nearest"))
+  );
+}
+
+/** Whether live or explicitly exported image-query similarity is available. */
+export function useSupportsSampleSimilarity(): boolean {
+  const dataset = useStore((state) => state.datasetInfo);
+  const [supported, setSupported] = React.useState(false);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    if (!isStaticBundle()) {
+      setSupported(supportsSampleSimilarity(dataset));
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void fetchStaticBundleManifest()
+      .then((manifest) => {
+        if (!cancelled) {
+          setSupported(manifest?.capabilities.sample_similarity === true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setSupported(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [dataset]);
+
+  return supported;
+}
+
+/** Whether the current runtime can resolve a lasso for this layout dimension. */
+export function supportsLassoSelection(layoutDimension: 2 | 3): boolean {
+  return layoutDimension === 2 || !isStaticBundle();
+}
+
+/** Hydration-safe reactive form of {@link supportsLassoSelection}. */
+export function useSupportsLassoSelection(layoutDimension: 2 | 3): boolean {
+  const [supported, setSupported] = React.useState(true);
+  React.useEffect(() => {
+    setSupported(supportsLassoSelection(layoutDimension));
+  }, [layoutDimension]);
+  return supported;
+}
+
+/** Whether this panel can call Python-backed extension tools. */
+export function useSupportsTools(): boolean {
+  const [supported, setSupported] = React.useState(false);
+  React.useEffect(() => {
+    setSupported(!isStaticBundle());
+  }, []);
+  return supported;
 }
 
 export interface HyperViewToolClient {
@@ -203,23 +283,19 @@ export function createHyperViewPanelClient(workspaceId: string | null): HyperVie
     },
     async setActiveLayout(layoutKey) {
       if (!workspaceId) throw new Error("No active workspace");
-      if (!isStaticBundle()) {
-        await fetchJson(apiUrl("/control/ui/state"), {
-          method: "PATCH",
-          body: JSON.stringify({
-            workspace_id: workspaceId,
-            set_active_layout: true,
-            active_layout_key: layoutKey,
-            client_id: getRuntimeClientId(),
-          }),
-        });
-      }
-      return fetchRuntimeState(workspaceId);
+      if (isStaticBundle()) return fetchRuntimeState(workspaceId);
+      const payload = await runControlCommand({
+        command: "workspace.active-layout.set",
+        target: { workspace_id: workspaceId },
+        args: { layout_key: layoutKey, client_id: getRuntimeClientId() },
+      });
+      if (!payload.snapshot) throw new Error("Active layout command returned no snapshot");
+      return payload.snapshot;
     },
     async setLayoutView(layoutKey, camera3d) {
       if (!workspaceId) throw new Error("No active workspace");
-      await setLayoutView({ workspaceId, layoutKey, camera3d });
-      return fetchRuntimeState(workspaceId);
+      const snapshot = await setLayoutView({ workspaceId, layoutKey, camera3d });
+      return snapshot ?? fetchRuntimeState(workspaceId);
     },
   };
 }
@@ -441,6 +517,43 @@ export function usePanelState(panelIdOverride?: string) {
   );
 }
 
+export function usePanelActions() {
+  const activeWorkspaceId = useStore((state) => state.activeWorkspaceId);
+  const applyRuntimeSnapshot = useStore((state) => state.applyRuntimeSnapshot);
+
+  const focusPanel = useCallback(
+    async (panelId: string) => {
+      if (!activeWorkspaceId) throw new Error("No active workspace");
+      const payload = await runControlCommand({
+        command: "workspace.panel.focus",
+        target: { workspace_id: activeWorkspaceId, panel_id: panelId },
+        args: {},
+      });
+      const snapshot = runtimeSnapshotFromCommandResult(payload);
+      applyRuntimeSnapshot(snapshot);
+      return snapshot;
+    },
+    [activeWorkspaceId, applyRuntimeSnapshot]
+  );
+
+  const updateProps = useCallback(
+    async (panelId: string, props: Record<string, unknown>) => {
+      if (!activeWorkspaceId) throw new Error("No active workspace");
+      const payload = await runControlCommand({
+        command: "workspace.panel.update-props",
+        target: { workspace_id: activeWorkspaceId, panel_id: panelId },
+        args: { props },
+      });
+      const snapshot = runtimeSnapshotFromCommandResult(payload);
+      applyRuntimeSnapshot(snapshot);
+      return snapshot;
+    },
+    [activeWorkspaceId, applyRuntimeSnapshot]
+  );
+
+  return useMemo(() => ({ focusPanel, updateProps }), [focusPanel, updateProps]);
+}
+
 export function useSelection() {
   const activeWorkspaceId = useStore((state) => state.activeWorkspaceId);
   const applyRuntimeSnapshot = useStore((state) => state.applyRuntimeSnapshot);
@@ -460,22 +573,39 @@ export function useSelection() {
       clearLassoSelection();
       if (isStaticBundle()) {
         setSelectedIds(new Set(sampleIds), "panel");
-        return fetchRuntimeState(activeWorkspaceId);
+        return updateStaticSelection(sampleIds);
       }
-      await fetchJson(apiUrl("/control/ui/selection"), {
-        method: "POST",
-        body: JSON.stringify({
-          workspace_id: activeWorkspaceId,
-          sample_ids: sampleIds,
-        }),
+      const payload = await runControlCommand({
+        command: "workspace.selection.set",
+        target: { workspace_id: activeWorkspaceId },
+        args: { sample_ids: sampleIds, client_id: getRuntimeClientId() },
       });
-      const snapshot = await fetchJson<RuntimeSnapshot>(
-        buildUrl(apiUrl("/runtime"), { workspace_id: activeWorkspaceId })
-      );
+      if (!payload.snapshot) throw new Error("Selection command returned no snapshot");
+      const snapshot = payload.snapshot;
       applyRuntimeSnapshot(snapshot);
       return snapshot;
     },
     [activeWorkspaceId, applyRuntimeSnapshot, clearLassoSelection, setSelectedIds]
+  );
+
+  const presentSelection = useCallback(
+    async (ids: string[], source: string) => {
+      if (!activeWorkspaceId) throw new Error("No active workspace");
+      const payload = await runControlCommand({
+        command: "collection.selection.set",
+        target: { workspace_id: activeWorkspaceId },
+        args: {
+          sample_ids: Array.from(new Set(ids)),
+          focus: true,
+          source,
+        },
+      });
+      const snapshot = runtimeSnapshotFromCommandResult(payload);
+      applyRuntimeSnapshot(snapshot);
+      clearLassoSelection();
+      return snapshot;
+    },
+    [activeWorkspaceId, applyRuntimeSnapshot, clearLassoSelection]
   );
 
   const selectLasso = useCallback(
@@ -506,7 +636,7 @@ export function useSelection() {
           offset += page.sample_ids.length;
           if (page.sample_ids.length === 0) break;
         } while (offset < total);
-        await persistSelection(ids);
+        await presentSelection(ids, "scatter-lasso");
         return ids;
       } catch (reason) {
         const message = reason instanceof Error ? reason.message : "Lasso selection failed";
@@ -516,7 +646,7 @@ export function useSelection() {
         setLassoLoading(false);
       }
     },
-    [persistSelection]
+    [presentSelection]
   );
 
   return useMemo(
@@ -530,6 +660,45 @@ export function useSelection() {
       lassoError,
     }),
     [lassoError, lassoLoading, persistSelection, selectLasso, selectedIds, selectionSource]
+  );
+}
+
+export function useSampleResults() {
+  const commandClient = useCommandClient();
+
+  const showResults = useCallback(
+    async (
+      ids: string[],
+      options?: { focus?: boolean; source?: string }
+    ) => {
+      const sampleIds = Array.from(new Set(ids.map((id) => id.trim()).filter(Boolean)));
+      if (sampleIds.length === 0) throw new Error("showResults requires at least one sample id");
+      return commandClient.runCommand("collection.selection.set", {
+        args: {
+          sample_ids: sampleIds,
+          focus: options?.focus ?? true,
+          source: options?.source ?? "panel",
+        },
+      });
+    },
+    [commandClient]
+  );
+
+  const resetResults = useCallback(
+    (options?: { focus?: boolean; source?: string }) =>
+      commandClient.runCommand("collection.selection.set", {
+        args: {
+          clear: true,
+          focus: options?.focus ?? true,
+          source: options?.source ?? "panel",
+        },
+      }),
+    [commandClient]
+  );
+
+  return useMemo(
+    () => ({ showResults, resetResults }),
+    [resetResults, showResults]
   );
 }
 
@@ -575,6 +744,17 @@ export function usePanelInteractions() {
     () => new Set(highlightedSamples.samples.map((sample) => sample.id)),
     [highlightedSamples.samples]
   );
+  const rawFocusRequest = samplesPanelState.focus_request;
+  const focusRequest = useMemo(() => {
+    if (!rawFocusRequest || typeof rawFocusRequest !== "object" || Array.isArray(rawFocusRequest)) {
+      return null;
+    }
+    const request = rawFocusRequest as Record<string, unknown>;
+    const kind = request.kind === "selection" || request.kind === "all" ? request.kind : null;
+    const revision = typeof request.revision === "number" ? request.revision : null;
+    if (!kind || revision === null) return null;
+    return { kind, revision } as const;
+  }, [rawFocusRequest]);
 
   return useMemo(
     () => ({
@@ -582,12 +762,14 @@ export function usePanelInteractions() {
       setHoveredId,
       labelFilter,
       highlightedIds,
+      focusRequest,
       labelColorMapId,
       scatterLabelOverlayMode,
       setScatterLabelOverlayMode,
     }),
     [
       highlightedIds,
+      focusRequest,
       hoveredId,
       labelColorMapId,
       labelFilter,
@@ -606,7 +788,114 @@ export function useCollection(collectionId?: string | null): RuntimeCollection |
   }, [collectionId, runtimeCollections]);
 }
 
+export interface SimilarSamplesQuery {
+  anchorSampleId: string;
+  layoutKey?: string;
+  spaceKey?: string;
+  k?: number;
+}
+
+export function useSimilarSamples(query?: SimilarSamplesQuery | null) {
+  const anchorSampleId = query?.anchorSampleId ?? null;
+  const layoutKey = query?.layoutKey;
+  const spaceKey = query?.spaceKey;
+  const k = Math.max(1, Math.floor(query?.k ?? 10));
+  const queryKey = anchorSampleId
+    ? `${anchorSampleId}:${layoutKey ?? spaceKey ?? "default"}:${k}`
+    : null;
+  const [remote, setRemote] = React.useState<{
+    key: string | null;
+    querySample: Sample | null;
+    samples: Sample[];
+    metric: string | null;
+    spaceKey: string | null;
+    loading: boolean;
+    error: string | null;
+  }>({
+    key: null,
+    querySample: null,
+    samples: [],
+    metric: null,
+    spaceKey: null,
+    loading: false,
+    error: null,
+  });
+
+  React.useEffect(() => {
+    if (!anchorSampleId || !queryKey) {
+      setRemote({
+        key: null,
+        querySample: null,
+        samples: [],
+        metric: null,
+        spaceKey: null,
+        loading: false,
+        error: null,
+      });
+      return;
+    }
+    let cancelled = false;
+    setRemote({
+      key: queryKey,
+      querySample: null,
+      samples: [],
+      metric: null,
+      spaceKey: null,
+      loading: true,
+      error: null,
+    });
+    void fetchSimilarSamples(anchorSampleId, {
+      k,
+      layoutKey,
+      spaceKey,
+      includeThumbnails: true,
+    })
+      .then((response) => {
+        if (!cancelled) {
+          setRemote({
+            key: queryKey,
+            querySample: response.query_sample,
+            samples: response.results,
+            metric: response.metric,
+            spaceKey: response.space_key,
+            loading: false,
+            error: null,
+          });
+        }
+      })
+      .catch((error) => {
+        if (cancelled || isAbortError(error)) return;
+        setRemote({
+          key: queryKey,
+          querySample: null,
+          samples: [],
+          metric: null,
+          spaceKey: null,
+          loading: false,
+          error: error instanceof Error ? error.message : "Failed to load similar samples",
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [anchorSampleId, k, layoutKey, queryKey, spaceKey]);
+
+  return useMemo(
+    () => ({
+      querySample: remote.key === queryKey ? remote.querySample : null,
+      samples: remote.key === queryKey ? remote.samples : [],
+      total: remote.key === queryKey ? remote.samples.length : 0,
+      metric: remote.key === queryKey ? remote.metric : null,
+      spaceKey: remote.key === queryKey ? remote.spaceKey : null,
+      loading: remote.key === queryKey ? remote.loading : Boolean(queryKey),
+      error: remote.key === queryKey ? remote.error : null,
+    }),
+    [queryKey, remote]
+  );
+}
+
 const DEFAULT_COLLECTION_PAGE_SIZE = 60;
+const MAX_COLLECTION_API_PAGE_SIZE = 500;
 
 interface CollectionSamplesState {
   key: string | null;
@@ -655,19 +944,30 @@ export function useSamples(
       setRemoteLoading(true);
       setRemoteError(null);
       try {
-        const page = await fetchCollectionItems(collection.id, {
-          workspaceId: activeWorkspaceId,
-          offset,
-          limit: pageSize,
-          signal: abort.signal,
-        });
+        const items: CollectionItem[] = [];
+        let nextOffset = offset;
+        let total = 0;
+        let hasMore = true;
+        while (items.length < pageSize && hasMore) {
+          const page = await fetchCollectionItems(collection.id, {
+            workspaceId: activeWorkspaceId,
+            offset: nextOffset,
+            limit: Math.min(MAX_COLLECTION_API_PAGE_SIZE, pageSize - items.length),
+            signal: abort.signal,
+          });
+          items.push(...page.items);
+          total = page.total;
+          hasMore = page.hasMore;
+          nextOffset += page.items.length;
+          if (page.items.length === 0) break;
+        }
         if (abort.signal.aborted) return;
         setRemote((current) => {
           const scores: Record<string, number> = {
             ...(append && current.key === collectionKey ? current.scores : null),
           };
           let hasScores = Object.keys(scores).length > 0;
-          for (const item of page.items) {
+          for (const item of items) {
             if (item.score !== null) {
               scores[item.sample.id] = item.score;
               hasScores = true;
@@ -677,10 +977,10 @@ export function useSamples(
             append && current.key === collectionKey ? current.samples : [];
           return {
             key: collectionKey,
-            samples: [...previous, ...page.items.map((item) => item.sample)],
+            samples: [...previous, ...items.map((item) => item.sample)],
             scores: hasScores ? scores : null,
-            total: page.total,
-            hasMore: page.hasMore,
+            total,
+            hasMore,
           };
         });
       } catch (error) {
@@ -752,6 +1052,45 @@ export function useSamples(
   ]);
 }
 
+/** Load one sample by id through the same live/static data contract. */
+export function useSample(sampleId?: string | null) {
+  const activeWorkspaceId = useStore((state) => state.activeWorkspaceId);
+  const [sample, setSample] = React.useState<Sample | null>(null);
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    if (!sampleId) {
+      setSample(null);
+      setLoading(false);
+      setError(null);
+      return () => { cancelled = true; };
+    }
+    // A sample belongs to the requested id, so never expose the previous
+    // request's value while the next one is loading. Panels commonly switch
+    // an anchor and its surrounding copy in the same render; retaining the
+    // old sample here produces a briefly incorrect (and sometimes captured)
+    // pairing rather than a neutral loading state.
+    setSample(null);
+    setLoading(true);
+    setError(null);
+    void fetchSamplesBatch([sampleId], {
+      includeThumbnails: true,
+      workspaceId: activeWorkspaceId,
+    }).then(([result]) => {
+      if (!cancelled) setSample(result ?? null);
+    }).catch((reason) => {
+      if (!cancelled) setError(reason instanceof Error ? reason.message : "Failed to load sample");
+    }).finally(() => {
+      if (!cancelled) setLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [activeWorkspaceId, sampleId]);
+
+  return useMemo(() => ({ sample, loading, error }), [error, loading, sample]);
+}
+
 export function useHostAdapter() {
   const dockview = useDockviewContext();
   const activeWorkspaceId = useStore((state) => state.activeWorkspaceId);
@@ -810,14 +1149,22 @@ export interface HyperViewPanelSdkGlobal {
     useQuery: typeof useQuery;
     usePanelState: typeof usePanelState;
     useSelection: typeof useSelection;
+    useSampleResults: typeof useSampleResults;
     useActiveLayout: typeof useActiveLayout;
     usePanelInteractions: typeof usePanelInteractions;
+    usePanelActions: typeof usePanelActions;
     useCollection: typeof useCollection;
     useSamples: typeof useSamples;
+    useSample: typeof useSample;
+    useSimilarSamples: typeof useSimilarSamples;
     useDatasetInfo: typeof useDatasetInfo;
     useTool: typeof useTool;
     listTools: typeof listRuntimeTools;
     useHostAdapter: typeof useHostAdapter;
+    useSupportsLassoSelection: typeof useSupportsLassoSelection;
+    useSupportsSampleSimilarity: typeof useSupportsSampleSimilarity;
+    useSupportsTextSearch: typeof useSupportsTextSearch;
+    useSupportsTools: typeof useSupportsTools;
   };
   createClient: typeof createHyperViewPanelClient;
 }
@@ -839,14 +1186,22 @@ export function installHyperViewPanelSdkGlobal() {
       useQuery,
       usePanelState,
       useSelection,
+      useSampleResults,
       useActiveLayout,
       usePanelInteractions,
+      usePanelActions,
       useCollection,
       useSamples,
+      useSample,
+      useSimilarSamples,
       useDatasetInfo,
       useTool,
       listTools: listRuntimeTools,
       useHostAdapter,
+      useSupportsLassoSelection,
+      useSupportsSampleSimilarity,
+      useSupportsTextSearch,
+      useSupportsTools,
     },
     createClient: createHyperViewPanelClient,
   };

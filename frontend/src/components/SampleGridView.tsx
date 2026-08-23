@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import justifiedLayout from "justified-layout";
+import { useShallow } from "zustand/react/shallow";
 
 import { formatDistanceValue, getDistanceMetricLabel } from "@/lib/similarity";
 import { cn } from "@/lib/utils";
@@ -19,9 +20,11 @@ interface SampleGridViewProps {
   scrollResetKey?: string;
   className?: string;
   showRankSimilarityBadge?: boolean;
+  showDistanceInRankBadge?: boolean;
   distanceMetric?: string | null;
   controlledSelectedIds?: ReadonlySet<string>;
   onSelectionChange?: (ids: string[]) => void;
+  onInspect?: (sample: Sample) => void;
   gridSize?: "small" | "medium" | "large";
 }
 
@@ -117,9 +120,11 @@ export function SampleGridView({
   scrollResetKey,
   className,
   showRankSimilarityBadge = false,
+  showDistanceInRankBadge = true,
   distanceMetric = null,
   controlledSelectedIds,
   onSelectionChange,
+  onInspect,
   gridSize,
 }: SampleGridViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -134,7 +139,18 @@ export function SampleGridView({
     setHoveredId,
     hoveredId,
     sampleGridSize: storeSampleGridSize,
-  } = useStore();
+  } = useStore(
+    useShallow((state) => ({
+      selectedIds: state.selectedIds,
+      isLassoSelection: state.isLassoSelection,
+      selectionSource: state.selectionSource,
+      toggleSelection: state.toggleSelection,
+      addToSelection: state.addToSelection,
+      setHoveredId: state.setHoveredId,
+      hoveredId: state.hoveredId,
+      sampleGridSize: state.sampleGridSize,
+    }))
+  );
 
   const selectedIds = controlledSelectedIds ?? storeSelectedIds;
   const sampleGridSize = gridSize ?? storeSampleGridSize;
@@ -205,13 +221,8 @@ export function SampleGridView({
     if (isLassoSelection) return;
     if (selectionSource !== "scatter") return;
     if (selectedIds.size === 0) return;
-
-    try {
-      virtualizer.scrollToIndex(0, { align: "start" });
-    } catch {
-      containerRef.current?.scrollTo({ top: 0 });
-    }
-  }, [isLassoSelection, selectedIds, selectionSource, virtualizer]);
+    containerRef.current?.scrollTo({ top: 0 });
+  }, [isLassoSelection, selectedIds, selectionSource]);
 
   const handleClick = useCallback(
     (sample: Sample, event: React.MouseEvent) => {
@@ -305,18 +316,29 @@ export function SampleGridView({
                   const preciseDistanceLabel =
                     typeof distance === "number" ? formatDistanceValue(distance, 6) : null;
                   const distanceMetricLabel = getDistanceMetricLabel(distanceMetric) ?? "distance";
-                  const metricBadge =
-                    showRankSimilarityBadge && distanceLabel !== null
+                  const metricBadge = showRankSimilarityBadge
+                    ? showDistanceInRankBadge && distanceLabel !== null
                       ? `#${sampleIndex + 1} · d ${distanceLabel}`
-                      : null;
-                  const metricBadgeTitle =
-                    showRankSimilarityBadge && preciseDistanceLabel !== null
+                      : `#${sampleIndex + 1}`
+                    : null;
+                  const metricBadgeTitle = showRankSimilarityBadge
+                    ? showDistanceInRankBadge && preciseDistanceLabel !== null
                       ? `Rank ${sampleIndex + 1}, ${distanceMetricLabel} ${preciseDistanceLabel}. Lower is closer.`
-                      : undefined;
+                      : `Prepared result rank ${sampleIndex + 1}.`
+                    : undefined;
 
                   return (
-                    <div
+                    <button
                       key={sample.id}
+                      type="button"
+                      aria-label={`Select ${sample.filename || sample.id}`}
+                      aria-pressed={isSelected}
+                      onClick={(event) => handleClick(sample, event)}
+                      onDoubleClick={() => onInspect?.(sample)}
+                      onMouseEnter={() => setHoveredId(sample.id)}
+                      onMouseLeave={() => setHoveredId(null)}
+                      className="border-0 bg-transparent p-0 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                      title={onInspect ? "Double-click to inspect full resolution" : undefined}
                       style={{
                         position: "absolute",
                         left: box.left,
@@ -332,11 +354,8 @@ export function SampleGridView({
                         metricBadge={metricBadge}
                         metricBadgeTitle={metricBadgeTitle}
                         className="h-full w-full cursor-pointer transition-shadow duration-150 ease-out"
-                        onClick={(event) => handleClick(sample, event)}
-                        onMouseEnter={() => setHoveredId(sample.id)}
-                        onMouseLeave={() => setHoveredId(null)}
                       />
-                    </div>
+                    </button>
                   );
                 })}
               </div>

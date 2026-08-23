@@ -9,8 +9,6 @@ import {
 } from "react";
 import type { DockviewApi, EdgeGroupPosition } from "dockview-react";
 
-import type { SamplesViewModel } from "@/lib/sampleCollections";
-
 const EMPTY_PANEL_SIGNATURE = "";
 const PANEL_SIGNATURE_SEPARATOR = "\u0000";
 const EMPTY_EDGE_SIGNATURE = "";
@@ -50,7 +48,6 @@ export interface DockviewContextValue {
   setApi: (api: DockviewApi) => void;
   edgeStateRevision: number;
   notifyEdgeStateChange: () => void;
-  samplesView: SamplesViewModel;
 }
 
 export const DockviewContext = createContext<DockviewContextValue | null>(null);

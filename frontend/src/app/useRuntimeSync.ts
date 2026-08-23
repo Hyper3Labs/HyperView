@@ -8,7 +8,7 @@ import type { RuntimeSnapshot } from "@/types";
 
 export function useRuntimeSync(
   onRuntimeRefresh?: (snapshot: RuntimeSnapshot) => Promise<void> | void
-): { runtimeResetKey: string; runtimeReady: boolean } {
+): { runtimeResetKey: string; runtimeReady: boolean; runtimeVersion: number } {
   const applyRuntimeSnapshot = useStore((state) => state.applyRuntimeSnapshot);
   const activeWorkspaceId = useStore((state) => state.activeWorkspaceId);
   const runtimeDatasetName = useStore((state) => state.runtimeDatasetName);
@@ -16,6 +16,7 @@ export function useRuntimeSync(
   const lastAppliedRuntimeIdRef = useRef<string | null>(null);
   const lastAppliedVersionRef = useRef(-1);
   const [runtimeReady, setRuntimeReady] = useState(false);
+  const [runtimeVersion, setRuntimeVersion] = useState(-1);
 
   useEffect(() => {
     refreshRef.current = onRuntimeRefresh;
@@ -36,6 +37,7 @@ export function useRuntimeSync(
 
       lastAppliedVersionRef.current = snapshot.version;
       applyRuntimeSnapshot(snapshot);
+      setRuntimeVersion(snapshot.version);
       setRuntimeReady(true);
       if (refreshRef.current) {
         await refreshRef.current(snapshot);
@@ -82,5 +84,6 @@ export function useRuntimeSync(
   return {
     runtimeResetKey: `${activeWorkspaceId ?? "none"}:${runtimeDatasetName ?? "none"}`,
     runtimeReady,
+    runtimeVersion,
   };
 }

@@ -2,7 +2,7 @@
 
 import { useStore } from "@/store/useStore";
 import { Button } from "@/components/ui/button";
-import { CENTER_PANEL_DEFS } from "@/panels/registry";
+import { getPanelIcon } from "@/panels/registry";
 import { HyperViewLogo } from "./icons";
 import { FaDiscord } from "react-icons/fa";
 import { useDockviewApi } from "./DockviewWorkspace";
@@ -45,6 +45,7 @@ import {
   Github,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { isStaticBundle, setActiveWorkspace } from "@/lib/api";
 import { isLabelColorMapId } from "@/lib/labelColors";
@@ -63,13 +64,28 @@ export function Header() {
     activeWorkspaceId,
     panelDefinitions,
     workspaces,
-  } = useStore();
+  } = useStore(
+    useShallow((state) => ({
+      datasetInfo: state.datasetInfo,
+      activeWorkspaceId: state.activeWorkspaceId,
+      panelDefinitions: state.panelDefinitions,
+      workspaces: state.workspaces,
+    }))
+  );
   const applyRuntimeSnapshot = useStore((state) => state.applyRuntimeSnapshot);
   const dockview = useDockviewApi();
   const panelConfig = useMemo(() => {
-    if (panelDefinitions.length === 0) return CENTER_PANEL_DEFS;
-    const runtimePanelTypes = new Set(panelDefinitions.map((definition) => definition.panel_type));
-    return CENTER_PANEL_DEFS.filter((panel) => runtimePanelTypes.has(panel.panelType));
+    return panelDefinitions.flatMap((definition) => {
+      const layout = definition.default_layout;
+      if (layout.position !== "center") return [];
+      const declaredId = layout.id;
+      const id = typeof declaredId === "string" && declaredId ? declaredId : definition.panel_type;
+      return [{
+        id,
+        label: definition.label,
+        icon: getPanelIcon(definition.icon, definition.panel_type),
+      }];
+    });
   }, [panelDefinitions]);
   const viewMenuPanelIds = useMemo(
     () => panelConfig.map((panel) => panel.id),
@@ -78,9 +94,11 @@ export function Header() {
   const openPanels = useDockviewOpenPanelIds(viewMenuPanelIds);
   const openEdgeZones = useDockviewOpenEdgeZones(EDGE_ZONE_IDS);
   const [datasetPickerOpen, setDatasetPickerOpen] = useState(false);
-  const [readOnlyNotice, setReadOnlyNotice] = useState<string | null>(() =>
-    isStaticBundle() ? "Read-only demo — pip install hyperview for the full workbench" : null
-  );
+  // `window.__HYPERVIEW_STATIC__` is injected by an exported bundle after the
+  // server-rendered shell is produced. Keep the first client render identical
+  // to SSR, then switch the header to its Shared Space identity after mount.
+  const [staticBundle, setStaticBundle] = useState(false);
+  const [readOnlyNotice, setReadOnlyNotice] = useState<string | null>(null);
   const labelColorMapId = useColorSettings((state) => state.labelColorMapId);
   const setLabelColorMapId = useColorSettings((state) => state.setLabelColorMapId);
   const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null;
@@ -101,11 +119,15 @@ export function Header() {
   };
 
   useEffect(() => {
+    if (isStaticBundle()) {
+      setStaticBundle(true);
+      setReadOnlyNotice("Shared Space");
+    }
     const handleNotice = (event: Event) => {
       const message =
         event instanceof CustomEvent && typeof event.detail?.message === "string"
           ? event.detail.message
-          : "Read-only demo — pip install hyperview for the full workbench";
+          : "Shared Space";
       setReadOnlyNotice(message);
     };
     window.addEventListener("hyperview-readonly-notice", handleNotice);
@@ -170,8 +192,18 @@ export function Header() {
           )}
         </div>
 
-        {/* Center: Dataset picker (VS Code style command palette trigger) */}
-        <div className="flex-1 flex justify-center px-4">
+        {/* Center: live workspace picker or static dataset identity */}
+        <div className="flex min-w-0 flex-1 justify-center px-1 sm:px-4">
+          {staticBundle ? (
+            <div
+              className="flex h-6 min-w-0 w-full max-w-[600px] items-center justify-center rounded-md border border-border/50 bg-muted/40 px-3 text-[12px] leading-[16px] tracking-[-0.15px] text-foreground/70"
+              title={datasetInfo?.name ?? activeWorkspace?.dataset_name ?? activeWorkspaceId ?? "Shared Space"}
+            >
+              <span className="truncate">
+                {datasetInfo?.name ?? activeWorkspace?.dataset_name ?? activeWorkspaceId ?? "Shared Space"}
+              </span>
+            </div>
+          ) : (
           <Popover open={datasetPickerOpen} onOpenChange={setDatasetPickerOpen}>
             <PopoverTrigger asChild>
               <Button
@@ -179,12 +211,11 @@ export function Header() {
                 size="sm"
                 role="combobox"
                 aria-expanded={datasetPickerOpen}
-                className="h-6 w-[600px] max-w-[60vw] px-3 text-[12px] leading-[16px] tracking-[-0.15px] text-muted-foreground hover:text-foreground bg-muted/40 hover:bg-muted/60 border border-border/50 rounded-md justify-start gap-2"
+                className="h-6 min-w-0 w-full max-w-[600px] px-3 text-[12px] leading-[16px] tracking-[-0.15px] text-muted-foreground hover:text-foreground bg-muted/40 hover:bg-muted/60 border border-border/50 rounded-md justify-start gap-2"
               >
                 <Search className="h-3 w-3 flex-shrink-0 opacity-50" />
                 <span className="truncate flex-1 text-center text-foreground/70">
-                  {activeWorkspaceId ? `${activeWorkspaceId} / ` : ""}
-                  {datasetInfo?.name ?? activeWorkspace?.dataset_name ?? "No dataset loaded"}
+                  {datasetInfo?.name ?? activeWorkspace?.dataset_name ?? activeWorkspaceId ?? "No dataset loaded"}
                 </span>
               </Button>
             </PopoverTrigger>
@@ -225,14 +256,18 @@ export function Header() {
               </Command>
             </PopoverContent>
           </Popover>
+          )}
         </div>
 
         {/* Right side: GitHub + Discord + Panel toggles + Settings */}
         <div className="flex items-center gap-0.5">
           {readOnlyNotice && (
-            <div className="hidden lg:flex h-5 items-center rounded-sm border border-amber-500/40 bg-amber-500/10 px-2 text-[11px] leading-none text-amber-200">
+            <span
+              className="hidden h-5 items-center px-1.5 text-[10px] font-medium leading-none text-muted-foreground/70 lg:flex"
+              title="This Shared Space is an interactive, read-only snapshot"
+            >
               {readOnlyNotice}
-            </div>
+            </span>
           )}
 
           {/* GitHub link */}
@@ -258,7 +293,7 @@ export function Header() {
           </a>
 
           {/* Separator */}
-          <div className="w-px h-3 bg-border mx-1" />
+          <div className="hidden w-px h-3 bg-border mx-1 md:block" />
 
           {/* Left panel toggle */}
           <Button
@@ -268,7 +303,7 @@ export function Header() {
             title="Toggle labels panel"
             onClick={() => dockview?.toggleZone("left")}
             className={cn(
-                "h-6 w-6 p-0",
+                "hidden h-6 w-6 p-0 md:inline-flex",
                 openEdgeZones.has("left")
                   ? "text-foreground bg-muted/50"
                   : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
@@ -285,7 +320,7 @@ export function Header() {
             title="Toggle bottom panel"
             onClick={() => dockview?.toggleZone("bottom")}
             className={cn(
-                "h-6 w-6 p-0",
+                "hidden h-6 w-6 p-0 md:inline-flex",
                 openEdgeZones.has("bottom")
                   ? "text-foreground bg-muted/50"
                   : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
@@ -302,7 +337,7 @@ export function Header() {
             title="Toggle right panel"
             onClick={() => dockview?.toggleZone("right")}
             className={cn(
-                "h-6 w-6 p-0",
+                "hidden h-6 w-6 p-0 md:inline-flex",
                 openEdgeZones.has("right")
                   ? "text-foreground bg-muted/50"
                   : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
@@ -312,7 +347,7 @@ export function Header() {
           </Button>
 
           {/* Separator */}
-          <div className="w-px h-3 bg-border mx-1" />
+          <div className="hidden w-px h-3 bg-border mx-1 md:block" />
 
           {/* Settings menu */}
           <DropdownMenu>

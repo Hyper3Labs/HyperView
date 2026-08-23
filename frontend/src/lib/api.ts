@@ -13,7 +13,7 @@ import type {
 const API_BASE =
   process.env.NEXT_PUBLIC_HYPERVIEW_API_BASE ?? "";
 const MISSING_LABEL_SENTINEL = "undefined";
-const READ_ONLY_DEMO_NOTICE = "Read-only demo — pip install hyperview for the full workbench";
+const READ_ONLY_DEMO_NOTICE = "Shared Space";
 const RUNTIME_CLIENT_ID = `hv-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`;
 const SAMPLE_BATCH_SIZE = 1000;
 const SESSION_TOKEN_STORAGE_KEY = "hyperview.session-token";
@@ -24,6 +24,7 @@ let sessionToken: string | null = null;
 declare global {
   interface Window {
     __HYPERVIEW_STATIC__?: boolean;
+    __HYPERVIEW_MOUNT_PATH__?: string;
   }
 }
 
@@ -105,11 +106,32 @@ export function showReadOnlyNotice(): void {
 
 function staticAssetUrl(path: string): string {
   const normalized = path.replace(/^\/+/, "");
+  const configuredMount = window.__HYPERVIEW_MOUNT_PATH__;
+  if (configuredMount) {
+    const mount = configuredMount === "/" ? "" : configuredMount.replace(/\/+$/, "");
+    return new URL(`${mount}/${normalized}`, window.location.origin).toString();
+  }
   return new URL(normalized, window.location.href).toString();
 }
 
+function resolveStaticSampleUrls(sample: Sample): Sample {
+  if (!isStaticBundle()) return sample;
+  return {
+    ...sample,
+    thumbnail: backendUrl(sample.thumbnail),
+    media_url: backendUrl(sample.media_url),
+    thumbnail_url: backendUrl(sample.thumbnail_url),
+  };
+}
+
 async function fetchStaticJson<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(staticAssetUrl(path), signal ? { signal } : undefined);
+  // Exported workspace state keeps stable filenames across deployments. Ask
+  // browsers/CDNs to revalidate JSON so a newly published Shared Space cannot
+  // combine a fresh hashed frontend with stale runtime or collection state.
+  const res = await fetch(staticAssetUrl(path), {
+    cache: "no-cache",
+    ...(signal ? { signal } : {}),
+  });
   if (!res.ok) {
     await throwApiError(res, `Failed to fetch static asset ${path}`);
   }
@@ -198,6 +220,27 @@ export interface ControlCommandResult {
     code: string;
     message: string;
   };
+}
+
+export interface StaticBundleManifest {
+  schema_version: number;
+  kind: "hyperview-static-space" | string;
+  static: boolean;
+  capabilities: {
+    sample_similarity?: boolean;
+    [key: string]: unknown;
+  };
+}
+
+let staticBundleManifestPromise: Promise<StaticBundleManifest> | null = null;
+
+/** Read deployment capabilities declared by a Shared Space export. */
+export function fetchStaticBundleManifest(): Promise<StaticBundleManifest | null> {
+  if (!isStaticBundle()) return Promise.resolve(null);
+  staticBundleManifestPromise ??= fetchStaticJson<StaticBundleManifest>(
+    "hyperview-static.json"
+  );
+  return staticBundleManifestPromise;
 }
 
 export interface ToolMetadata {
@@ -319,6 +362,7 @@ export async function fetchDataset(signal?: AbortSignal): Promise<DatasetInfo> {
 
 export async function fetchRuntimeState(workspaceId?: string | null): Promise<RuntimeSnapshot> {
   if (isStaticBundle()) {
+    if (staticRuntimeSnapshot) return staticRuntimeSnapshot;
     const snapshot = await fetchStaticJson<RuntimeSnapshot>("api/runtime.json");
     staticRuntimeSnapshot = snapshot;
     return snapshot;
@@ -358,17 +402,14 @@ export async function setActiveWorkspace(workspaceId: string): Promise<RuntimeSn
     showReadOnlyNotice();
     return fetchRuntimeState(workspaceId);
   }
-  const res = await apiRequest(apiUrl("/control/workspaces/set-active"), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ workspace_id: workspaceId }),
+  const payload = await runControlCommand({
+    command: "workspace.activate",
+    target: { workspace_id: workspaceId },
   });
-  if (!res.ok) {
-    await throwApiError(res, "Failed to set active workspace");
-  }
-  return fetchRuntimeState();
+  return runtimeSnapshotFromCommandResult(
+    payload,
+    "Workspace activation command did not return a runtime snapshot"
+  );
 }
 
 export async function addRuntimePanel(args: {
@@ -574,7 +615,10 @@ export async function fetchCollectionItems(
       limit,
       total: payload.total,
       hasMore: offset + limit < payload.total,
-      items: rows.map((row) => ({ sample: row.sample, score: row.score ?? null })),
+      items: rows.map((row) => ({
+        sample: resolveStaticSampleUrls(row.sample),
+        score: row.score ?? null,
+      })),
     };
   }
 
@@ -703,24 +747,22 @@ export async function setLayoutView(args: {
   workspaceId: string;
   layoutKey: string;
   camera3d?: OrbitView3DRequest | null;
-}): Promise<void> {
+}): Promise<RuntimeSnapshot | null> {
   if (isStaticBundle()) {
-    return;
+    return null;
   }
-  const res = await apiRequest(apiUrl("/control/ui/layout-view"), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      workspace_id: args.workspaceId,
+  const payload = await runControlCommand({
+    command: "workspace.layout-view.set",
+    target: { workspace_id: args.workspaceId },
+    args: {
       layout_key: args.layoutKey,
       camera_3d: args.camera3d ?? null,
-    }),
+    },
   });
-  if (!res.ok) {
-    await throwApiError(res, "Failed to persist layout view");
-  }
+  return runtimeSnapshotFromCommandResult(
+    payload,
+    "Layout view command did not return a runtime snapshot"
+  );
 }
 
 export async function fetchLassoSelection(args: {
@@ -839,7 +881,10 @@ function normalizedStaticSampleShards(index: StaticSamplesIndex): StaticSampleSh
 function getStaticSampleShard(path: string): Promise<SamplesResponse> {
   let pending = staticSampleShardPromises.get(path);
   if (!pending) {
-    pending = fetchStaticJson<SamplesResponse>(`api/samples/${path}`);
+    pending = fetchStaticJson<SamplesResponse>(`api/samples/${path}`).then((payload) => ({
+      ...payload,
+      samples: payload.samples.map(resolveStaticSampleUrls),
+    }));
     staticSampleShardPromises.set(path, pending);
   }
   return pending;
@@ -920,11 +965,21 @@ async function fetchStaticSamplesByIds(sampleIds: string[]): Promise<Sample[]> {
 async function getStaticEphemeralCollection(
   collectionId: string
 ): Promise<RuntimeCollection | null> {
-  if (!collectionId.startsWith("static-filter-")) return null;
+  if (
+    !collectionId.startsWith("static-filter-") &&
+    !collectionId.startsWith("static-selection-") &&
+    !collectionId.startsWith("static-neighbors-")
+  ) {
+    return null;
+  }
   const snapshot = await getStaticSnapshot();
   return (
     snapshot.workspace.collections.find(
-      (collection) => collection.id === collectionId && collection.kind === "filter"
+      (collection) =>
+        collection.id === collectionId &&
+        (collection.kind === "filter" ||
+          collection.kind === "selection" ||
+          collection.kind === "neighbors")
     ) ?? null
   );
 }
@@ -953,6 +1008,64 @@ async function fetchStaticEphemeralCollectionItems(
   signal?: AbortSignal
 ): Promise<CollectionItemsPage> {
   signal?.throwIfAborted();
+  if (collection.kind === "neighbors") {
+    const anchor = collection.query.anchor;
+    const anchorId =
+      typeof anchor === "string"
+        ? anchor
+        : anchor && typeof anchor === "object" && !Array.isArray(anchor)
+          ? String(
+              (anchor as Record<string, unknown>).entityId ??
+                (anchor as Record<string, unknown>).entity_id ??
+                ""
+            )
+          : "";
+    if (!anchorId) {
+      throw new ApiError(`Neighbor collection ${collection.id} has no anchor`, 400, null);
+    }
+    const requestedK =
+      typeof collection.query.k === "number" ? Math.max(1, Math.floor(collection.query.k)) : 10;
+    const rawSpaceKey = collection.query.spaceKey ?? collection.query.space_key;
+    const rawIndexId = collection.query.indexId ?? collection.query.index_id;
+    const spaceKey =
+      typeof rawSpaceKey === "string"
+        ? rawSpaceKey
+        : typeof rawIndexId === "string" && rawIndexId.startsWith("space:")
+          ? rawIndexId.slice(6)
+          : undefined;
+    const rawLayoutKey = collection.query.layoutId ?? collection.query.layout_id;
+    const response = await fetchStaticSimilarSamples(anchorId, {
+      k: requestedK,
+      spaceKey,
+      layoutKey: typeof rawLayoutKey === "string" ? rawLayoutKey : undefined,
+      signal,
+    });
+    const rows = response.results.slice(offset, offset + limit);
+    return {
+      collectionId: collection.id,
+      offset,
+      limit,
+      total: response.results.length,
+      hasMore: offset + limit < response.results.length,
+      items: rows.map((sample) => ({ sample, score: sample.distance })),
+    };
+  }
+  if (collection.kind === "selection") {
+    const ids = Array.isArray(collection.query.ids)
+      ? collection.query.ids.map((sampleId) => String(sampleId))
+      : [];
+    const pageIds = ids.slice(offset, offset + limit);
+    const samples = await fetchStaticSamplesByIds(pageIds);
+    signal?.throwIfAborted();
+    return {
+      collectionId: collection.id,
+      offset,
+      limit,
+      total: ids.length,
+      hasMore: offset + limit < ids.length,
+      items: samples.map((sample) => ({ sample, score: null })),
+    };
+  }
   const index = await getStaticSamplesIndex();
   const shards = normalizedStaticSampleShards(index);
   const loaded = await Promise.all(shards.map((shard) => getStaticSampleShard(shard.path)));
@@ -1078,7 +1191,8 @@ async function getStaticSnapshot(): Promise<RuntimeSnapshot> {
 function updateStaticSamplesPanelState(
   snapshot: RuntimeSnapshot,
   state: Record<string, unknown>,
-  collections: RuntimeCollection[]
+  collections: RuntimeCollection[],
+  selectedIds: string[]
 ): RuntimeSnapshot {
   const current = snapshot.workspace.ui.panels?.samples ?? { state: {}, state_revision: 0 };
   return {
@@ -1089,7 +1203,7 @@ function updateStaticSamplesPanelState(
       collections,
       ui: {
         ...snapshot.workspace.ui,
-        selected_ids: [],
+        selected_ids: selectedIds,
         panels: {
           ...snapshot.workspace.ui.panels,
           samples: {
@@ -1111,7 +1225,8 @@ function runStaticLabelFilterCommand(
   );
   const clear = args.clear === true;
   let collection: RuntimeCollection | null = null;
-  let state: Record<string, unknown> = {};
+  const currentState = snapshot.workspace.ui.panels?.samples?.state ?? {};
+  let state: Record<string, unknown> = { ...currentState };
   if (!clear) {
     const field = typeof args.field === "string" ? args.field : "label";
     const value = typeof args.value === "string" ? args.value : null;
@@ -1129,13 +1244,26 @@ function runStaticLabelFilterCommand(
       created_at: Math.floor(Date.now() / 1000),
     };
     state = {
+      ...currentState,
       mode: "collection",
+      retrieval: null,
       collection_id: collectionId,
       collection,
+      focus_request: null,
     };
     retainedCollections.push(collection);
+  } else {
+    const allCollection = retainedCollections.find((item) => item.kind === "all") ?? null;
+    state = {
+      ...currentState,
+      mode: "collection",
+      retrieval: null,
+      collection_id: allCollection?.id ?? null,
+      collection: allCollection,
+      focus_request: null,
+    };
   }
-  staticRuntimeSnapshot = updateStaticSamplesPanelState(snapshot, state, retainedCollections);
+  staticRuntimeSnapshot = updateStaticSamplesPanelState(snapshot, state, retainedCollections, []);
   return {
     ok: true,
     command: "collection.filter.set",
@@ -1149,14 +1277,310 @@ function runStaticLabelFilterCommand(
   };
 }
 
-async function runStaticControlCommand(args: {
+let staticSelectionCounter = 0;
+
+async function runStaticSimilarityAnchorCommand(
+  snapshot: RuntimeSnapshot,
+  args: Record<string, unknown>
+): Promise<ControlCommandResult> {
+  const sampleId = typeof args.sample_id === "string" ? args.sample_id.trim() : "";
+  if (!sampleId) {
+    return {
+      ok: false,
+      command: "panel.samples.retrieval.set-anchor",
+      snapshot,
+      workspace: snapshot.workspace,
+      revision: snapshot.workspace.ui.view_revision,
+      error: { code: "validation_error", message: "sample_id must be a non-empty string" },
+    };
+  }
+  const requestedK = typeof args.k === "number" ? Math.floor(args.k) : 18;
+  const layoutKey = typeof args.layout_key === "string" ? args.layout_key : undefined;
+  let spaceKey = typeof args.space_key === "string" ? args.space_key : undefined;
+  if (!spaceKey && typeof args.index_id === "string") {
+    spaceKey = args.index_id.startsWith("space:") ? args.index_id.slice(6) : args.index_id;
+  }
+  let response: SimilaritySearchResponse;
+  try {
+    response = await fetchStaticSimilarSamples(sampleId, {
+      k: requestedK,
+      layoutKey,
+      spaceKey,
+      includeThumbnails: false,
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      command: "panel.samples.retrieval.set-anchor",
+      snapshot,
+      workspace: snapshot.workspace,
+      revision: snapshot.workspace.ui.view_revision,
+      error: {
+        code: "not_found",
+        message: error instanceof Error ? error.message : "Similarity data is unavailable",
+      },
+    };
+  }
+  const resolvedSpaceKey = response.space_key ?? spaceKey ?? null;
+  const dataset = await fetchDataset();
+  const resolvedLayoutKey =
+    layoutKey ??
+    dataset.layouts.find((layout) => layout.space_key === resolvedSpaceKey)?.layout_key ??
+    null;
+  const k = Math.max(1, Math.min(requestedK, response.k));
+  const source = typeof args.source === "string" ? args.source : "samples-panel";
+  const collectionId = `static-neighbors-${encodeURIComponent(sampleId)}-${encodeURIComponent(resolvedSpaceKey ?? "default")}`;
+  const collection: RuntimeCollection = {
+    id: collectionId,
+    dataset_id: snapshot.workspace.dataset_name ?? "",
+    entity_set_id: "samples",
+    kind: "neighbors",
+    query: {
+      anchor: {
+        datasetId: snapshot.workspace.dataset_name ?? "",
+        entitySetId: "samples",
+        entityId: sampleId,
+      },
+      indexId: resolvedSpaceKey ? `space:${resolvedSpaceKey}` : null,
+      layoutId: resolvedLayoutKey,
+      spaceKey: resolvedSpaceKey,
+      k,
+      source,
+    },
+    scores: null,
+    created_at: Math.floor(Date.now() / 1000),
+  };
+  const current = snapshot.workspace.ui.panels?.samples ?? { state: {}, state_revision: 0 };
+  const retainedCollections = snapshot.workspace.collections.filter(
+    (entry) => entry.kind !== "neighbors" && entry.kind !== "search"
+  );
+  retainedCollections.push(collection);
+  const state = {
+    ...(current.state ?? {}),
+    mode: "retrieval",
+    retrieval: {
+      anchor_sample_id: sampleId,
+      layout_key: resolvedLayoutKey,
+      index_id: resolvedSpaceKey ? `space:${resolvedSpaceKey}` : null,
+      space_key: resolvedSpaceKey,
+      k,
+      source,
+    },
+    collection_id: collectionId,
+    collection,
+    focus_request: null,
+  };
+  staticRuntimeSnapshot = updateStaticSamplesPanelState(
+    snapshot,
+    state,
+    retainedCollections,
+    []
+  );
+  return {
+    ok: true,
+    command: "panel.samples.retrieval.set-anchor",
+    result: { panel_id: "samples", collection_id: collectionId, collection },
+    snapshot: staticRuntimeSnapshot,
+    workspace: staticRuntimeSnapshot.workspace,
+    revision: staticRuntimeSnapshot.workspace.ui.panels.samples.state_revision,
+  };
+}
+
+function runStaticSelectionCommand(
+  snapshot: RuntimeSnapshot,
+  args: Record<string, unknown>
+): ControlCommandResult {
+  const current = snapshot.workspace.ui.panels?.samples ?? { state: {}, state_revision: 0 };
+  const retainedCollections = snapshot.workspace.collections.filter(
+    // Prepared comparison collections are exported with kind=selection and
+    // may still be referenced by sibling panel props. Only replace the
+    // ephemeral collection created by an earlier static interaction.
+    (collection) => !collection.id.startsWith("static-selection-")
+  );
+  const clear = args.clear === true;
+  const focus = args.focus !== false;
+  const sampleIds = clear
+    ? []
+    : Array.from(
+        new Set(
+          (Array.isArray(args.sample_ids) ? args.sample_ids : [])
+            .map((sampleId) => String(sampleId).trim())
+            .filter(Boolean)
+        )
+      );
+  let collection: RuntimeCollection | null = null;
+  if (!clear) {
+    staticSelectionCounter += 1;
+    const collectionId = `static-selection-${Date.now()}-${staticSelectionCounter}`;
+    collection = {
+      id: collectionId,
+      dataset_id: snapshot.workspace.dataset_name ?? "",
+      entity_set_id: "samples",
+      kind: "selection",
+      query: {
+        ids: sampleIds,
+        source: typeof args.source === "string" ? args.source : "static-panel",
+      },
+      scores: null,
+      created_at: Date.now(),
+    };
+    retainedCollections.push(collection);
+  } else {
+    collection = retainedCollections.find((item) => item.kind === "all") ?? null;
+  }
+  const nextState = {
+    ...(current.state ?? {}),
+    mode: "collection",
+    retrieval: null,
+    collection_id: collection?.id ?? null,
+    collection,
+    focus_request: focus
+      ? {
+          kind: clear ? "all" : "selection",
+          ...(clear ? {} : { collection_id: collection?.id ?? null }),
+          revision: current.state_revision + 1,
+        }
+      : null,
+  };
+  staticRuntimeSnapshot = updateStaticSamplesPanelState(
+    snapshot,
+    nextState,
+    retainedCollections,
+    sampleIds
+  );
+  return {
+    ok: true,
+    command: "collection.selection.set",
+    result: {
+      panel_id: "samples",
+      collection_id: collection?.id ?? null,
+      collection,
+      selected_ids: sampleIds,
+    },
+    snapshot: staticRuntimeSnapshot,
+    workspace: staticRuntimeSnapshot.workspace,
+    revision: staticRuntimeSnapshot.workspace.ui.panels.samples.state_revision,
+  };
+}
+
+function runStaticPanelPropsCommand(
+  snapshot: RuntimeSnapshot,
+  command: "workspace.panel.update" | "workspace.panel.update-props",
+  target: Record<string, unknown>,
+  args: Record<string, unknown>
+): ControlCommandResult | null {
+  const panelId = typeof target.panel_id === "string" ? target.panel_id : null;
+  const props = args.props;
+  if (!panelId || !props || typeof props !== "object" || Array.isArray(props)) return null;
+  const panelIndex = snapshot.workspace.ui.custom_panels.findIndex((panel) => panel.id === panelId);
+  if (panelIndex < 0) return null;
+
+  const customPanels = snapshot.workspace.ui.custom_panels.map((panel, index) =>
+    index === panelIndex ? { ...panel, props: { ...(props as Record<string, unknown>) } } : panel
+  );
+  const nextWorkspace = {
+    ...snapshot.workspace,
+    ui: {
+      ...snapshot.workspace.ui,
+      custom_panels: customPanels,
+      view_revision: (snapshot.workspace.ui.view_revision ?? 0) + 1,
+    },
+  };
+  staticRuntimeSnapshot = {
+    ...snapshot,
+    version: snapshot.version + 1,
+    workspace: nextWorkspace,
+  };
+  return {
+    ok: true,
+    command,
+    result: {
+      panel_id: panelId,
+      props: { ...(props as Record<string, unknown>) },
+    },
+    snapshot: staticRuntimeSnapshot,
+    workspace: nextWorkspace,
+    revision: nextWorkspace.ui.view_revision,
+  };
+}
+
+function runStaticPanelFocusCommand(
+  snapshot: RuntimeSnapshot,
+  target: Record<string, unknown>
+): ControlCommandResult | null {
+  const panelId = typeof target.panel_id === "string" ? target.panel_id : null;
+  if (!panelId) return null;
+  const panelIndex = snapshot.workspace.ui.custom_panels.findIndex((panel) => panel.id === panelId);
+  if (panelIndex < 0) return null;
+
+  const panel = snapshot.workspace.ui.custom_panels[panelIndex];
+  const changed = snapshot.workspace.ui.active_panel_id !== panelId || !panel.visible;
+  const customPanels = panel.visible
+    ? snapshot.workspace.ui.custom_panels
+    : snapshot.workspace.ui.custom_panels.map((entry, index) =>
+        index === panelIndex ? { ...entry, visible: true } : entry
+      );
+  const nextWorkspace = changed
+    ? {
+        ...snapshot.workspace,
+        ui: {
+          ...snapshot.workspace.ui,
+          custom_panels: customPanels,
+          active_panel_id: panelId,
+          view_revision: (snapshot.workspace.ui.view_revision ?? 0) + 1,
+        },
+      }
+    : snapshot.workspace;
+  staticRuntimeSnapshot = changed
+    ? {
+        ...snapshot,
+        version: snapshot.version + 1,
+        workspace: nextWorkspace,
+      }
+    : snapshot;
+  return {
+    ok: true,
+    command: "workspace.panel.focus",
+    result: { panel_id: panelId, active: true, visible: true },
+    snapshot: staticRuntimeSnapshot,
+    workspace: nextWorkspace,
+    revision: nextWorkspace.ui.view_revision,
+  };
+}
+
+async function runStaticControlCommandNow(args: {
   command: string;
   target?: Record<string, unknown>;
   args?: Record<string, unknown>;
 }): Promise<ControlCommandResult> {
   const snapshot = await getStaticSnapshot();
+  if (
+    args.command === "panel.samples.retrieval.set-anchor" ||
+    args.command === "collection.neighbors.create"
+  ) {
+    return runStaticSimilarityAnchorCommand(snapshot, args.args ?? {});
+  }
   if (args.command === "collection.filter.set") {
     return runStaticLabelFilterCommand(snapshot, args.args ?? {});
+  }
+  if (args.command === "collection.selection.set") {
+    return runStaticSelectionCommand(snapshot, args.args ?? {});
+  }
+  if (args.command === "workspace.panel.focus") {
+    const result = runStaticPanelFocusCommand(snapshot, args.target ?? {});
+    if (result) return result;
+  }
+  if (
+    args.command === "workspace.panel.update-props" ||
+    args.command === "workspace.panel.update"
+  ) {
+    const result = runStaticPanelPropsCommand(
+      snapshot,
+      args.command,
+      args.target ?? {},
+      args.args ?? {}
+    );
+    if (result) return result;
   }
   if (args.command === "workspace.panel.state.patch") {
     const panelId = typeof args.target?.panel_id === "string" ? args.target.panel_id : null;
@@ -1203,13 +1627,55 @@ async function runStaticControlCommand(args: {
 
   showReadOnlyNotice();
   return {
-    ok: true,
+    ok: false,
     command: args.command,
-    result: {},
     snapshot,
     workspace: snapshot.workspace,
     revision: snapshot.workspace.ui.view_revision,
+    error: {
+      code: "conflict",
+      message: "This operation requires a Live Space.",
+    },
   };
+}
+
+let staticMutationQueue: Promise<unknown> = Promise.resolve();
+
+function enqueueStaticMutation<T>(operation: () => Promise<T>): Promise<T> {
+  const pending = staticMutationQueue.then(operation, operation);
+  staticMutationQueue = pending.then(
+    () => undefined,
+    () => undefined
+  );
+  return pending;
+}
+
+function runStaticControlCommand(args: {
+  command: string;
+  target?: Record<string, unknown>;
+  args?: Record<string, unknown>;
+}): Promise<ControlCommandResult> {
+  return enqueueStaticMutation(() => runStaticControlCommandNow(args));
+}
+
+export function updateStaticSelection(sampleIds: string[]): Promise<RuntimeSnapshot> {
+  return enqueueStaticMutation(async () => {
+    const snapshot = await getStaticSnapshot();
+    const selectedIds = Array.from(new Set(sampleIds));
+    staticRuntimeSnapshot = {
+      ...snapshot,
+      version: snapshot.version + 1,
+      workspace: {
+        ...snapshot.workspace,
+        ui: {
+          ...snapshot.workspace.ui,
+          selected_ids: selectedIds,
+          view_revision: snapshot.workspace.ui.view_revision + 1,
+        },
+      },
+    };
+    return staticRuntimeSnapshot;
+  });
 }
 
 async function fetchStaticLassoSelection(args: {

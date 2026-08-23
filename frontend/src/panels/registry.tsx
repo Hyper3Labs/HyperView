@@ -1,12 +1,12 @@
 "use client";
 
 import React from "react";
-import type { IDockviewPanelHeaderProps, IDockviewPanelProps } from "dockview-react";
-import { Circle, Grid3X3, Tag } from "lucide-react";
+import type { IDockviewPanelHeaderProps } from "dockview-react";
+import { Circle, Grid3X3, Puzzle, Tag, type LucideIcon } from "lucide-react";
 
 import { ExplorerPanel } from "@/components/ExplorerPanel";
 import { ScatterPanel } from "@/panels/builtins/scatterPanel";
-import { samplesImageGridBuiltInPanel } from "@/panels/builtins/samplesImageGridPanel";
+import { SamplesImageGridPanel } from "@/panels/builtins/samplesImageGridPanel";
 import { createIconTabComponent } from "@/panels/definitions";
 
 export const PANEL = {
@@ -20,22 +20,27 @@ const ExplorerDockPanel = React.memo(function ExplorerDockPanel() {
 });
 
 /** The frontend registry owns implementation lookup only; metadata lives in PanelDefinition. */
-const BUILTIN_PANEL_COMPONENTS = {
-  samples: samplesImageGridBuiltInPanel.Component,
-  scatter: ScatterPanel,
-  explorer: ExplorerDockPanel,
-} satisfies Record<string, React.ComponentType<IDockviewPanelProps<Record<string, unknown>>>>;
+const NATIVE_PANEL_COMPONENTS = {
+  "native:samples": SamplesImageGridPanel,
+  "native:scatter": ScatterPanel,
+  "native:explorer": ExplorerDockPanel,
+} satisfies Record<string, React.ComponentType>;
 
-export function getBuiltInPanelComponent(panelType: string | null | undefined) {
-  if (!panelType) return null;
-  return BUILTIN_PANEL_COMPONENTS[panelType as keyof typeof BUILTIN_PANEL_COMPONENTS] ?? null;
+export function getNativePanelComponent(renderer: string | null | undefined) {
+  if (!renderer) return null;
+  return NATIVE_PANEL_COMPONENTS[renderer as keyof typeof NATIVE_PANEL_COMPONENTS] ?? null;
 }
 
-// Compatibility shape consumed by Header. Presets are intentionally absent: Scatter is one type.
-export const CENTER_PANEL_DEFS = [
-  { id: PANEL.GRID, panelType: "samples", label: "Samples", icon: Grid3X3 },
-  { id: PANEL.SCATTER, panelType: "scatter", label: "Embeddings", icon: Circle },
-] as const;
+const PANEL_ICONS: Record<string, LucideIcon> = {
+  grid: Grid3X3,
+  scatter: Circle,
+  tags: Tag,
+  puzzle: Puzzle,
+};
+
+export function getPanelIcon(icon: string | null, panelType: string): LucideIcon {
+  return PANEL_ICONS[icon ?? ""] ?? PANEL_ICONS[panelType] ?? Puzzle;
+}
 
 export const CENTER_PANEL_TAB_COMPONENTS = {
   samplesTab: createIconTabComponent(Grid3X3),

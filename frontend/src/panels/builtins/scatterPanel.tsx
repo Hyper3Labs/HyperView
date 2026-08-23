@@ -1,12 +1,12 @@
 "use client";
 
 import React from "react";
-import type { IDockviewPanelProps } from "dockview-react";
-import { Settings2 } from "lucide-react";
+import { Focus, Settings2 } from "lucide-react";
 
 import { Panel } from "@/components/Panel";
 import {
   PanelToolbar,
+  PanelToolbarIconButton,
   PanelToolbarMenu,
   type PanelToolbarItem,
   type PanelToolbarOption,
@@ -32,6 +32,7 @@ import {
   usePanelState,
   useQuery,
   useSelection,
+  useSupportsLassoSelection,
 } from "@/panel-sdk";
 import type { Geometry } from "@/types";
 
@@ -83,11 +84,9 @@ function cameraState(value: unknown): Camera3D | null {
     : null;
 }
 
-export const ScatterPanel = React.memo(function ScatterPanel(
-  props: IDockviewPanelProps<ScatterPanelParams>
-) {
-  const params = props.params ?? {};
-  const panelState = usePanelState(params.panelId ?? props.api.id);
+export const ScatterPanel = React.memo(function ScatterPanel() {
+  const panelState = usePanelState();
+  const params = panelState.props as ScatterPanelParams;
   const datasetInfo = useDatasetInfo();
   const layoutsQuery = useQuery("layouts");
   const selection = useSelection();
@@ -96,6 +95,7 @@ export const ScatterPanel = React.memo(function ScatterPanel(
   const commandClient = useCommandClient();
 
   const layoutDimension = params.layoutDimension === 3 ? 3 : 2;
+  const lassoEnabled = useSupportsLassoSelection(layoutDimension);
   const fixedGeometry = isGeometry(params.geometry) ? params.geometry : null;
   const stateGeometry = isGeometry(panelState.state.geometry) ? panelState.state.geometry : null;
   const [localGeometry, setLocalGeometry] = React.useState<Geometry>(
@@ -128,8 +128,14 @@ export const ScatterPanel = React.memo(function ScatterPanel(
     [datasetInfo.dataset?.layouts, layoutsQuery.data]
   );
   const renderableLayouts = React.useMemo(
-    () => layouts.filter((layout) => getLayoutDimension(layout.layout_key) === layoutDimension),
-    [layoutDimension, layouts]
+    () => {
+      const candidates = layouts.filter(
+        (layout) => getLayoutDimension(layout.layout_key) === layoutDimension
+      );
+      if (!params.pinnedLayout || !params.layoutKey) return candidates;
+      return candidates.filter((layout) => layout.layout_key === params.layoutKey);
+    },
+    [layoutDimension, layouts, params.layoutKey, params.pinnedLayout]
   );
   const availableGeometries = React.useMemo(
     () => listAvailableGeometries(renderableLayouts, layoutDimension),
@@ -289,58 +295,10 @@ export const ScatterPanel = React.memo(function ScatterPanel(
         valueClassName: "max-w-[340px]",
         options: modelOptions,
         onValueChange: handleModelChange,
-        disabled: modelOptions.length === 0,
+        disabled: params.pinnedLayout || modelOptions.length === 0,
       },
     ],
-    [handleModelChange, modelOptions, selectedModelLabel, selectedSpaceKey]
-  );
-
-  const toolbarActions = React.useMemo(
-    () => (
-      <PanelToolbarMenu
-        icon={<Settings2 className="h-3.5 w-3.5" />}
-        label="Scatter settings"
-        title={selectedProjectionMethod ? `Projection method: ${selectedProjectionMethod}` : "Scatter settings"}
-        contentClassName="min-w-[220px]"
-      >
-        <DropdownMenuLabel>Projection method</DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        {projectionMethodOptions.length > 0 ? (
-          <DropdownMenuRadioGroup value={selectedProjectionMethod} onValueChange={handleProjectionMethodChange}>
-            {projectionMethodOptions.map((method) => (
-              <DropdownMenuRadioItem key={method} value={method}>
-                <span className="truncate">{method}</span>
-              </DropdownMenuRadioItem>
-            ))}
-          </DropdownMenuRadioGroup>
-        ) : (
-          <div className="px-2 py-1.5 text-[12px] leading-[16px] text-muted-foreground">
-            No projection methods available
-          </div>
-        )}
-        {layoutDimension === 2 ? (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuLabel>Topic labels</DropdownMenuLabel>
-            <DropdownMenuRadioGroup
-              value={labelOverlayMode}
-              onValueChange={(value) => {
-                if (!isLabelOverlayMode(value)) return;
-                setLabelOverlayMode(value);
-                interaction.setScatterLabelOverlayMode(value);
-                patchRuntimePanelState({ label_overlay_mode: value });
-              }}
-            >
-              <DropdownMenuRadioItem value="off"><span className="truncate">Hidden</span></DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="auto"><span className="truncate">Auto</span></DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="coarse"><span className="truncate">Coarse</span></DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="fine"><span className="truncate">Fine</span></DropdownMenuRadioItem>
-            </DropdownMenuRadioGroup>
-          </>
-        ) : null}
-      </PanelToolbarMenu>
-    ),
-    [handleProjectionMethodChange, interaction, labelOverlayMode, layoutDimension, patchRuntimePanelState, projectionMethodOptions, selectedProjectionMethod]
+    [handleModelChange, modelOptions, params.pinnedLayout, selectedModelLabel, selectedSpaceKey]
   );
 
   const selectedIds = React.useMemo(() => new Set(selection.selectedIds), [selection.selectedIds]);
@@ -397,6 +355,8 @@ export const ScatterPanel = React.memo(function ScatterPanel(
     initialView3d: savedView3d,
     selectedIds,
     highlightedIds: interaction.highlightedIds,
+    lassoEnabled,
+    focusRequest: interaction.focusRequest,
     hoveredId: interaction.hoveredId,
     onSelectionChange: handleSelectionChange,
     onLassoSelection: handleLassoSelection,
@@ -410,6 +370,78 @@ export const ScatterPanel = React.memo(function ScatterPanel(
       console.error("Failed to activate scatter layout:", error);
     });
   }, [commandClient, params.pinnedLayout, resolvedLayoutKey, workspaceLayout.activeLayoutKey]);
+
+  const { rendererError, resetView } = scatter;
+  const scatterControlsDisabled = !embeddings || !!rendererError;
+
+  const toolbarActions = React.useMemo(
+    () => (
+      <div className="flex items-center gap-0.5">
+        <PanelToolbarIconButton
+          title="Fit / reset view"
+          aria-label="Fit and reset view"
+          disabled={scatterControlsDisabled}
+          onClick={resetView}
+        >
+          <Focus className="h-3.5 w-3.5" />
+        </PanelToolbarIconButton>
+        <div className="mx-0.5 h-4 w-px bg-border" aria-hidden />
+        <PanelToolbarMenu
+          icon={<Settings2 className="h-3.5 w-3.5" />}
+          label="Scatter settings"
+          title={selectedProjectionMethod ? `Projection method: ${selectedProjectionMethod}` : "Scatter settings"}
+          contentClassName="min-w-[220px]"
+        >
+          <DropdownMenuLabel>Projection method</DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          {projectionMethodOptions.length > 0 ? (
+            <DropdownMenuRadioGroup value={selectedProjectionMethod} onValueChange={handleProjectionMethodChange}>
+              {projectionMethodOptions.map((method) => (
+                <DropdownMenuRadioItem key={method} value={method}>
+                  <span className="truncate">{method}</span>
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          ) : (
+            <div className="px-2 py-1.5 text-[12px] leading-[16px] text-muted-foreground">
+              No projection methods available
+            </div>
+          )}
+          {layoutDimension === 2 ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>Topic labels</DropdownMenuLabel>
+              <DropdownMenuRadioGroup
+                value={labelOverlayMode}
+                onValueChange={(value) => {
+                  if (!isLabelOverlayMode(value)) return;
+                  setLabelOverlayMode(value);
+                  interaction.setScatterLabelOverlayMode(value);
+                  patchRuntimePanelState({ label_overlay_mode: value });
+                }}
+              >
+                <DropdownMenuRadioItem value="off"><span className="truncate">Hidden</span></DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="auto"><span className="truncate">Auto</span></DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="coarse"><span className="truncate">Coarse</span></DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="fine"><span className="truncate">Fine</span></DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+            </>
+          ) : null}
+        </PanelToolbarMenu>
+      </div>
+    ),
+    [
+      handleProjectionMethodChange,
+      interaction,
+      labelOverlayMode,
+      layoutDimension,
+      patchRuntimePanelState,
+      projectionMethodOptions,
+      resetView,
+      scatterControlsDisabled,
+      selectedProjectionMethod,
+    ]
+  );
 
   const queryError = layoutsQuery.error ?? embeddingsQuery.error;
   const loadingLabel = queryError
@@ -426,7 +458,12 @@ export const ScatterPanel = React.memo(function ScatterPanel(
           <canvas
             ref={scatter.canvasRef}
             className="absolute inset-0"
-            style={{ zIndex: 1 }}
+            style={{
+              zIndex: 1,
+              cursor: "grab",
+            }}
+            aria-label="Embedding scatter plot. Drag to pan, scroll to zoom, and Shift-drag to lasso select."
+            title="Drag to pan · Scroll to zoom · Shift-drag to select"
             onPointerDown={(event) => {
               focusLayout();
               scatter.handlePointerDown(event);
@@ -441,13 +478,14 @@ export const ScatterPanel = React.memo(function ScatterPanel(
           <canvas
             ref={scatter.overlayCanvasRef}
             className="pointer-events-none absolute inset-0"
-            style={{ zIndex: 20 }}
+            aria-hidden="true"
+            style={{ zIndex: 20, pointerEvents: "none" }}
           />
-          {scatter.rendererError ? (
+          {rendererError ? (
             <div className="absolute inset-0 z-10 flex items-center justify-center bg-card/85 p-6">
               <div className="max-w-md text-center">
                 <div className="mb-2 text-sm font-semibold text-foreground">Browser not supported</div>
-                <div className="text-sm text-muted-foreground">{scatter.rendererError}</div>
+                <div className="text-sm text-muted-foreground">{rendererError}</div>
               </div>
             </div>
           ) : !embeddings ? (

@@ -5,7 +5,7 @@ import type { IDockviewPanelProps } from "dockview-react";
 import { AlertTriangle, Puzzle } from "lucide-react";
 
 import { backendUrl, isStaticBundle } from "@/lib/api";
-import { getBuiltInPanelComponent } from "@/panels/registry";
+import { getNativePanelComponent } from "@/panels/registry";
 import { installHyperViewPanelSdkGlobal } from "@/panel-sdk";
 import { useStore } from "@/store/useStore";
 import type { RuntimePanel, RuntimePanelStateEntry } from "@/types";
@@ -17,6 +17,7 @@ import { PanelInstanceProvider } from "./PanelHostContext";
 interface PanelHostParams extends Record<string, unknown> {
   panelId: string;
   builtinPanelType?: string;
+  renderer?: string;
   definitionProps?: Record<string, unknown>;
   definitionTitle?: string;
 }
@@ -99,14 +100,11 @@ function PanelMessage({
 
 function BuiltInPanelHost({
   panel,
-  props,
 }: {
   panel: RuntimePanel;
-  props: IDockviewPanelProps<PanelHostParams>;
 }) {
-  const builtinPanelType =
-    props.params?.builtinPanelType ?? panel.builtin_panel ?? panel.panel_type;
-  const Component = getBuiltInPanelComponent(builtinPanelType);
+  const renderer = panel.renderer;
+  const Component = getNativePanelComponent(renderer);
 
   if (!Component) {
     return (
@@ -114,19 +112,12 @@ function BuiltInPanelHost({
         title={panel.title}
         icon={<AlertTriangle className="h-3.5 w-3.5" />}
       >
-        Unsupported built-in panel type: {builtinPanelType ?? "unknown"}
+        Unsupported native panel renderer: {renderer ?? "unknown"}
       </PanelMessage>
     );
   }
 
-  const nextParams = {
-    ...(panel.props ?? {}),
-    ...(props.params ?? {}),
-    panelId: panel.id,
-    builtinPanelType,
-  };
-
-  return <Component {...props} params={nextParams} />;
+  return <Component />;
 }
 
 function ModulePanelHost({ panel }: { panel: RuntimePanel }) {
@@ -210,9 +201,9 @@ export function PanelHost(props: IDockviewPanelProps<PanelHostParams>) {
   const panelState = useStore((state) => state.panelStates[panelId]);
 
   if (!panel) {
-    const panelType = props.params?.builtinPanelType;
-    const Component = getBuiltInPanelComponent(panelType);
-    if (!Component || !panelType) return <PanelUnavailable />;
+    const renderer = props.params?.renderer;
+    const Component = getNativePanelComponent(renderer);
+    if (!Component || !renderer) return <PanelUnavailable />;
     const panelId = props.params?.panelId ?? props.api.id;
     return (
       <PanelInstanceProvider
@@ -224,15 +215,7 @@ export function PanelHost(props: IDockviewPanelProps<PanelHostParams>) {
           stateRevision: panelState?.state_revision ?? 0,
         }}
       >
-        <Component
-          {...props}
-          params={{
-            ...(props.params?.definitionProps ?? {}),
-            ...(props.params ?? {}),
-            panelId,
-            builtinPanelType: panelType,
-          }}
-        />
+        <Component />
       </PanelInstanceProvider>
     );
   }
@@ -246,7 +229,7 @@ export function PanelHost(props: IDockviewPanelProps<PanelHostParams>) {
       {panel.kind === "module" ? (
         <ModulePanelHost panel={panel} />
       ) : (
-        <BuiltInPanelHost panel={panel} props={props} />
+        <BuiltInPanelHost panel={panel} />
       )}
     </PanelInstanceProvider>
   );

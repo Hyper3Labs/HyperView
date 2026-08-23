@@ -37,11 +37,14 @@ type HyperScatterModule = typeof import("hyper-scatter") & {
   createScatterPlot: (canvas: HTMLCanvasElement, options: Record<string, unknown>) => EnhancedRenderer;
 };
 
+export type ScatterInteractionMode = "pan" | "lasso";
+
 const MAX_LASSO_VERTS = 512;
 const SELECTION_HIGHLIGHT_COLOR = "#f59e0b";
 const SECONDARY_HIGHLIGHT_COLOR = "#94a3b8";
 const LASSO_STROKE_COLOR = "#4f46e5";
 const LASSO_FILL_COLOR = "rgba(79,70,229,0.15)";
+const NO_MODIFIERS: Modifiers = { shift: false, ctrl: false, alt: false, meta: false };
 const INTERACTION_STYLE = {
   selectionColor: SELECTION_HIGHLIGHT_COLOR,
   highlightColor: SECONDARY_HIGHLIGHT_COLOR,
@@ -104,6 +107,8 @@ interface UseHyperScatterArgs {
   } | null;
   selectedIds: Set<string>;
   highlightedIds?: Set<string>;
+  lassoEnabled?: boolean;
+  focusRequest?: { kind: "selection" | "all"; revision: number } | null;
   hoveredId: string | null;
   onSelectionChange: (ids: Set<string>, source?: "scatter" | "grid") => void;
   onLassoSelection: (query: {
@@ -194,6 +199,99 @@ function clearOverlay(canvas: HTMLCanvasElement | null): void {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 }
 
+function finiteCoordinateRows(
+  embeddings: EmbeddingsData,
+  indices?: Iterable<number>
+): number[][] {
+  const source = indices ?? embeddings.coords.keys();
+  const rows: number[][] = [];
+  for (const index of source) {
+    const row = embeddings.coords[index];
+    if (row && row.length >= 2 && row.every((value) => Number.isFinite(value))) rows.push(row);
+  }
+  return rows;
+}
+
+function coordinateBounds(rows: number[][], dimension: 2 | 3) {
+  const min = Array.from({ length: dimension }, () => Number.POSITIVE_INFINITY);
+  const max = Array.from({ length: dimension }, () => Number.NEGATIVE_INFINITY);
+  for (const row of rows) {
+    for (let axis = 0; axis < dimension; axis += 1) {
+      min[axis] = Math.min(min[axis], row[axis]);
+      max[axis] = Math.max(max[axis], row[axis]);
+    }
+  }
+  return {
+    min,
+    max,
+    center: min.map((value, axis) => (value + max[axis]) / 2),
+    span: min.map((value, axis) => Math.max(max[axis] - value, 1e-6)),
+  };
+}
+
+function fitRendererToRows(
+  renderer: EnhancedRenderer,
+  embeddings: EmbeddingsData,
+  rows: number[][],
+  kind: "selection" | "all"
+): void {
+  const dimension = resolveLayoutDimension(embeddings);
+  const allRows = finiteCoordinateRows(embeddings);
+  if (rows.length === 0 || allRows.length === 0) return;
+  const bounds = coordinateBounds(rows, dimension);
+  const allBounds = coordinateBounds(allRows, dimension);
+
+  if (dimension === 3) {
+    const renderer3d = renderer as Renderer3D;
+    const current = renderer3d.getView();
+    const maxSpan = Math.max(...bounds.span);
+    const allMaxSpan = Math.max(...allBounds.span);
+    renderer3d.setView({
+      ...current,
+      targetX: bounds.center[0],
+      targetY: bounds.center[1],
+      targetZ: bounds.center[2],
+      orthoScale:
+        kind === "all"
+          ? Math.max(allMaxSpan * 0.62, 0.25)
+          : Math.max(Math.min(maxSpan * 0.85, allMaxSpan * 0.48), allMaxSpan * 0.035),
+    });
+    return;
+  }
+
+  const renderer2d = renderer as Renderer;
+  if (embeddings.geometry === "poincare") {
+    if (kind === "all") {
+      renderer2d.setView({ type: "poincare", ax: 0, ay: 0, displayZoom: 1 });
+      return;
+    }
+    const radius = Math.hypot(bounds.center[0], bounds.center[1]);
+    const scale = radius > 0.92 ? 0.92 / radius : 1;
+    const ratio = Math.min(
+      allBounds.span[0] / bounds.span[0],
+      allBounds.span[1] / bounds.span[1]
+    );
+    renderer2d.setView({
+      type: "poincare",
+      ax: bounds.center[0] * scale,
+      ay: bounds.center[1] * scale,
+      displayZoom: Math.max(1.7, Math.min(ratio * 0.55, 5.5)),
+    });
+    return;
+  }
+
+  const ratio = Math.min(
+    allBounds.span[0] / bounds.span[0],
+    allBounds.span[1] / bounds.span[1]
+  );
+  renderer2d.setView({
+    type: "euclidean",
+    centerX: bounds.center[0],
+    centerY: bounds.center[1],
+    zoom: kind === "all" ? 1 : Math.max(2, Math.min(ratio * 0.7, 14)),
+  });
+}
+
 export function useHyperScatter({
   embeddings,
   labelsInfo,
@@ -202,6 +300,8 @@ export function useHyperScatter({
   initialView3d = null,
   selectedIds,
   highlightedIds,
+  lassoEnabled = true,
+  focusRequest = null,
   hoveredId,
   onSelectionChange,
   onLassoSelection,
@@ -215,6 +315,7 @@ export function useHyperScatter({
   const rendererRef = useRef<EnhancedRenderer | null>(null);
 
   const [rendererError, setRendererError] = useState<string | null>(null);
+  const [rendererRevision, setRendererRevision] = useState(0);
 
   const rafPendingRef = useRef(false);
   const viewChangeTimeoutRef = useRef<number | null>(null);
@@ -230,8 +331,29 @@ export function useHyperScatter({
   const lastPointerYRef = useRef(0);
   const lassoPointsRef = useRef<number[]>([]);
   const persistentLassoRef = useRef<number[] | null>(null);
+  const [interactionMode, setInteractionModeState] = useState<ScatterInteractionMode>("pan");
+  const interactionModeRef = useRef<ScatterInteractionMode>("pan");
 
   const hoveredIndexRef = useRef<number>(-1);
+
+  const setInteractionMode = useCallback((mode: ScatterInteractionMode) => {
+    const nextMode = mode === "lasso" && !lassoEnabled ? "pan" : mode;
+    interactionModeRef.current = nextMode;
+    setInteractionModeState(nextMode);
+    if (nextMode === "pan") {
+      // Clear an unfinished lasso stroke when leaving lasso mode.
+      if (!persistentLassoRef.current) {
+        rendererRef.current?.setLassoPolygon(null);
+      }
+      isLassoingRef.current = false;
+    }
+  }, [lassoEnabled]);
+
+  useEffect(() => {
+    if (!lassoEnabled && interactionModeRef.current === "lasso") {
+      setInteractionMode("pan");
+    }
+  }, [lassoEnabled, setInteractionMode]);
 
   const idToIndex = useMemo(() => {
     if (!embeddings) return null;
@@ -519,6 +641,7 @@ export function useHyperScatter({
           );
           return;
         }
+        setRendererRevision((current) => current + 1);
 
         hoveredIndexRef.current = -1;
         renderer.setHovered(-1);
@@ -585,7 +708,32 @@ export function useHyperScatter({
     hoveredIndexRef.current = hoveredIdx;
 
     requestRender();
-  }, [embeddings, highlightedIds, hoveredId, idToIndex, requestRender, selectedIds]);
+  }, [embeddings, highlightedIds, hoveredId, idToIndex, rendererRevision, requestRender, selectedIds]);
+
+  const appliedFocusRequestRef = useRef<string | null>(null);
+  useEffect(() => {
+    const renderer = rendererRef.current;
+    if (!renderer || !embeddings || !idToIndex || !focusRequest) return;
+    // A live runtime refresh may rebuild the renderer without changing the
+    // semantic focus request. Include the renderer revision so selection and
+    // reset focus are replayed onto the new renderer instead of being treated
+    // as already applied to an instance that no longer exists.
+    const requestKey = `${rendererRevision}:${focusRequest.kind}:${focusRequest.revision}:${embeddings.layout_key}`;
+    if (appliedFocusRequestRef.current === requestKey) return;
+    const rows =
+      focusRequest.kind === "all"
+        ? finiteCoordinateRows(embeddings)
+        : finiteCoordinateRows(
+            embeddings,
+            Array.from(selectedIds)
+              .map((sampleId) => idToIndex.get(sampleId))
+              .filter((index): index is number => typeof index === "number")
+          );
+    if (rows.length === 0) return;
+    fitRendererToRows(renderer, embeddings, rows, focusRequest.kind);
+    appliedFocusRequestRef.current = requestKey;
+    requestRender();
+  }, [embeddings, focusRequest, idToIndex, rendererRevision, requestRender, selectedIds]);
 
   useEffect(() => {
     requestRender();
@@ -644,6 +792,47 @@ export function useHyperScatter({
     return () => canvas.removeEventListener("wheel", onWheel);
   }, [getCanvasPos, queueView3DChange, requestRender]);
 
+  const zoomAtCenter = useCallback(
+    (delta: number) => {
+      const renderer = rendererRef.current;
+      const canvas = canvasRef.current;
+      if (!renderer || !canvas) return;
+      const x = Math.max(1, canvas.clientWidth) / 2;
+      const y = Math.max(1, canvas.clientHeight) / 2;
+      renderer.zoom(x, y, delta, NO_MODIFIERS);
+      requestRender();
+      queueView3DChange();
+    },
+    [queueView3DChange, requestRender]
+  );
+
+  const zoomIn = useCallback(() => zoomAtCenter(0.85), [zoomAtCenter]);
+  const zoomOut = useCallback(() => zoomAtCenter(-0.85), [zoomAtCenter]);
+
+  const fitView = useCallback(
+    (kind: "selection" | "all" = "all") => {
+      const renderer = rendererRef.current;
+      if (!renderer || !embeddings || !idToIndex) return;
+      const rows =
+        kind === "selection" && selectedIds.size > 0
+          ? finiteCoordinateRows(
+              embeddings,
+              Array.from(selectedIds)
+                .map((sampleId) => idToIndex.get(sampleId))
+                .filter((index): index is number => typeof index === "number")
+            )
+          : finiteCoordinateRows(embeddings);
+      if (rows.length === 0) return;
+      clearPersistentLasso();
+      fitRendererToRows(renderer, embeddings, rows, kind === "selection" && selectedIds.size > 0 ? "selection" : "all");
+      requestRender();
+      queueView3DChange();
+    },
+    [clearPersistentLasso, embeddings, idToIndex, queueView3DChange, requestRender, selectedIds]
+  );
+
+  const resetView = useCallback(() => fitView("all"), [fitView]);
+
   // Pointer interactions
   const handlePointerDown = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -667,8 +856,9 @@ export function useHyperScatter({
         clearPersistentLasso();
       }
 
-      // Shift-drag = lasso, otherwise pan.
-      if (e.shiftKey) {
+      // Explicit lasso mode or Shift-drag = lasso; otherwise pan.
+      const useLasso = lassoEnabled && (interactionModeRef.current === "lasso" || e.shiftKey);
+      if (useLasso) {
         isLassoingRef.current = true;
         isPanningRef.current = false;
         lassoPointsRef.current = [pos.x, pos.y];
@@ -689,7 +879,7 @@ export function useHyperScatter({
 
       e.preventDefault();
     },
-    [clearPersistentLasso, embeddings?.geometry, getCanvasPos, layoutDimension]
+    [clearPersistentLasso, embeddings?.geometry, getCanvasPos, lassoEnabled, layoutDimension]
   );
 
   const handlePointerMove = useCallback(
@@ -937,5 +1127,11 @@ export function useHyperScatter({
     handlePointerLeave,
     handleDoubleClick,
     rendererError,
+    interactionMode,
+    setInteractionMode,
+    zoomIn,
+    zoomOut,
+    fitView,
+    resetView,
   };
 }

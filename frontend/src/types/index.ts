@@ -145,6 +145,7 @@ export interface RuntimePanelDefinition {
   label: string;
   title: string;
   source: string;
+  renderer: string;
   extension: string | null;
   default_props: Record<string, unknown>;
   default_state: Record<string, unknown>;
@@ -152,6 +153,7 @@ export interface RuntimePanelDefinition {
   state_schema: Record<string, unknown> | null;
   commands: string[];
   queries: string[];
+  data_capabilities: string[];
   default_layout: Record<string, unknown>;
   allow_multiple: boolean;
   icon: string | null;
@@ -183,6 +185,7 @@ export interface RuntimePanel {
   kind: RuntimePanelKind;
   panel_type: string;
   source: string;
+  renderer: string;
   title: string;
   position: RuntimePanelPosition;
   builtin_panel: "samples" | string | null;
@@ -201,6 +204,7 @@ export interface RuntimePanel {
   max_width: number | null;
   max_height: number | null;
   visible: boolean;
+  active: boolean;
   props: Record<string, unknown>;
   state_revision: number;
   layout: RuntimePanelLayout;
