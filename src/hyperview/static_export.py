@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from fastapi import HTTPException
 
@@ -27,9 +27,10 @@ from hyperview.storage.schema import parse_layout_dimension, space_key_from_inde
 
 SAMPLE_SHARD_SIZE = 500
 SIMILARITY_SHARD_SIZE = 100
-DEFAULT_SIMILARITY_EXPORT_K = 50
+DEFAULT_SIMILARITY_EXPORT_K = 0
 MAX_COLLECTION_EXPORT_K = 100
 STATIC_BUNDLE_SCHEMA_VERSION = 1
+STATIC_MOUNT_PATH_DEFAULT = "/"
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,8 @@ class StaticExportResult:
     similarity_k: int
     num_files: int
     bundle_bytes: int
+    mount_path: str = STATIC_MOUNT_PATH_DEFAULT
+    warnings: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -61,6 +64,26 @@ class StaticExportResult:
             "similarity_k": self.similarity_k,
             "num_files": self.num_files,
             "bundle_bytes": self.bundle_bytes,
+            "mount_path": self.mount_path,
+            "warnings": list(self.warnings),
+        }
+
+
+@dataclass(frozen=True)
+class StaticBundleCopyResult:
+    source_dir: Path
+    output_dir: Path
+    mount_path: str
+    num_files: int
+    bundle_bytes: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "source_dir": str(self.source_dir),
+            "output_dir": str(self.output_dir),
+            "mount_path": self.mount_path,
+            "num_files": self.num_files,
+            "bundle_bytes": self.bundle_bytes,
         }
 
 
@@ -69,26 +92,122 @@ def _write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def _public_static_payload(value: Any) -> Any:
+    """Remove host-only filesystem details from JSON written to a static bundle."""
+
+    if isinstance(value, dict):
+        return {
+            key: _public_static_payload(item)
+            for key, item in value.items()
+            if key not in {"filepath", "folder", "module_file"}
+        }
+    if isinstance(value, list):
+        return [_public_static_payload(item) for item in value]
+    return value
+
+
 def _copy_static_frontend(out_dir: Path) -> None:
     static_dir = Path(__file__).parent / "server" / "static"
     if not static_dir.exists():
         raise RuntimeError(f"Packaged frontend assets are missing: {static_dir}")
+    # A reviewed bundle may carry a previous hashed frontend build. Replace
+    # every frontend-owned top-level artifact before copying the current shell
+    # so repeated rebases do not retain unreachable chunks. Exported API,
+    # media, panel modules, and deployment metadata live outside this set.
+    for item in static_dir.iterdir():
+        target = out_dir / item.name
+        if target.is_dir():
+            shutil.rmtree(target)
+        else:
+            target.unlink(missing_ok=True)
     shutil.copytree(static_dir, out_dir, dirs_exist_ok=True)
 
 
-def _inject_static_flag(index_path: Path) -> None:
+def normalize_static_mount_path(mount_path: str) -> str:
+    """Return a canonical absolute URL path for a mounted static bundle."""
+
+    if not isinstance(mount_path, str) or not mount_path:
+        raise ValueError("mount_path must be a non-empty absolute URL path")
+    if not mount_path.startswith("/"):
+        raise ValueError("mount_path must start with '/'")
+    if "\\" in mount_path or "?" in mount_path or "#" in mount_path:
+        raise ValueError("mount_path must not contain backslashes, a query, or a fragment")
+    if "//" in mount_path:
+        raise ValueError("mount_path must not contain empty path segments")
+    for segment in mount_path.split("/"):
+        decoded = unquote(segment)
+        if decoded in {".", ".."} or "/" in decoded or "\\" in decoded:
+            raise ValueError("mount_path must not contain dot segments or encoded separators")
+    normalized = mount_path.rstrip("/")
+    return normalized or STATIC_MOUNT_PATH_DEFAULT
+
+
+def _mount_prefix(mount_path: str) -> str:
+    return "" if mount_path == STATIC_MOUNT_PATH_DEFAULT else mount_path
+
+
+def _inject_static_config(index_path: Path, mount_path: str) -> None:
     marker = "window.__HYPERVIEW_STATIC__ = true;"
-    script = f"<script>{marker}</script>"
+    mount_statement = (
+        f"window.__HYPERVIEW_MOUNT_PATH__ = {json.dumps(mount_path)};"
+    )
+    script_body = f"{marker}{mount_statement}"
+    script = f"<script>{script_body}</script>"
     if not index_path.exists():
         raise RuntimeError(f"Frontend index.html is missing from export: {index_path}")
     html = index_path.read_text(encoding="utf-8")
-    if marker in html:
-        return
-    if "<head>" in html:
+    config_pattern = re.compile(
+        r"window\.__HYPERVIEW_STATIC__\s*=\s*true;\s*"
+        r"(?:window\.__HYPERVIEW_MOUNT_PATH__\s*=\s*[^;]+;\s*)?"
+    )
+    if config_pattern.search(html):
+        html = config_pattern.sub(script_body, html, count=1)
+    elif "<head>" in html:
         html = html.replace("<head>", f"<head>{script}", 1)
     else:
         html = f"{script}\n{html}"
     index_path.write_text(html, encoding="utf-8")
+
+
+def _rebase_frontend_shell(
+    bundle_dir: Path,
+    *,
+    source_mount_path: str,
+    target_mount_path: str,
+) -> None:
+    """Rebase only the copied frontend shell, never exported API/data artifacts."""
+
+    source_prefix = _mount_prefix(source_mount_path)
+    target_prefix = _mount_prefix(target_mount_path)
+    if source_prefix == target_prefix:
+        return
+
+    replacements = (
+        (f"{source_prefix}/_next/", f"{target_prefix}/_next/"),
+        (f"{source_prefix}/icon.svg", f"{target_prefix}/icon.svg"),
+        (f"{source_prefix}/icon.png", f"{target_prefix}/icon.png"),
+        (f"{source_prefix}/favicon.ico", f"{target_prefix}/favicon.ico"),
+    )
+    excluded_root_files = {
+        "hyperview-static.json",
+        "wrangler.jsonc",
+        ".assetsignore",
+    }
+    for path in bundle_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(bundle_dir)
+        if relative.parts[0] == "api" or relative.name in excluded_root_files:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        rebased = text
+        for source, target in replacements:
+            rebased = rebased.replace(source, target)
+        if rebased != text:
+            path.write_text(rebased, encoding="utf-8")
 
 
 def _dataset_payload(dataset: Dataset) -> dict[str, Any]:
@@ -168,9 +287,13 @@ def _write_sample_media(out_dir: Path, sample: Any) -> int:
     return media_count
 
 
-def _write_samples(out_dir: Path, dataset: Dataset) -> tuple[list[dict[str, Any]], int, int]:
+def _write_samples(
+    out_dir: Path, dataset: Dataset
+) -> tuple[list[dict[str, Any]], int, int, list[str]]:
     samples = [
-        serialize_sample_for_response(sample, include_thumbnail=False, ensure_dimensions=True)
+        _public_static_payload(
+            serialize_sample_for_response(sample, include_thumbnail=False, ensure_dimensions=True)
+        )
         for sample in dataset.samples
     ]
     shards: list[dict[str, Any]] = []
@@ -217,10 +340,24 @@ def _write_samples(out_dir: Path, dataset: Dataset) -> tuple[list[dict[str, Any]
     )
 
     media_count = 0
+    missing_media: list[str] = []
     for sample in dataset.samples:
         media_count += _write_sample_media(out_dir, sample)
+        if sample.filepath and sample.is_image:
+            source = Path(sample.filepath).expanduser()
+            if not source.is_file():
+                missing_media.append(sample.id)
 
-    return samples, len(shards), media_count
+    warnings: list[str] = []
+    if missing_media:
+        preview = ", ".join(missing_media[:5])
+        suffix = "" if len(missing_media) <= 5 else f", and {len(missing_media) - 5} more"
+        warnings.append(
+            f"{len(missing_media)} image samples reference missing local media files "
+            f"({preview}{suffix}); their content and thumbnails were not exported."
+        )
+
+    return samples, len(shards), media_count, warnings
 
 
 def _resolve_collection_ids(
@@ -239,6 +376,11 @@ def _resolve_collection_ids(
         if field == "label" and op == "eq":
             return [sample.id for sample in dataset.samples if sample.label == value], None
         return [], None
+    if collection.kind == "selection":
+        raw_ids = query.get("ids") or []
+        if not isinstance(raw_ids, list):
+            return [], None
+        return [str(sample_id) for sample_id in raw_ids], None
     if collection.kind in {"neighbors", "search"}:
         anchor = query.get("anchor")
         query_text = str(query.get("queryText") or "").strip()
@@ -294,22 +436,82 @@ def _write_collections(
                 "sample_id": sample_id,
                 "rank": rank,
                 "score": scores.get(sample_id) if scores is not None else None,
-                "sample": serialize_sample_for_response(sample, include_thumbnail=False),
+                "sample": _public_static_payload(
+                    serialize_sample_for_response(sample, include_thumbnail=False)
+                ),
             }
             for rank, (sample_id, sample) in enumerate(
                 (item.id, item) for item in dataset.get_samples_by_ids(ids)
             )
         ]
-        collection_dir = out_dir / "api" / "collections" / quote(collection.id, safe="")
+        # Keep the colon in collection directory names. Static asset servers
+        # decode `%3A` before mapping a URL to the filesystem, so writing an
+        # actually percent-encoded directory makes the browser-visible
+        # `/api/collections/<id>/items.json` path 404.
+        collection_dir = out_dir / "api" / "collections" / quote(collection.id, safe=":")
         _write_json(
             collection_dir / "items.json",
-            {"collection_id": collection.id, "total": len(rows), "offset": 0, "limit": len(rows), "items": rows},
+            {
+                "collection_id": collection.id,
+                "total": len(rows),
+                "offset": 0,
+                "limit": len(rows),
+                "items": rows,
+            },
         )
         _write_json(
             collection_dir / "index.json",
             {"collection": collection.to_dict(), "total": len(rows), "shards": ["items.json"]},
         )
     return len(collections)
+
+
+def _prune_unreferenced_collections(snapshot: dict[str, Any]) -> None:
+    """Keep only collections reachable by the exported workspace UI.
+
+    Live workspaces retain prior searches for history and reuse. A static
+    bundle cannot (and should not) recompute every historical query. Prepared
+    collections referenced by panel props/state remain available, as does the
+    dataset's all-items collection.
+    """
+
+    workspace = snapshot.get("workspace")
+    if not isinstance(workspace, dict):
+        return
+    raw_collections = workspace.get("collections")
+    if not isinstance(raw_collections, list):
+        return
+    collection_ids = {
+        str(collection.get("id"))
+        for collection in raw_collections
+        if isinstance(collection, dict) and collection.get("id")
+    }
+    referenced: set[str] = set()
+
+    def collect(value: Any) -> None:
+        if isinstance(value, str):
+            if value in collection_ids:
+                referenced.add(value)
+            return
+        if isinstance(value, dict):
+            for nested in value.values():
+                collect(nested)
+            return
+        if isinstance(value, list):
+            for nested in value:
+                collect(nested)
+
+    collect(workspace.get("ui"))
+    collect(snapshot.get("panel_definitions"))
+    workspace["collections"] = [
+        collection
+        for collection in raw_collections
+        if isinstance(collection, dict)
+        and (
+            collection.get("kind") == "all"
+            or str(collection.get("id")) in referenced
+        )
+    ]
 
 
 def _write_embeddings(out_dir: Path, dataset: Dataset) -> int:
@@ -320,7 +522,10 @@ def _write_embeddings(out_dir: Path, dataset: Dataset) -> int:
         (layout for layout in layouts if parse_layout_dimension(layout.layout_key) == 2),
         layouts[0],
     )
-    _write_json(out_dir / "api" / "embeddings" / "default.json", _embedding_payload(dataset, default_layout.layout_key))
+    _write_json(
+        out_dir / "api" / "embeddings" / "default.json",
+        _embedding_payload(dataset, default_layout.layout_key),
+    )
     for layout in layouts:
         _write_json(
             out_dir / "api" / "embeddings" / f"{quote(layout.layout_key, safe='')}.json",
@@ -398,7 +603,9 @@ def _write_similarity(out_dir: Path, dataset: Dataset, *, k: int) -> int:
     return query_count
 
 
-def _annotate_static_panels(snapshot: dict[str, Any]) -> tuple[list[dict[str, Any]], set[str]]:
+def _annotate_static_panels(
+    snapshot: dict[str, Any], runtime: HyperViewRuntime, workspace_id: str
+) -> tuple[list[dict[str, Any]], set[str], list[str]]:
     definitions = {
         item.get("panel_type"): item
         for item in snapshot.get("panel_definitions", [])
@@ -406,6 +613,10 @@ def _annotate_static_panels(snapshot: dict[str, Any]) -> tuple[list[dict[str, An
     }
     statuses: list[dict[str, Any]] = []
     compatible_ids: set[str] = set()
+    warnings: list[str] = []
+    runtime_panels = {
+        panel.id: panel for panel in runtime.get_workspace(workspace_id).ui.custom_panels
+    }
     panels = snapshot.get("workspace", {}).get("ui", {}).get("custom_panels", [])
     for panel in panels:
         if not isinstance(panel, dict):
@@ -413,11 +624,32 @@ def _annotate_static_panels(snapshot: dict[str, Any]) -> tuple[list[dict[str, An
         definition = definitions.get(panel.get("panel_type"), {})
         compatible = bool(definition.get("static_compatible", True))
         reason = definition.get("static_reason")
+        panel_id = str(panel.get("id") or "")
+        runtime_panel = runtime_panels.get(panel_id)
+        if compatible and runtime_panel is not None and runtime_panel.kind == "module":
+            module_file = runtime_panel.resolved_module_file()
+            if module_file is None or not module_file.is_file():
+                compatible = False
+                reason = "Panel module source is missing from the workspace host."
+                warnings.append(f"Panel '{panel_id}' was omitted: {reason}")
         data = panel.setdefault("data", {})
         if isinstance(data, dict):
             data["static_compatible"] = compatible
             data["static_reason"] = reason
-        panel_id = str(panel.get("id") or "")
+            if compatible and runtime_panel is not None and runtime_panel.kind == "module":
+                module_file = runtime_panel.resolved_module_file()
+                if module_file is not None:
+                    module_name = (
+                        f"{module_file.stem}.js"
+                        if module_file.suffix.lower() == ".jsx"
+                        else module_file.name
+                    )
+                    data["module_src"] = (
+                        "/api/panels/content/"
+                        f"{quote(workspace_id, safe='')}/"
+                        f"{quote(panel_id, safe='')}/"
+                        f"{quote(module_name, safe='')}"
+                    )
         if compatible:
             compatible_ids.add(panel_id)
         statuses.append(
@@ -428,7 +660,7 @@ def _annotate_static_panels(snapshot: dict[str, Any]) -> tuple[list[dict[str, An
                 "reason": reason,
             }
         )
-    return statuses, compatible_ids
+    return statuses, compatible_ids, warnings
 
 
 def _copy_panel_modules(
@@ -460,12 +692,20 @@ def _copy_panel_module(
     module_file = panel.resolved_module_file()
     if module_file is None or not module_file.exists():
         return
-    target_dir = out_dir / "api" / "panels" / "content" / quote(workspace_id, safe="") / quote(panel.id, safe="")
+    target_dir = (
+        out_dir
+        / "api"
+        / "panels"
+        / "content"
+        / quote(workspace_id, safe="")
+        / quote(panel.id, safe="")
+    )
     target_dir.mkdir(parents=True, exist_ok=True)
     for item in module_file.parent.iterdir():
         if item.resolve() in excluded_modules or item.suffix.lower() in {".py", ".pyc", ".toml"}:
             continue
-        target = target_dir / item.name
+        target_name = f"{item.stem}.js" if item.suffix.lower() == ".jsx" else item.name
+        target = target_dir / target_name
         if item.is_file():
             if item.suffix.lower() == ".jsx":
                 try:
@@ -473,8 +713,20 @@ def _copy_panel_module(
 
                     transformed = esbuild_transform(item.read_text(encoding="utf-8"))
                 except Exception as exc:
-                    raise RuntimeError(f"Failed to transform JSX panel module {item}: {exc}") from exc
+                    raise RuntimeError(
+                        f"Failed to transform JSX panel module {item}: {exc}"
+                    ) from exc
                 if transformed is not None:
+                    # JSX siblings are emitted as .js as well so static hosts
+                    # serve a browser-module MIME type. Keep relative imports
+                    # aligned with those emitted filenames.
+                    transformed = re.sub(
+                        r'(["\'])(\.{1,2}/[^"\']+)\.jsx\1',
+                        lambda match: (
+                            f"{match.group(1)}{match.group(2)}.js{match.group(1)}"
+                        ),
+                        transformed,
+                    )
                     target.write_text(transformed, encoding="utf-8")
             else:
                 shutil.copy2(item, target)
@@ -503,6 +755,42 @@ def _write_cloudflare_config(out_dir: Path, workspace_id: str) -> str:
     return worker_name
 
 
+def _deployment_payload(
+    out_dir: Path,
+    workspace_id: str,
+    mount_path: str,
+) -> dict[str, Any]:
+    config_path = out_dir / "wrangler.jsonc"
+    assets_ignore_path = out_dir / ".assetsignore"
+    if mount_path == STATIC_MOUNT_PATH_DEFAULT:
+        worker_name = _write_cloudflare_config(out_dir, workspace_id)
+        return {
+            "mount_path": mount_path,
+            "hosting": {"mode": "static-assets"},
+            "cloudflare": {
+                "worker_name": worker_name,
+                "config": "wrangler.jsonc",
+                "command": "npx wrangler deploy --config wrangler.jsonc",
+                "mode": "static-assets-only",
+            },
+        }
+
+    config_path.unlink(missing_ok=True)
+    assets_ignore_path.unlink(missing_ok=True)
+    return {
+        "mount_path": mount_path,
+        "hosting": {
+            "mode": "path-mounted-static-assets",
+            "copy_contents_to": mount_path.lstrip("/"),
+        },
+        # A static-assets-only Worker maps its asset directory to the origin
+        # root. A path-mounted bundle instead belongs inside a containing
+        # site's document root, so emitting a standalone Wrangler command
+        # here would be incorrect.
+        "cloudflare": None,
+    }
+
+
 def _prepare_output_dir(out_dir: Path) -> None:
     if out_dir.exists() and not out_dir.is_dir():
         raise RuntimeError(f"Export path is not a directory: {out_dir}")
@@ -520,15 +808,89 @@ def _bundle_stats(out_dir: Path) -> tuple[int, int]:
     return len(files), sum(path.stat().st_size for path in files)
 
 
+def _read_static_bundle_manifest(bundle_dir: Path) -> dict[str, Any]:
+    manifest_path = bundle_dir / "hyperview-static.json"
+    if not bundle_dir.is_dir() or not manifest_path.is_file():
+        raise RuntimeError(f"Not a HyperView static bundle: {bundle_dir}")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise RuntimeError(f"Invalid HyperView static manifest: {manifest_path}") from exc
+    if (
+        manifest.get("schema_version") != STATIC_BUNDLE_SCHEMA_VERSION
+        or manifest.get("kind") != "hyperview-static-space"
+        or manifest.get("static") is not True
+    ):
+        raise RuntimeError(f"Unsupported HyperView static bundle: {bundle_dir}")
+    workspace = manifest.get("workspace")
+    if not isinstance(workspace, dict) or not workspace.get("id"):
+        raise RuntimeError(f"Static bundle manifest has no workspace id: {manifest_path}")
+    return manifest
+
+
+def copy_static_bundle(
+    source: str | Path,
+    out: str | Path,
+    *,
+    mount_path: str = STATIC_MOUNT_PATH_DEFAULT,
+) -> StaticBundleCopyResult:
+    """Copy an existing static bundle and rebase its frontend shell for a URL mount."""
+
+    source_dir = Path(source).expanduser().resolve()
+    out_dir = Path(out).expanduser().resolve()
+    manifest = _read_static_bundle_manifest(source_dir)
+    normalized_mount_path = normalize_static_mount_path(mount_path)
+    if (
+        source_dir == out_dir
+        or source_dir in out_dir.parents
+        or out_dir in source_dir.parents
+    ):
+        raise RuntimeError("Source and output bundle directories must not overlap")
+
+    _prepare_output_dir(out_dir)
+    shutil.copytree(source_dir, out_dir, dirs_exist_ok=True)
+    # Keep reviewed workspace data and custom panel modules, but serve them
+    # through the current packaged frontend. This makes the mount-path
+    # contract reusable for existing exports without regenerating datasets.
+    _copy_static_frontend(out_dir)
+    # The packaged frontend copied above is always rooted at "/". The source
+    # manifest's mount path describes the replaced shell and must not suppress
+    # rebasing when source and target happen to use the same non-root mount.
+    _rebase_frontend_shell(
+        out_dir,
+        source_mount_path=STATIC_MOUNT_PATH_DEFAULT,
+        target_mount_path=normalized_mount_path,
+    )
+    _inject_static_config(out_dir / "index.html", normalized_mount_path)
+
+    manifest["mount_path"] = normalized_mount_path
+    manifest["deployment"] = _deployment_payload(
+        out_dir,
+        str(manifest["workspace"]["id"]),
+        normalized_mount_path,
+    )
+    _write_json(out_dir / "hyperview-static.json", manifest)
+    num_files, bundle_bytes = _bundle_stats(out_dir)
+    return StaticBundleCopyResult(
+        source_dir=source_dir,
+        output_dir=out_dir,
+        mount_path=normalized_mount_path,
+        num_files=num_files,
+        bundle_bytes=bundle_bytes,
+    )
+
+
 def export_runtime_workspace(
     runtime: HyperViewRuntime,
     workspace_id: str,
     out: str | Path,
     *,
     similarity_k: int = DEFAULT_SIMILARITY_EXPORT_K,
+    mount_path: str = STATIC_MOUNT_PATH_DEFAULT,
 ) -> StaticExportResult:
     if similarity_k < 0:
         raise ValueError("similarity_k must be zero or greater")
+    normalized_mount_path = normalize_static_mount_path(mount_path)
     out_dir = Path(out).expanduser().resolve()
     _prepare_output_dir(out_dir)
 
@@ -538,10 +900,34 @@ def export_runtime_workspace(
     dataset = runtime.get_dataset(workspace_id, workspace.dataset_name)
 
     _copy_static_frontend(out_dir)
-    _inject_static_flag(out_dir / "index.html")
+    _rebase_frontend_shell(
+        out_dir,
+        source_mount_path=STATIC_MOUNT_PATH_DEFAULT,
+        target_mount_path=normalized_mount_path,
+    )
+    _inject_static_config(out_dir / "index.html", normalized_mount_path)
 
     snapshot = runtime.snapshot(workspace_id)
-    panel_statuses, compatible_panel_ids = _annotate_static_panels(snapshot)
+    # The bundle is scoped to the requested workspace even when the runtime
+    # process has another workspace active globally.
+    snapshot["active_workspace_id"] = workspace_id
+    snapshot["workspaces"] = [
+        {"id": workspace.id, "dataset_name": workspace.dataset_name}
+    ]
+    layouts = dataset.list_layouts()
+    has_layouts = bool(layouts)
+    has_2d_layout = any(parse_layout_dimension(layout.layout_key) == 2 for layout in layouts)
+    if not has_layouts:
+        snapshot["panel_definitions"] = [
+            definition
+            for definition in snapshot.get("panel_definitions", [])
+            if definition.get("panel_type") != "scatter"
+        ]
+    panel_statuses, compatible_panel_ids, panel_warnings = _annotate_static_panels(
+        snapshot, runtime, workspace_id
+    )
+    snapshot = _public_static_payload(snapshot)
+    _prune_unreferenced_collections(snapshot)
     _write_json(out_dir / "api" / "runtime.json", snapshot)
     _write_json(out_dir / "api" / "dataset.json", _dataset_payload(dataset))
     _write_json(
@@ -549,7 +935,8 @@ def export_runtime_workspace(
         {"panel_definitions": snapshot.get("panel_definitions", [])},
     )
 
-    _samples, num_shards, num_media_files = _write_samples(out_dir, dataset)
+    _samples, num_shards, num_media_files, media_warnings = _write_samples(out_dir, dataset)
+    warnings = panel_warnings + media_warnings
     num_layouts = _write_embeddings(out_dir, dataset)
     num_collections = _write_collections(
         out_dir,
@@ -559,12 +946,12 @@ def export_runtime_workspace(
     )
     num_similarity_queries = _write_similarity(out_dir, dataset, k=similarity_k)
     _copy_panel_modules(out_dir, runtime, workspace_id, compatible_panel_ids)
-    worker_name = _write_cloudflare_config(out_dir, workspace_id)
 
     manifest = {
         "schema_version": STATIC_BUNDLE_SCHEMA_VERSION,
         "kind": "hyperview-static-space",
         "static": True,
+        "mount_path": normalized_mount_path,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "hyperview_version": __version__,
         "workspace": {
@@ -574,9 +961,9 @@ def export_runtime_workspace(
         },
         "capabilities": {
             "browse_samples": True,
-            "layouts": True,
+            "layouts": has_layouts,
             "selection": True,
-            "lasso_2d": True,
+            "lasso_2d": has_2d_layout,
             "lasso_3d": False,
             "sample_similarity": num_similarity_queries > 0,
             "similarity_k": similarity_k if num_similarity_queries > 0 else 0,
@@ -590,19 +977,15 @@ def export_runtime_workspace(
             "runtime": "api/runtime.json",
             "dataset": "api/dataset.json",
             "samples": "api/samples/index.json",
-            "embeddings": "api/embeddings/default.json",
-            "similarity": (
-                "api/search/similar/index.json" if num_similarity_queries > 0 else None
-            ),
+            "embeddings": "api/embeddings/default.json" if num_layouts > 0 else None,
+            "similarity": ("api/search/similar/index.json" if num_similarity_queries > 0 else None),
         },
-        "deployment": {
-            "cloudflare": {
-                "worker_name": worker_name,
-                "config": "wrangler.jsonc",
-                "command": "npx wrangler deploy --config wrangler.jsonc",
-                "mode": "static-assets-only",
-            }
-        },
+        "deployment": _deployment_payload(
+            out_dir,
+            workspace_id,
+            normalized_mount_path,
+        ),
+        "warnings": warnings,
     }
     _write_json(out_dir / "hyperview-static.json", manifest)
     num_files, bundle_bytes = _bundle_stats(out_dir)
@@ -620,6 +1003,8 @@ def export_runtime_workspace(
         similarity_k=similarity_k,
         num_files=num_files,
         bundle_bytes=bundle_bytes,
+        mount_path=normalized_mount_path,
+        warnings=tuple(warnings),
     )
 
 
@@ -628,6 +1013,7 @@ def export_workspace(
     out: str | Path,
     *,
     similarity_k: int = DEFAULT_SIMILARITY_EXPORT_K,
+    mount_path: str = STATIC_MOUNT_PATH_DEFAULT,
 ) -> StaticExportResult:
     runtime = HyperViewRuntime()
     try:
@@ -635,6 +1021,12 @@ def export_workspace(
     except ValueError as exc:
         raise RuntimeError(str(exc)) from exc
     try:
-        return export_runtime_workspace(runtime, workspace_id, out, similarity_k=similarity_k)
+        return export_runtime_workspace(
+            runtime,
+            workspace_id,
+            out,
+            similarity_k=similarity_k,
+            mount_path=mount_path,
+        )
     except HTTPException as exc:
         raise RuntimeError(str(exc.detail)) from exc

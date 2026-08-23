@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hyperview as hv
-from hyperview.core.sample import Sample
 
 DATASET_NAME = "coco_captions_demo"
 WORKSPACE_NAME = "coco_captions_demo"
