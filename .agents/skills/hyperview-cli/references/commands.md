@@ -451,7 +451,7 @@ Pin nearest-neighbor results to the Samples panel state for a specific embedding
 hyperview ui samples retrieval set-anchor \
   --workspace research \
   --sample-id <sample-id> \
-  --layout-key <layout-key> \
+  --index-id space:<space-key> \
   --k 18
 
 hyperview ui samples retrieval set-k \
@@ -461,7 +461,7 @@ hyperview ui samples retrieval set-k \
 hyperview ui samples retrieval set-text \
   --workspace research \
   --query "a dog playing in the park" \
-  --layout-key <layout-key> \
+  --index-id space:<space-key> \
   --k 18
 ```
 
@@ -489,7 +489,7 @@ hyperview panel samples reset --workspace research --json
 hyperview panel samples show-neighbors \
   --workspace research \
   --sample-id <sample-id> \
-  --space-key <space-key> \
+  --index-id space:<space-key> \
   --k 18 \
   --json
 

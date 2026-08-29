@@ -62,12 +62,14 @@ export function Header() {
   const {
     datasetInfo,
     activeWorkspaceId,
+    customPanels,
     panelDefinitions,
     workspaces,
   } = useStore(
     useShallow((state) => ({
       datasetInfo: state.datasetInfo,
       activeWorkspaceId: state.activeWorkspaceId,
+      customPanels: state.customPanels,
       panelDefinitions: state.panelDefinitions,
       workspaces: state.workspaces,
     }))
@@ -99,6 +101,15 @@ export function Header() {
   // to SSR, then switch the header to its Shared Space identity after mount.
   const [staticBundle, setStaticBundle] = useState(false);
   const [readOnlyNotice, setReadOnlyNotice] = useState<string | null>(null);
+  const staticEdgeZones = useMemo(
+    () => new Set(
+      customPanels
+        .filter((panel) => panel.visible !== false)
+        .map((panel) => panel.position)
+        .filter((position) => position === "right" || position === "bottom")
+    ),
+    [customPanels]
+  );
   const labelColorMapId = useColorSettings((state) => state.labelColorMapId);
   const setLabelColorMapId = useColorSettings((state) => state.setLabelColorMapId);
   const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null;
@@ -296,55 +307,61 @@ export function Header() {
           <div className="hidden w-px h-3 bg-border mx-1 md:block" />
 
           {/* Left panel toggle */}
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-label="Toggle labels panel"
-            title="Toggle labels panel"
-            onClick={() => dockview?.toggleZone("left")}
-            className={cn(
-                "hidden h-6 w-6 p-0 md:inline-flex",
-                openEdgeZones.has("left")
-                  ? "text-foreground bg-muted/50"
-                  : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
-              )}
-          >
-            <PanelLeft className="h-3.5 w-3.5" />
-          </Button>
+          {!staticBundle ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label="Toggle labels panel"
+              title="Toggle labels panel"
+              onClick={() => dockview?.toggleZone("left")}
+              className={cn(
+                  "hidden h-6 w-6 p-0 md:inline-flex",
+                  openEdgeZones.has("left")
+                    ? "text-foreground bg-muted/50"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
+                )}
+            >
+              <PanelLeft className="h-3.5 w-3.5" />
+            </Button>
+          ) : null}
 
           {/* Bottom panel toggle */}
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-label="Toggle bottom panel"
-            title="Toggle bottom panel"
-            onClick={() => dockview?.toggleZone("bottom")}
-            className={cn(
-                "hidden h-6 w-6 p-0 md:inline-flex",
-                openEdgeZones.has("bottom")
-                  ? "text-foreground bg-muted/50"
-                  : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
-              )}
-          >
-            <PanelBottom className="h-3.5 w-3.5" />
-          </Button>
+          {!staticBundle || staticEdgeZones.has("bottom") ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label="Toggle bottom panel"
+              title="Toggle bottom panel"
+              onClick={() => dockview?.toggleZone("bottom")}
+              className={cn(
+                  "hidden h-6 w-6 p-0 md:inline-flex",
+                  openEdgeZones.has("bottom")
+                    ? "text-foreground bg-muted/50"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
+                )}
+            >
+              <PanelBottom className="h-3.5 w-3.5" />
+            </Button>
+          ) : null}
 
           {/* Right panel toggle */}
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-label="Toggle right panel"
-            title="Toggle right panel"
-            onClick={() => dockview?.toggleZone("right")}
-            className={cn(
-                "hidden h-6 w-6 p-0 md:inline-flex",
-                openEdgeZones.has("right")
-                  ? "text-foreground bg-muted/50"
-                  : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
-              )}
-          >
-            <PanelRight className="h-3.5 w-3.5" />
-          </Button>
+          {!staticBundle || staticEdgeZones.has("right") ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label="Toggle right panel"
+              title="Toggle right panel"
+              onClick={() => dockview?.toggleZone("right")}
+              className={cn(
+                  "hidden h-6 w-6 p-0 md:inline-flex",
+                  openEdgeZones.has("right")
+                    ? "text-foreground bg-muted/50"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
+                )}
+            >
+              <PanelRight className="h-3.5 w-3.5" />
+            </Button>
+          ) : null}
 
           {/* Separator */}
           <div className="hidden w-px h-3 bg-border mx-1 md:block" />

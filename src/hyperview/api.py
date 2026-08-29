@@ -704,6 +704,7 @@ class SessionUiController:
         *,
         workspace_id: str = "default",
         layout_key: str | None = None,
+        index_id: str | None = None,
         space_key: str | None = None,
         k: int = 18,
         source: str = "python",
@@ -714,6 +715,7 @@ class SessionUiController:
             sample_id,
             workspace_id=workspace_id,
             layout_key=layout_key,
+            index_id=index_id,
             space_key=space_key,
             k=k,
             source=source,
@@ -725,22 +727,28 @@ class SessionUiController:
         *,
         workspace_id: str = "default",
         layout_key: str | None = None,
+        index_id: str | None = None,
         space_key: str | None = None,
         k: int = 18,
         source: str = "python",
     ) -> None:
         """Set Samples panel retrieval state."""
 
+        command_args: dict[str, Any] = {
+            "sample_id": sample_id,
+            "k": k,
+            "source": source,
+        }
+        if layout_key is not None:
+            command_args["layout_key"] = layout_key
+        if index_id is not None:
+            command_args["index_id"] = index_id
+        if space_key is not None:
+            command_args["space_key"] = space_key
         self._session.control.run(
             "panel.samples.retrieval.set-anchor",
             target={"workspace_id": workspace_id},
-            args={
-                "sample_id": sample_id,
-                "layout_key": layout_key,
-                "space_key": space_key,
-                "k": k,
-                "source": source,
-            },
+            args=command_args,
         )
 
     def set_samples_retrieval_k(
@@ -771,22 +779,28 @@ class SessionUiController:
         *,
         workspace_id: str = "default",
         layout_key: str | None = None,
+        index_id: str | None = None,
         space_key: str | None = None,
         k: int = 18,
         source: str = "python",
     ) -> list[tuple[Any, float]]:
         """Run a text query against the workspace dataset and show results in the Samples panel."""
 
+        command_args: dict[str, Any] = {
+            "query_text": query_text,
+            "k": k,
+            "source": source,
+        }
+        if layout_key is not None:
+            command_args["layout_key"] = layout_key
+        if index_id is not None:
+            command_args["index_id"] = index_id
+        if space_key is not None:
+            command_args["space_key"] = space_key
         self._session.control.run(
             "panel.samples.retrieval.set-text-query",
             target={"workspace_id": workspace_id},
-            args={
-                "query_text": query_text,
-                "layout_key": layout_key,
-                "space_key": space_key,
-                "k": k,
-                "source": source,
-            },
+            args=command_args,
         )
         runtime = self._runtime()
         dataset = runtime.get_dataset(workspace_id=workspace_id)

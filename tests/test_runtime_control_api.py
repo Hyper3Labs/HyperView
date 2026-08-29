@@ -860,17 +860,33 @@ def test_runtime_embedding_job_uses_injected_provider_registry(tmp_path: Path) -
     assert job["result"]["space_key"].startswith(f"{alias}__isolated-model__")
 
 
-def test_health_reports_package_version() -> None:
+def test_health_reports_package_version_without_serializing_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from hyperview import __version__
 
     runtime = HyperViewRuntime()
     runtime.attach_dataset_instance("default", _make_dataset())
+    monkeypatch.setattr(
+        runtime,
+        "snapshot",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("health must not serialize the runtime snapshot")
+        ),
+    )
     client = TestClient(create_app(runtime=runtime))
 
     response = client.get("/__hyperview__/health")
 
     assert response.status_code == 200
-    assert response.json()["version"] == __version__
+    assert response.json() == {
+        "name": "hyperview",
+        "version": __version__,
+        "session_id": None,
+        "workspace_id": "default",
+        "dataset": "runtime_control",
+        "pid": response.json()["pid"],
+    }
 
 
 def test_ui_similarity_query_is_explicit_and_preserved_with_selection(tmp_path: Path) -> None:

@@ -311,6 +311,15 @@ export const ScatterPanel = React.memo(function ScatterPanel() {
       }),
     [datasetInfo.labels, embeddings, interaction.labelColorMapId]
   );
+  const hoveredSample = React.useMemo(() => {
+    if (!embeddings || !interaction.hoveredId) return null;
+    const index = embeddings.ids.indexOf(interaction.hoveredId);
+    if (index < 0) return null;
+    return {
+      id: interaction.hoveredId,
+      label: embeddings.labels[index] ?? "Unlabelled",
+    };
+  }, [embeddings, interaction.hoveredId]);
   const panelCamera =
     stringState(panelState.state.camera_layout_key) === resolvedLayoutKey
       ? cameraState(panelState.state.camera_3d)
@@ -427,12 +436,31 @@ export const ScatterPanel = React.memo(function ScatterPanel() {
               </DropdownMenuRadioGroup>
             </>
           ) : null}
+          {labelsInfo && labelsInfo.uniqueLabels.length > 0 ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>Label legend</DropdownMenuLabel>
+              <div className="max-h-48 space-y-1 overflow-y-auto px-2 pb-1">
+                {labelsInfo.uniqueLabels.map((label, index) => (
+                  <div key={label} className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                    <span
+                      className="h-2 w-2 shrink-0 rounded-full"
+                      style={{ backgroundColor: labelsInfo.palette[index] }}
+                      aria-hidden="true"
+                    />
+                    <span className="truncate" title={label}>{label}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : null}
         </PanelToolbarMenu>
       </div>
     ),
     [
       handleProjectionMethodChange,
       interaction,
+      labelsInfo,
       labelOverlayMode,
       layoutDimension,
       patchRuntimePanelState,
@@ -481,6 +509,17 @@ export const ScatterPanel = React.memo(function ScatterPanel() {
             aria-hidden="true"
             style={{ zIndex: 20, pointerEvents: "none" }}
           />
+          {selectedIds.size > 0 ? (
+            <div className="pointer-events-none absolute right-2 top-2 z-30 rounded border border-border bg-card/90 px-2 py-1 text-[10px] font-medium text-foreground shadow-sm backdrop-blur-sm">
+              {selectedIds.size.toLocaleString()} selected
+            </div>
+          ) : null}
+          {hoveredSample ? (
+            <div className="pointer-events-none absolute bottom-2 left-2 z-30 max-w-[min(360px,calc(100%-1rem))] rounded border border-border bg-card/90 px-2 py-1 shadow-sm backdrop-blur-sm">
+              <div className="truncate text-[11px] font-medium text-foreground">{hoveredSample.label}</div>
+              <div className="truncate font-mono text-[9px] text-muted-foreground">{hoveredSample.id}</div>
+            </div>
+          ) : null}
           {rendererError ? (
             <div className="absolute inset-0 z-10 flex items-center justify-center bg-card/85 p-6">
               <div className="max-w-md text-center">

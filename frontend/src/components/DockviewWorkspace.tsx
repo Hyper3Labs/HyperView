@@ -576,7 +576,11 @@ function DockviewPanelActions(props: IDockviewHeaderActionsProps) {
     nextPanel.api.setActive();
   }, [activePanel, activeWorkspaceId, applyRuntimeSnapshot, customPanels, props.containerApi]);
 
-  if (!activePanel || NON_ANCHOR_PANEL_IDS.has(activePanel.id)) {
+  if (
+    !activePanel ||
+    NON_ANCHOR_PANEL_IDS.has(activePanel.id) ||
+    (isStaticBundle() && activePanel.id.startsWith(RUNTIME_PANEL_PREFIX))
+  ) {
     return null;
   }
 

@@ -857,8 +857,8 @@ def test_cli_panel_state_and_samples_retrieval_commands_post_command_envelopes(
             "default",
             "--sample-id",
             "sample-2",
-            "--space-key",
-            "clip",
+            "--index-id",
+            "space:clip",
             "--k",
             "12",
             "--json",
@@ -888,6 +888,24 @@ def test_cli_panel_state_and_samples_retrieval_commands_post_command_envelopes(
             "ui",
             "samples",
             "retrieval",
+            "set-text",
+            "--workspace",
+            "default",
+            "--query",
+            "red floral dress",
+            "--k",
+            "12",
+            "--json",
+        ]
+    )
+    retrieval_text = json.loads(capsys.readouterr().out)
+    assert retrieval_text["workspace"]["id"] == "default"
+
+    main(
+        [
+            "ui",
+            "samples",
+            "retrieval",
             "clear",
             "--workspace",
             "default",
@@ -897,7 +915,14 @@ def test_cli_panel_state_and_samples_retrieval_commands_post_command_envelopes(
     retrieval_clear = json.loads(capsys.readouterr().out)
     assert retrieval_clear["workspace"]["id"] == "default"
 
-    assert [entry["method"] for entry in recorded] == ["POST", "POST", "POST", "POST", "POST"]
+    assert [entry["method"] for entry in recorded] == [
+        "POST",
+        "POST",
+        "POST",
+        "POST",
+        "POST",
+        "POST",
+    ]
     assert {entry["url"] for entry in recorded} == {
         "http://127.0.0.1:6262/api/control/commands/run"
     }
@@ -920,8 +945,7 @@ def test_cli_panel_state_and_samples_retrieval_commands_post_command_envelopes(
         "target": {"workspace_id": "default"},
         "args": {
             "sample_id": "sample-2",
-            "layout_key": None,
-            "space_key": "clip",
+            "index_id": "space:clip",
             "k": 12,
             "source": "cli",
         },
@@ -932,6 +956,15 @@ def test_cli_panel_state_and_samples_retrieval_commands_post_command_envelopes(
         "args": {"k": 24},
     }
     assert recorded[4]["payload"] == {
+        "command": "panel.samples.retrieval.set-text-query",
+        "target": {"workspace_id": "default"},
+        "args": {
+            "query_text": "red floral dress",
+            "k": 12,
+            "source": "cli",
+        },
+    }
+    assert recorded[5]["payload"] == {
         "command": "panel.samples.retrieval.clear",
         "target": {"workspace_id": "default"},
         "args": {},
@@ -1003,8 +1036,8 @@ def test_cli_panel_collection_shortcuts_post_command_envelopes(monkeypatch, caps
             "default",
             "--sample-id",
             "sample-2",
-            "--space-key",
-            "clip",
+            "--index-id",
+            "space:clip",
             "--k",
             "12",
             "--json",
@@ -1012,6 +1045,16 @@ def test_cli_panel_collection_shortcuts_post_command_envelopes(monkeypatch, caps
     )
     neighbors_output = json.loads(capsys.readouterr().out)
     assert neighbors_output["result"]["collection_id"] == "collection-1"
+    assert recorded[0]["payload"] == {
+        "command": "collection.neighbors.create",
+        "target": {"workspace_id": "default"},
+        "args": {
+            "sample_id": "sample-2",
+            "index_id": "space:clip",
+            "k": 12,
+            "source": "cli",
+        },
+    }
 
     main(
         [
@@ -1049,8 +1092,7 @@ def test_cli_panel_collection_shortcuts_post_command_envelopes(monkeypatch, caps
                 "target": {"workspace_id": "default"},
                 "args": {
                     "sample_id": "sample-2",
-                    "layout_key": None,
-                    "space_key": "clip",
+                    "index_id": "space:clip",
                     "k": 12,
                     "source": "cli",
                 },

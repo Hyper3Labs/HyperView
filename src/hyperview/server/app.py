@@ -598,13 +598,18 @@ def create_app(
 
     @app.get("/__hyperview__/health")
     async def hyperview_health():
-        snapshot = _current_runtime.snapshot() if _current_runtime is not None else None
+        workspace = None
+        if _current_runtime is not None:
+            try:
+                workspace = _current_runtime.get_workspace()
+            except ValueError:
+                workspace = None
         return {
             "name": "hyperview",
             "version": app.version,
             "session_id": _current_session_id,
-            "workspace_id": snapshot["workspace"]["id"] if snapshot is not None else None,
-            "dataset": snapshot["workspace"]["dataset_name"] if snapshot is not None else None,
+            "workspace_id": workspace.id if workspace is not None else None,
+            "dataset": workspace.dataset_name if workspace is not None else None,
             "pid": os.getpid(),
         }
 

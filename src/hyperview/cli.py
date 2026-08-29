@@ -426,6 +426,7 @@ def _build_control_parser() -> argparse.ArgumentParser:
     panel_samples_neighbors.add_argument("--workspace", required=True)
     panel_samples_neighbors.add_argument("--sample-id", required=True)
     panel_samples_neighbors.add_argument("--layout-key")
+    panel_samples_neighbors.add_argument("--index-id")
     panel_samples_neighbors.add_argument("--space-key")
     panel_samples_neighbors.add_argument("--k", type=int, default=18)
     _add_json_flag(panel_samples_neighbors)
@@ -499,6 +500,7 @@ def _build_control_parser() -> argparse.ArgumentParser:
     ui_samples_retrieval_set_anchor.add_argument("--workspace", required=True)
     ui_samples_retrieval_set_anchor.add_argument("--sample-id", required=True)
     ui_samples_retrieval_set_anchor.add_argument("--layout-key")
+    ui_samples_retrieval_set_anchor.add_argument("--index-id")
     ui_samples_retrieval_set_anchor.add_argument("--space-key")
     ui_samples_retrieval_set_anchor.add_argument("--k", type=int, default=18)
     _add_json_flag(ui_samples_retrieval_set_anchor)
@@ -512,6 +514,7 @@ def _build_control_parser() -> argparse.ArgumentParser:
     ui_samples_retrieval_set_text.add_argument("--workspace", required=True)
     ui_samples_retrieval_set_text.add_argument("--query", required=True)
     ui_samples_retrieval_set_text.add_argument("--layout-key")
+    ui_samples_retrieval_set_text.add_argument("--index-id")
     ui_samples_retrieval_set_text.add_argument("--space-key")
     ui_samples_retrieval_set_text.add_argument("--k", type=int, default=18)
     _add_json_flag(ui_samples_retrieval_set_text)
@@ -1050,17 +1053,22 @@ def _run_panel_command(args: argparse.Namespace) -> None:
     target = {"workspace_id": args.workspace}
 
     if args.panel_command == "samples" and args.panel_samples_command == "show-neighbors":
+        command_args: dict[str, Any] = {
+            "sample_id": args.sample_id,
+            "k": args.k,
+            "source": "cli",
+        }
+        if args.layout_key is not None:
+            command_args["layout_key"] = args.layout_key
+        if args.index_id is not None:
+            command_args["index_id"] = args.index_id
+        if args.space_key is not None:
+            command_args["space_key"] = args.space_key
         payload = _run_control_command(
             base_url,
             "collection.neighbors.create",
             target=target,
-            args={
-                "sample_id": args.sample_id,
-                "layout_key": args.layout_key,
-                "space_key": args.space_key,
-                "k": args.k,
-                "source": "cli",
-            },
+            args=command_args,
         )
         _print_output(payload, as_json=args.json)
         return
@@ -1156,17 +1164,22 @@ def _run_ui_command(args: argparse.Namespace) -> None:
     if args.ui_command == "samples" and args.ui_samples_command == "retrieval":
         target = {"workspace_id": args.workspace}
         if args.ui_samples_retrieval_command == "set-anchor":
+            command_args: dict[str, Any] = {
+                "sample_id": args.sample_id,
+                "k": args.k,
+                "source": "cli",
+            }
+            if args.layout_key is not None:
+                command_args["layout_key"] = args.layout_key
+            if args.index_id is not None:
+                command_args["index_id"] = args.index_id
+            if args.space_key is not None:
+                command_args["space_key"] = args.space_key
             payload = _run_control_command(
                 base_url,
                 "panel.samples.retrieval.set-anchor",
                 target=target,
-                args={
-                    "sample_id": args.sample_id,
-                    "layout_key": args.layout_key,
-                    "space_key": args.space_key,
-                    "k": args.k,
-                    "source": "cli",
-                },
+                args=command_args,
             )
             _print_output(payload, as_json=args.json)
             return
@@ -1180,17 +1193,22 @@ def _run_ui_command(args: argparse.Namespace) -> None:
             _print_output(payload, as_json=args.json)
             return
         if args.ui_samples_retrieval_command == "set-text":
+            command_args = {
+                "query_text": args.query,
+                "k": args.k,
+                "source": "cli",
+            }
+            if args.layout_key is not None:
+                command_args["layout_key"] = args.layout_key
+            if args.index_id is not None:
+                command_args["index_id"] = args.index_id
+            if args.space_key is not None:
+                command_args["space_key"] = args.space_key
             payload = _run_control_command(
                 base_url,
                 "panel.samples.retrieval.set-text-query",
                 target=target,
-                args={
-                    "query_text": args.query,
-                    "layout_key": args.layout_key,
-                    "space_key": args.space_key,
-                    "k": args.k,
-                    "source": "cli",
-                },
+                args=command_args,
             )
             _print_output(payload, as_json=args.json)
             return

@@ -34,11 +34,15 @@ type RuntimePanelModuleExport =
       Component: ComponentType<RuntimePanelComponentProps>;
     };
 
-function panelInstanceValue(panel: RuntimePanel, panelState?: RuntimePanelStateEntry) {
+function panelInstanceValue(
+  panel: RuntimePanel,
+  panelState?: RuntimePanelStateEntry,
+  hostProps?: Record<string, unknown>
+) {
   return {
     panel,
     panelId: panel.id,
-    props: panel.props ?? {},
+    props: hostProps ? { ...(panel.props ?? {}), ...hostProps } : panel.props ?? {},
     state: panelState?.state ?? {},
     stateRevision: panelState?.state_revision ?? panel.state_revision ?? 0,
   };
@@ -225,7 +229,13 @@ export function PanelHost(props: IDockviewPanelProps<PanelHostParams>) {
   }
 
   return (
-    <PanelInstanceProvider value={panelInstanceValue(panel, panelState)}>
+    <PanelInstanceProvider
+      value={panelInstanceValue(
+        panel,
+        panelState,
+        panel.kind === "builtin" ? props.params : undefined
+      )}
+    >
       {panel.kind === "module" ? (
         <ModulePanelHost panel={panel} />
       ) : (
