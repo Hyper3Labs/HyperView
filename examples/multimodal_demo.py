@@ -24,6 +24,7 @@ layout_key = dataset.compute_visualization(method="umap", layout_dimension=2)
 print(f"Embeddings: {space_key}")
 print(f"Layout: {layout_key}")
 
-session = hv.launch(dataset, workspace=WORKSPACE_NAME)
+session = hv.launch(dataset, workspace_id=WORKSPACE_NAME, block=False)
 results = session.ui.query_by_text("a dog playing in the park", k=10)
 print(f"Top text-query matches: {[sample.id for sample, _distance in results]}")
+session.wait()

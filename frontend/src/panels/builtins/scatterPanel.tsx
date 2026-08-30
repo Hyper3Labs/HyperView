@@ -212,9 +212,7 @@ export const ScatterPanel = React.memo(function ScatterPanel() {
 
   const patchRuntimePanelState = React.useCallback(
     (patch: Record<string, unknown>) => {
-      // TODO(w4a): Phase 7 must turn legacy direct Dockview scatter variants into
-      // runtime panel instances. Until then the backend cannot accept panel-state
-      // writes for those variants; workspace layout state below preserves behavior.
+      // Detached renderer adapters have no runtime panel state to persist.
       if (!panelState.panel) return;
       void panelState.patchState(patch).catch((error) => {
         console.error("Failed to persist scatter panel state:", error);

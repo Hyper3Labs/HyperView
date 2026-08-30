@@ -9,8 +9,8 @@ from hyperview.extensions import ExtensionManifest
 from hyperview.runtime import CustomPanelSpec, PanelStateEntry, WorkspaceUiState
 
 ROOT = Path(__file__).resolve().parents[1]
-EXAMPLE_EXTENSIONS = ROOT / "agent-context" / "extensions"
 PANEL_SDK_SOURCE = ROOT / "frontend" / "src" / "panel-sdk" / "index.tsx"
+REFERENCE_PANEL_SOURCE = ROOT / "src" / "hyperview" / "shipped_extensions" / "reference" / "panel.jsx"
 
 
 def test_v2_sdk_exposes_generic_similarity_hook_to_extensions() -> None:
@@ -89,17 +89,8 @@ mount = "unused"
     assert "lifecycle" not in definition
 
 
-@pytest.mark.parametrize(
-    "extension_name",
-    ["selection-profile", "label-counts", "lrp"],
-)
-def test_example_panel_uses_only_hooks_exported_by_v2_sdk(
-    extension_name: str,
-) -> None:
-    extension_dir = EXAMPLE_EXTENSIONS / extension_name
-    manifest = ExtensionManifest.load(extension_dir)
-    panel_file = extension_dir / manifest.panels[0].file
-    panel_source = panel_file.read_text(encoding="utf-8")
+def test_shipped_reference_panel_uses_only_hooks_exported_by_v2_sdk() -> None:
+    panel_source = REFERENCE_PANEL_SOURCE.read_text(encoding="utf-8")
     sdk_source = PANEL_SDK_SOURCE.read_text(encoding="utf-8")
 
     assert 'sdk.version !== "2"' in panel_source
