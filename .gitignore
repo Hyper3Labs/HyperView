@@ -7,7 +7,6 @@ __pycache__/
 env/
 venv/
 .venv/
-/uv.lock
 *.egg-info/
 .pytest_cache/
 .coverage
