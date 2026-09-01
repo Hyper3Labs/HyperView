@@ -77,10 +77,12 @@ it. This bites agents that talk to `/api/control/commands/run` directly.
   discovery file `server-<port>.json` next to the datasets directory. Prefer
   the CLI over raw HTTP and this stays invisible.
 - For raw HTTP, send `Authorization: Bearer <token>` or `?token=<token>`.
-- Set `HYPERVIEW_NO_AUTH=1` to turn the check off. This is for deployments
-  where the container is the trust boundary — a public Hugging Face Space has
-  no way to hand a visitor the token, so every panel add and media fetch 401s
-  without it. Do not set it on a machine other people can reach.
+- Set `HYPERVIEW_NO_AUTH=1` to declare the server public — a Hugging Face
+  Space has no way to hand a visitor a token, so panel adds 401 without it.
+  Public is not open: anonymous callers keep the viewer commands
+  (`workspace.panel.*`, `panel.*`, `collection.*`, selection, active layout)
+  and get 403 on provider registration, extension install, `tools run`, and
+  embedding/layout compute. Drive those with a token, not by widening the flag.
 
 Read [references/commands.md](references/commands.md) for command recipes covering datasets, workspaces, providers, embeddings, layouts, paper figures, runtime UI state, selections, and jobs.
 Read [references/panel-modules.md](references/panel-modules.md) when the task involves authoring a browser panel module.
