@@ -7,12 +7,21 @@ HyperView turns image datasets into live embedding workspaces. Load samples, com
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Hyper3Labs/HyperView) [![Open in HF Spaces](https://huggingface.co/datasets/huggingface/badges/resolve/main/open-in-hf-spaces-sm.svg)](https://huggingface.co/spaces/hyper3labs/HyperView) [![Discord](https://img.shields.io/badge/Discord-hyper%C2%B3labs-5865F2?logo=discord&logoColor=white)](https://discord.gg/Za3rBkTPSf)
 
 <p align="center">
-  <a href="https://huggingface.co/spaces/hyper3labs/HyperView" target="_blank">
+  <a href="https://hyper3labs.github.io/spaces/abo-catalog/" target="_blank">
     <img src="https://raw.githubusercontent.com/Hyper3Labs/HyperView/main/assets/screenshot.png" alt="HyperView screenshot" width="100%">
   </a>
   <br>
-  <a href="https://huggingface.co/spaces/hyper3labs/HyperView" target="_blank">Try the live demo on Hugging Face Spaces</a>
+  <strong><a href="https://hyper3labs.github.io/spaces/abo-catalog/" target="_blank">Open a live workspace in your browser</a></strong> — no install, no backend
 </p>
+
+Six prepared workspaces, each exported with `hyperview export` and served as
+static files:
+[ABO Catalog](https://hyper3labs.github.io/spaces/abo-catalog/) ·
+[Fashion Products](https://hyper3labs.github.io/spaces/fashion-products/) ·
+[Precision Regions](https://hyper3labs.github.io/spaces/precision-regions/) ·
+[Logo Search](https://hyper3labs.github.io/spaces/logo-search/) ·
+[GeoSpatial](https://hyper3labs.github.io/spaces/geospatial/) ·
+[Visual Safety](https://hyper3labs.github.io/spaces/visual-safety/)
 
 ## Install
 
@@ -92,6 +101,7 @@ Embedding failures often hide in the shape of the space: collapsed classes, weak
 
 ## Related Projects
 
+- [hyperview-spaces](https://github.com/Hyper3Labs/hyperview-spaces): Source for the demos above; copy a folder and point it at your own dataset.
 - [hyper-scatter](https://github.com/Hyper3Labs/hyper-scatter): WebGL scatterplot engine for Euclidean and Poincare views.
 - [hyper-models](https://github.com/Hyper3Labs/hyper-models): Non-Euclidean model zoo and ONNX exports.
 - [hyper-lrp](https://github.com/Hyper3Labs/hyper-lrp): Attribution tools for inspecting model evidence.
