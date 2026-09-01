@@ -1,5 +1,44 @@
 # Changelog
 
+## 1.0.0 - 2026-09-01
+
+The v1 release unifies what were four drifting surfaces -- CLI, Python API, HTTP
+control plane, and frontend -- onto one command path, and adds backend-free
+static export so a workspace can ship as a plain web bundle.
+
+### Features
+- Route every mutation through one runtime command path with typed workspace,
+  provider, compute, and extension specs, reachable identically from the CLI,
+  `hyperview.api`, the HTTP control plane, and the panel SDK.
+- Add `hyperview export`, which writes a workspace as a self-contained static
+  bundle: paged collections, sharded samples, optional precomputed similarity,
+  materialized text-search results, and mount-path rebasing so a bundle can be
+  served from a subdirectory.
+- Split representations from indexes, replacing the former single `space_key`
+  with an explicit `--index-id` on retrieval commands.
+- Expand the panel SDK to v2 and move the built-in panels onto it, so shipped
+  and third-party panels use the same hooks; add `useTool`/`listTools` for tool
+  calls through the authenticated path.
+- Add shipped extensions with a core manifest for built-ins and a reference
+  extension that promotes without source changes.
+- Add session-token authentication with a CORS allowlist.
+
+### Fixes
+- Encode text queries correctly: pass list arguments to `embed_query` and
+  resolve text capability per model rather than assuming every space supports
+  text.
+- Normalize legacy provider slugs in text search and resolve providers before
+  consulting the cache.
+- Keep edge-docked runtime panels at their authored size, including under
+  hidden viewports and zero-size measurement races, which previously collapsed
+  walkthrough panels in exported bundles into unreadable slivers.
+
+### Documentation
+- Document the extension, tool, and panel concepts and the boundaries between
+  them; sync the packaged `hyperview-cli` skill to the v1 command surface.
+- Test that the shipped skill and the shipped Python examples resolve against
+  the CLI and API that actually ship.
+
 ## 0.6.2 - 2026-06-08
 
 ### Features
