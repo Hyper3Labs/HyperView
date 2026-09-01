@@ -163,8 +163,20 @@ class EmbeddingEngine:
                     f"Unknown provider: '{spec.provider}'. Available: {', '.join(sorted(available))}"
                 ) from None
 
-        cache_key = spec.content_hash()
-        if cache_key in self._cache:
+        # The spec hash alone is not enough to identify a cached instance. A
+        # custom alias can be re-registered against a different implementation
+        # with overwrite=True, which leaves the spec identical while the thing
+        # it resolves to changes; keying on the spec alone kept serving the
+        # instance built from the previous registration. Engines used to be
+        # discarded after every call, which hid this.
+        cache_key: str | None = spec.content_hash()
+        if custom_registration is not None:
+            identity = getattr(custom_registration, "identity", None)
+            # Without an identity there is no way to tell a re-registered alias
+            # from the one already cached, so skip the cache rather than risk
+            # serving a stale provider. Correct, just not memoized.
+            cache_key = f"{cache_key}:{identity()}" if callable(identity) else None
+        if cache_key is not None and cache_key in self._cache:
             return self._cache[cache_key]
 
         if custom_registration is not None:

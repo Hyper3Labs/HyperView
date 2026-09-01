@@ -39,6 +39,21 @@ class _CanonicalEmbedAnythingProvider:
         return [np.asarray([1.0, 0.0], dtype=np.float32)]
 
 
+class _StubRegistration:
+    """Stands in for a `ProviderRegistration`.
+
+    `get` returns something the engine folds into its cache key, so a bare
+    `object()` is not enough -- it has to answer `identity()` the way a real
+    registration does.
+    """
+
+    def __init__(self, alias: str) -> None:
+        self.alias = alias
+
+    def identity(self) -> str:
+        return f"stub:{self.alias}"
+
+
 class _CanonicalProviderRegistry:
     def __init__(self, provider: Any) -> None:
         self.provider = provider
@@ -46,7 +61,7 @@ class _CanonicalProviderRegistry:
 
     def get(self, alias: str) -> object | None:
         self.requested_aliases.append(alias)
-        return object() if alias == "embed-anything" else None
+        return _StubRegistration(alias) if alias == "embed-anything" else None
 
     def instantiate(self, alias: str, **_kwargs: Any) -> Any:
         assert alias == "embed-anything"

@@ -217,6 +217,22 @@ class ProviderRegistration:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
+    def identity(self) -> str:
+        """What this alias currently resolves to.
+
+        Two registrations of the same alias are interchangeable only when they
+        import the same target with the same defaults. Callers that cache
+        instantiated providers key on this so re-registering an alias replaces
+        the cached instance instead of being ignored.
+        """
+
+        payload = json.dumps(
+            {"import_path": self.import_path, "defaults": self.defaults},
+            sort_keys=True,
+            default=str,
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
 
 class ProviderRegistry:
     """Persistent registry for user-defined embedding providers."""
