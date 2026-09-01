@@ -9,6 +9,7 @@ from hyperview.cli import _http_headers
 from hyperview.runtime import HyperViewRuntime
 from hyperview.server.app import create_app
 from hyperview.server.security import (
+    command_allowed_without_token,
     read_server_info,
     remove_server_info,
     server_info_path,
@@ -183,3 +184,78 @@ def test_discovered_token_never_reaches_a_remote_host(tmp_path, monkeypatch) -> 
     )
 
     remove_server_info(7444, "local-secret")
+
+
+def test_public_server_still_refuses_privileged_commands(monkeypatch) -> None:
+    """HYPERVIEW_NO_AUTH=1 opens the viewer surface, not the whole control plane."""
+
+    monkeypatch.setenv("HYPERVIEW_NO_AUTH", "1")
+    client = TestClient(create_app(runtime=_runtime()))
+
+    # Registering a provider imports an arbitrary module by name.
+    blocked = client.post(
+        "/api/control/provider/register",
+        json={"alias": "pwn", "import_path": "os:system"},
+    )
+    assert blocked.status_code == 403
+    assert "authenticated session" in blocked.json()["detail"]
+
+    # The generic dispatcher must not be a way around the route-level guard.
+    dispatched = client.post(
+        "/api/control/commands/run",
+        json={
+            "command": "provider.register",
+            "target": {"alias": "pwn"},
+            "args": {"import_path": "os:system"},
+        },
+    )
+    assert dispatched.status_code == 403
+
+    for path, payload in (
+        ("/api/control/extensions/install", {"workspace_id": "default", "source": "."}),
+        (
+            "/api/control/embeddings/compute",
+            {"workspace_id": "default", "dataset_name": "d", "model": "x"},
+        ),
+        (
+            "/api/control/layouts/compute",
+            {"workspace_id": "default", "dataset_name": "d", "layouts": ["euclidean"]},
+        ),
+        ("/api/tools/run", {"tool": "anything", "workspace_id": "default", "params": {}}),
+    ):
+        assert client.post(path, json=payload).status_code == 403, path
+
+    # What a Space visitor actually does stays open.
+    allowed = client.post(
+        "/api/control/ui/selection",
+        json={"workspace_id": "default", "sample_ids": []},
+    )
+    assert allowed.status_code == 200
+
+
+def test_public_command_allowlist_covers_viewer_actions() -> None:
+    for command in (
+        "workspace.panel.add",
+        "workspace.panel.state.patch",
+        "workspace.selection.set",
+        "workspace.active-layout.set",
+        "workspace.layout.set",
+        "panel.samples.retrieval.set-text-query",
+        "collection.search.create",
+        "collection.filter.set",
+    ):
+        assert command_allowed_without_token(command), command
+
+    for command in (
+        "provider.register",
+        "provider.unregister",
+        "extension.install",
+        "extension.remove",
+        "embeddings.compute",
+        "layouts.compute",
+        "workspace.create",
+        "workspace.delete",
+        "workspace.activate",
+        "workspace.dataset.set",
+    ):
+        assert not command_allowed_without_token(command), command

@@ -118,3 +118,27 @@ def remove_server_info(port: int, token: str | None) -> None:
         path.unlink(missing_ok=True)
     except OSError:
         pass
+
+
+# Commands a visitor may run on a server that has no session token. They change
+# what the viewer sees -- panels, selection, retrieval, collections -- and
+# nothing else. Everything outside this set stays closed even under
+# HYPERVIEW_NO_AUTH=1, because the rest of the command surface imports
+# arbitrary modules, installs extension code, or starts unbounded compute.
+_PUBLIC_COMMAND_PREFIXES = ("workspace.panel.", "panel.", "collection.")
+_PUBLIC_COMMANDS = frozenset(
+    {
+        "workspace.active-layout.set",
+        "workspace.selection.set",
+        "workspace.state.patch",
+        "workspace.layout-view.set",
+        "workspace.layout.get",
+        "workspace.layout.set",
+    }
+)
+
+
+def command_allowed_without_token(command: str) -> bool:
+    """Return whether an anonymous visitor may run ``command``."""
+
+    return command in _PUBLIC_COMMANDS or command.startswith(_PUBLIC_COMMAND_PREFIXES)

@@ -28,7 +28,11 @@ from hyperview.core.selection import (
     select_ids_for_3d_lasso,
 )
 from hyperview.runtime import HyperViewRuntime
-from hyperview.server.security import auth_disabled, mint_api_token
+from hyperview.server.security import (
+    auth_disabled,
+    command_allowed_without_token,
+    mint_api_token,
+)
 from hyperview.storage.metrics import distance_metric_for_space
 from hyperview.storage.schema import parse_layout_dimension, space_key_from_index_ref
 
@@ -189,6 +193,25 @@ def _control_service(runtime: HyperViewRuntime) -> ControlService:
     return ControlService(runtime, create_default_command_registry())
 
 
+def _require_public_command(command: str) -> None:
+    """Reject a privileged command when the server has no session token.
+
+    HYPERVIEW_NO_AUTH=1 says "this server is public". It must not also mean
+    every visitor can register a provider (an arbitrary module import),
+    install an extension, or queue unbounded compute, so anonymous callers are
+    held to the viewer-facing command surface.
+    """
+
+    if auth_disabled() and not command_allowed_without_token(command):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Command '{command}' needs an authenticated session. This server runs "
+                "with HYPERVIEW_NO_AUTH=1, which allows only viewer-facing commands."
+            ),
+        )
+
+
 def _run_compat_command(
     runtime: HyperViewRuntime,
     command: str,
@@ -198,6 +221,7 @@ def _run_compat_command(
 ) -> CommandResult:
     """Dispatch a legacy write route through the canonical command service."""
 
+    _require_public_command(command)
     result = _control_service(runtime).run(
         CommandEnvelope(command=command, target=target, args=args or {})
     )
@@ -888,6 +912,7 @@ def create_app(
         request: CommandEnvelope,
         runtime_dep: HyperViewRuntime = Depends(get_runtime),
     ):
+        _require_public_command(request.command)
         return _control_service(runtime_dep).run(request).to_dict()
 
     @app.get("/api/tools")
@@ -901,6 +926,16 @@ def create_app(
         request: ToolRunRequest,
         runtime_dep: HyperViewRuntime = Depends(get_runtime),
     ):
+        # Extension tools are author-supplied Python. On a server with no
+        # session token that would be arbitrary code execution for any visitor.
+        if auth_disabled():
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Running extension tools needs an authenticated session. This server "
+                    "runs with HYPERVIEW_NO_AUTH=1, which allows only viewer-facing commands."
+                ),
+            )
         try:
             result = runtime_dep.run_tool(
                 request.tool,
