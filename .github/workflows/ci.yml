@@ -39,6 +39,25 @@ jobs:
       - name: Lint
         run: uv run --extra dev ruff check src tests examples
 
+      # The static-export tests load the packaged bundle and drive frontend
+      # modules through node, so this job needs the same frontend build that
+      # release.yml packages -- not just the separate Frontend job's copy.
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend for packaging tests
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+          rm -rf ../src/hyperview/server/static
+          mkdir -p ../src/hyperview/server/static
+          cp -r out/* ../src/hyperview/server/static/
+
       - name: Test
         run: uv run --extra dev pytest -q
 
