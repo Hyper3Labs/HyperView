@@ -1,9 +1,13 @@
 """HyperView - Open-source dataset curation with hyperbolic embeddings visualization."""
 
 from . import _version as _version
-from ._compat import disable_blocked_datasets_torch_shared_memory
+from ._compat import (
+    disable_blocked_datasets_torch_shared_memory as _disable_blocked_datasets_torch_shared_memory,
+)
 
-disable_blocked_datasets_torch_shared_memory()
+# Aliased on import so it does not read as part of the 1.0 public surface. It is
+# an internal startup workaround, not something callers should depend on.
+_disable_blocked_datasets_torch_shared_memory()
 
 from . import api as _api  # noqa: E402
 from . import ui as ui  # noqa: E402
