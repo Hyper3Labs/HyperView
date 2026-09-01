@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import secrets
@@ -11,6 +12,29 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from hyperview.storage.config import StorageConfig
+
+_LOCAL_HOST_NAMES = frozenset({"localhost", "0.0.0.0", "::"})
+
+
+def is_local_host(host: str | None) -> bool:
+    """Return whether ``host`` names this machine.
+
+    The discovery file records a token some server on *this* machine minted,
+    keyed only by port. Nothing stops a remote host from listening on the same
+    port, so every automatic use of that token has to check where the request
+    is actually going first -- otherwise the CLI hands a local session token to
+    whoever answers.
+    """
+
+    if not host:
+        return False
+    candidate = host.strip("[]").lower()
+    if candidate in _LOCAL_HOST_NAMES:
+        return True
+    try:
+        return ipaddress.ip_address(candidate).is_loopback
+    except ValueError:
+        return False
 
 
 def auth_disabled() -> bool:

@@ -18,7 +18,7 @@ from hyperview.api import Session
 from hyperview.core.selection import OrbitViewState3D
 from hyperview.figures import FigureRenderOptions, render_layout_figure
 from hyperview.runtime import HyperViewRuntime, ProviderRegistry, WorkspaceRegistry
-from hyperview.server.security import read_server_info
+from hyperview.server.security import is_local_host, read_server_info
 from hyperview.static_export import DEFAULT_SIMILARITY_EXPORT_K, export_workspace
 from hyperview.storage.schema import parse_layout_dimension
 
@@ -60,10 +60,15 @@ def _http_headers(url: str, *, content_type: bool = False) -> dict[str, str]:
     token = os.environ.get("HYPERVIEW_API_TOKEN")
     if token is None:
         parsed = urlsplit(url)
-        port = parsed.port or (443 if parsed.scheme == "https" else 80)
-        info = read_server_info(port)
-        discovered_token = info.get("token") if info is not None else None
-        token = discovered_token if isinstance(discovered_token, str) else None
+        # Discovery is keyed by port alone, so it only describes a server on
+        # this machine. A remote host listening on the same port would
+        # otherwise be handed the local session token; make it ask for
+        # HYPERVIEW_API_TOKEN instead.
+        if is_local_host(parsed.hostname):
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            info = read_server_info(port)
+            discovered_token = info.get("token") if info is not None else None
+            token = discovered_token if isinstance(discovered_token, str) else None
     if token:
         headers["Authorization"] = f"Bearer {token}"
     return headers

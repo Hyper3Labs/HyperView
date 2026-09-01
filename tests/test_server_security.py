@@ -152,3 +152,34 @@ def test_server_info_drives_cli_bearer_header_and_cleanup(tmp_path, monkeypatch)
 
     remove_server_info(7444, "discovered-token")
     assert not path.exists()
+
+
+def test_discovered_token_never_reaches_a_remote_host(tmp_path, monkeypatch) -> None:
+    """A remote host on the same port must not be handed the local token."""
+
+    monkeypatch.setenv("HYPERVIEW_DATASETS_DIR", str(tmp_path / "datasets"))
+    monkeypatch.delenv("HYPERVIEW_API_TOKEN", raising=False)
+    write_server_info(7444, "local-secret")
+
+    for local_url in (
+        "http://127.0.0.1:7444/api/runtime",
+        "http://localhost:7444/api/runtime",
+        "http://[::1]:7444/api/runtime",
+        "http://0.0.0.0:7444/api/runtime",
+    ):
+        assert _http_headers(local_url)["Authorization"] == "Bearer local-secret"
+
+    for remote_url in (
+        "https://remote.example:7444/api/runtime",
+        "http://10.0.0.5:7444/api/runtime",
+        "http://[2001:db8::1]:7444/api/runtime",
+    ):
+        assert "Authorization" not in _http_headers(remote_url)
+
+    # A remote server still reachable when the caller supplies the token.
+    monkeypatch.setenv("HYPERVIEW_API_TOKEN", "explicit-token")
+    assert _http_headers("https://remote.example:7444/api/runtime")["Authorization"] == (
+        "Bearer explicit-token"
+    )
+
+    remove_server_info(7444, "local-secret")

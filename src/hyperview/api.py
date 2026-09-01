@@ -24,6 +24,7 @@ from hyperview.runtime import HyperViewRuntime, ProviderRegistry
 from hyperview.server.app import create_app, set_runtime
 from hyperview.server.security import (
     browser_url,
+    is_local_host,
     mint_api_token,
     read_server_info,
     remove_server_info,
@@ -91,6 +92,25 @@ def _resolve_default_launch_layout(dataset: Dataset) -> str:
     if any(space.geometry == "hypersphere" for space in spaces):
         return "spherical:3d"
     return "poincare:2d"
+
+
+def _discover_existing_token(host: str, port: int) -> str | None:
+    """Return the session token for a server this process did not start.
+
+    An explicit ``HYPERVIEW_API_TOKEN`` wins, because it is the only way to
+    reach a server on another machine. Discovery files are keyed by port alone
+    and describe local servers, so they are read only when the connection stays
+    on this machine.
+    """
+
+    explicit = os.environ.get("HYPERVIEW_API_TOKEN")
+    if explicit:
+        return explicit
+    if not is_local_host(host):
+        return None
+    server_info = read_server_info(port)
+    existing_token = server_info.get("token") if server_info is not None else None
+    return existing_token if isinstance(existing_token, str) else None
 
 
 def _view_requires_visualization(view: ui_module.View | None) -> bool:
@@ -165,9 +185,7 @@ class Session:
         if controls_runtime:
             self.api_token = mint_api_token()
         else:
-            server_info = read_server_info(port)
-            existing_token = server_info.get("token") if server_info is not None else None
-            self.api_token = existing_token if isinstance(existing_token, str) else None
+            self.api_token = _discover_existing_token(self._connect_host, port)
         # Prefer a browser-connectable host for user-facing URLs.
         # When binding to 0.0.0.0, users should connect via 127.0.0.1 locally.
         self.url = browser_url(f"http://{self._connect_host}:{port}", self.api_token)
