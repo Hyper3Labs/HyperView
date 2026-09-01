@@ -50,10 +50,16 @@ jobs:
         run: uv build --no-sources
 
       # Smoke test: verify the built package can be imported
+      # A wheel built without the frontend step still imports cleanly; it just
+      # serves a blank page. Assert the assets are actually in there.
       - name: Smoke test (wheel)
         run: |
-          uv run --isolated --no-project --with dist/*.whl \
-            python -c "import hyperview; print(f'hyperview {hyperview.__version__}')"
+          uv run --isolated --no-project --with dist/*.whl python -c "
+          import pathlib, hyperview
+          index = pathlib.Path(hyperview.__file__).parent / 'server' / 'static' / 'index.html'
+          assert index.is_file(), f'wheel is missing the built frontend: {index}'
+          print(f'hyperview {hyperview.__version__} (frontend bundled)')
+          "
 
       - name: Smoke test (sdist)
         run: |
