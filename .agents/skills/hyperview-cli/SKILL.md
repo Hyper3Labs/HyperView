@@ -67,6 +67,21 @@ HyperView currently supports Python 3.10 through 3.13; `--python 3.12` keeps the
 - Paper figure defaults are square, white-background, opaque PNGs with a faint sphere guide and direct labels for small label sets.
 - `hyperview export <workspace-id> --out bundle/` writes a self-contained **Shared Space**: a static frontend + JSON/API/media bundle. It is intentionally read-only with respect to durable workspace and backend/model operations, while keeping normal local exploration available: visitors can browse, select, pan/zoom, switch prepared cases, inspect panels, and use exported precomputed data. Backend-only affordances such as arbitrary text inference are hidden when unavailable. The host identifies this mode with the concise `Shared Space` label.
 
+## Session authentication
+
+A running server mints a session token. Reads are open; runtime commands that
+mutate state answer `401 Missing or invalid HyperView session token` without
+it. This bites agents that talk to `/api/control/commands/run` directly.
+
+- The CLI resolves the token itself, from `HYPERVIEW_API_TOKEN` or from the
+  discovery file `server-<port>.json` next to the datasets directory. Prefer
+  the CLI over raw HTTP and this stays invisible.
+- For raw HTTP, send `Authorization: Bearer <token>` or `?token=<token>`.
+- Set `HYPERVIEW_NO_AUTH=1` to turn the check off. This is for deployments
+  where the container is the trust boundary — a public Hugging Face Space has
+  no way to hand a visitor the token, so every panel add and media fetch 401s
+  without it. Do not set it on a machine other people can reach.
+
 Read [references/commands.md](references/commands.md) for command recipes covering datasets, workspaces, providers, embeddings, layouts, paper figures, runtime UI state, selections, and jobs.
 Read [references/panel-modules.md](references/panel-modules.md) when the task involves authoring a browser panel module.
 Read [references/extensions.md](references/extensions.md) when the task involves packaging or registering custom panel code or Python tools.
