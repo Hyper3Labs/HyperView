@@ -372,6 +372,10 @@ class EmbeddingEngine:
 
 
 _ENGINE: EmbeddingEngine | None = None
+# Attribute the per-registry engine is cached under, on the registry itself. A
+# module-level WeakKeyDictionary cannot work here: the engine holds its registry,
+# so the weak key would never be collected and every engine would leak.
+_REGISTRY_ENGINE_ATTR = "_hyperview_embedding_engine"
 
 
 def get_engine(provider_registry: ProviderRegistry | None = None) -> EmbeddingEngine:
@@ -383,7 +387,16 @@ def get_engine(provider_registry: ProviderRegistry | None = None) -> EmbeddingEn
     """
 
     if provider_registry is not None:
-        return EmbeddingEngine(provider_registry=provider_registry)
+        # Reuse the engine bound to this registry. An engine caches its loaded
+        # embedding functions, so returning a fresh one per call re-downloaded
+        # and re-loaded the model on every text query: the server passes its
+        # runtime registry each time, which made each query reload a full
+        # image+text tower.
+        engine = getattr(provider_registry, _REGISTRY_ENGINE_ATTR, None)
+        if engine is None:
+            engine = EmbeddingEngine(provider_registry=provider_registry)
+            setattr(provider_registry, _REGISTRY_ENGINE_ATTR, engine)
+        return engine
 
     global _ENGINE
     if _ENGINE is None:
