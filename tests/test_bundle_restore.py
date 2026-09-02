@@ -266,6 +266,14 @@ def test_restoring_twice_into_the_same_datasets_dir_reuses_the_dataset(
     _first_runtime, first = restore_bundle(out_dir)
     assert first.reused_dataset is False
 
+    # A row written by an older HyperView, or by a restore of a bundle that has
+    # since moved: a restart has to repair it, not preserve it.
+    stale = Dataset(DATASET_NAME)[sample_ids[0]]
+    stale.media_type = None
+    stale.filepath = "/gone/sample-0.png"
+    stale.label = "stale"
+    Dataset(DATASET_NAME).add_sample(stale)
+
     # A restarted container restores the same bundle against storage that
     # already holds it. Nothing may be duplicated and nothing re-ingested.
     second_runtime, second = restore_bundle(out_dir)
@@ -279,6 +287,11 @@ def test_restoring_twice_into_the_same_datasets_dir_reuses_the_dataset(
     assert [layout.layout_key for layout in dataset.list_layouts()] == [layout_key]
     assert len(dataset._storage.get_embeddings(SPACE_KEY)[0]) == len(sample_ids)
     assert len(dataset.get_visualization_data(layout_key)[0]) == len(sample_ids)
+
+    repaired = dataset[sample_ids[0]]
+    assert repaired.label == "cat"
+    assert repaired.media_type == "image/png"
+    assert Path(repaired.filepath).is_relative_to(out_dir)
 
     workspace = second_runtime.get_workspace(WORKSPACE_ID)
     assert workspace.ui.active_layout_key == layout_key
@@ -313,7 +326,14 @@ def test_restored_runtime_serves_the_workspace_over_http(
 
     media_response = client.get(f"/api/samples/{sample_ids[0]}/content")
     assert media_response.status_code == 200
-    assert media_response.content
+    assert media_response.content.startswith(b"\x89PNG")
+    # The bundle stores media under the sample id with no extension, so the
+    # type has to come from the sample rather than from the path.
+    assert media_response.headers["content-type"] == "image/png"
+
+    thumbnail_response = client.get(f"/api/samples/{sample_ids[0]}/thumbnail")
+    assert thumbnail_response.status_code == 200
+    assert thumbnail_response.headers["content-type"] == "image/jpeg"
 
 
 def test_public_serving_allows_viewer_commands_and_refuses_privileged_ones(

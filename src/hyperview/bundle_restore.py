@@ -9,12 +9,16 @@ layouts, collections, extensions, and the exported view already applied.
 Restore is idempotent. Running it twice against the same
 ``HYPERVIEW_DATASETS_DIR`` reuses the dataset it finds instead of rebuilding
 it, so a container that restarts comes back to the same Space rather than
-re-ingesting on every boot.
+re-ingesting on every boot. Reuse means the storage is kept, not that the
+restore is skipped: rows, vectors, and coordinates are rewritten as upserts,
+which is what keeps a restart correct after the bundle moves on disk or a newer
+HyperView records a field the existing rows do not have.
 """
 
 from __future__ import annotations
 
 import json
+import mimetypes
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -136,6 +140,16 @@ def _sample_from_payload(bundle_dir: Path, payload: dict[str, Any]) -> tuple[Sam
     has_media = media_path.is_file()
     media_missing = bool(payload.get("media_url")) and not has_media
 
+    # The bundle stores media under the sample id with no extension, so the
+    # media type can no longer be guessed from the path. The export kept the
+    # source `filename`, which still carries one; recover the type from there
+    # when the source dataset did not record it.
+    media_type = payload.get("media_type")
+    if not media_type:
+        filename = payload.get("filename")
+        if filename:
+            media_type = mimetypes.guess_type(str(filename))[0]
+
     metadata = payload.get("metadata")
     return (
         Sample(
@@ -146,7 +160,7 @@ def _sample_from_payload(bundle_dir: Path, payload: dict[str, Any]) -> tuple[Sam
             metadata=dict(metadata) if isinstance(metadata, dict) else {},
             width=payload.get("width"),
             height=payload.get("height"),
-            media_type=payload.get("media_type"),
+            media_type=media_type,
             duration_s=payload.get("duration_s"),
             modality=str(payload.get("modality") or "image"),
         ),
@@ -170,21 +184,16 @@ def _restore_dataset(
 
     dataset = Dataset(dataset_name)
     existing = dataset.samples
-    media_root = (bundle_dir / "api" / "samples").resolve()
-    # Reuse only when the dataset already holds exactly these samples *and*
-    # already points at this bundle. An id-only match would leave a restarted
-    # container reading media out of a bundle path that no longer exists.
     already_restored = bool(existing) and {item.id for item in existing} == {
         item.id for item in samples
     }
-    if already_restored:
-        already_restored = all(
-            item.filepath is None or Path(item.filepath).resolve().is_relative_to(media_root)
-            for item in existing
-        )
 
-    if not already_restored:
-        dataset.add_samples(samples, skip_existing=False)
+    # The dataset is reused rather than rebuilt, but its sample rows are always
+    # rewritten from the bundle. The rows are an upsert of already-decoded
+    # records -- no media decoding, no downloads -- so this costs a fraction of
+    # ingestion, and it is what keeps a restart correct when the bundle has
+    # moved on disk or a newer HyperView records a field the old rows lack.
+    dataset.add_samples(samples, skip_existing=False)
 
     fields = dataset_payload.get("fields")
     if isinstance(fields, dict) and fields:
