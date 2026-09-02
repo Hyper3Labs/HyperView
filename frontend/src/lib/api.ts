@@ -24,7 +24,6 @@ let sessionToken: string | null = null;
 declare global {
   interface Window {
     __HYPERVIEW_STATIC__?: boolean;
-    __HYPERVIEW_MOUNT_PATH__?: string;
   }
 }
 
@@ -105,13 +104,9 @@ export function showReadOnlyNotice(): void {
 }
 
 function staticAssetUrl(path: string): string {
-  const normalized = path.replace(/^\/+/, "");
-  const configuredMount = window.__HYPERVIEW_MOUNT_PATH__;
-  if (configuredMount) {
-    const mount = configuredMount === "/" ? "" : configuredMount.replace(/\/+$/, "");
-    return new URL(`${mount}/${normalized}`, window.location.origin).toString();
-  }
-  return new URL(normalized, window.location.href).toString();
+  // Resolve against the document itself, so a bundle works wherever it is
+  // published without being told its own URL prefix at build time.
+  return new URL(path.replace(/^\/+/, ""), window.location.href).toString();
 }
 
 function resolveStaticSampleUrls(sample: Sample): Sample {

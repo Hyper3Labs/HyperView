@@ -279,11 +279,6 @@ def _build_control_parser() -> argparse.ArgumentParser:
         default=DEFAULT_SIMILARITY_EXPORT_K,
         help="Precompute this many neighbors per sample and space (disabled by default).",
     )
-    export_parser.add_argument(
-        "--mount-path",
-        default="/",
-        help="URL path where the static bundle will be hosted (for example /spaces/demo).",
-    )
     _add_json_flag(export_parser)
 
     dataset_parser = subparsers.add_parser("dataset")
@@ -747,7 +742,6 @@ def _run_export_command(args: argparse.Namespace) -> None:
         args.workspace_id,
         args.out,
         similarity_k=args.similarity_k,
-        mount_path=args.mount_path,
     )
     payload = {"export": result.to_dict()}
     if args.json:

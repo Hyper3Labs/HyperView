@@ -377,7 +377,6 @@ class Session:
         *,
         workspace_id: str = "default",
         similarity_k: int = DEFAULT_SIMILARITY_EXPORT_K,
-        mount_path: str = "/",
     ) -> dict[str, Any]:
         """Export a read-only static bundle for a workspace in this session."""
 
@@ -386,7 +385,6 @@ class Session:
             workspace_id,
             out,
             similarity_k=similarity_k,
-            mount_path=mount_path,
         ).to_dict()
 
 

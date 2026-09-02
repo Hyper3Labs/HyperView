@@ -51,7 +51,7 @@ def test_cli_rejects_legacy_top_level_flags(capsys) -> None:
     assert "invalid choice" in capsys.readouterr().err
 
 
-def test_cli_export_passes_mount_path(monkeypatch, tmp_path: Path, capsys) -> None:
+def test_cli_export_forwards_arguments(monkeypatch, tmp_path: Path, capsys) -> None:
     recorded: dict[str, object] = {}
 
     class ExportResult:
@@ -63,40 +63,34 @@ def test_cli_export_passes_mount_path(monkeypatch, tmp_path: Path, capsys) -> No
         warnings: tuple[str, ...] = ()
 
         def to_dict(self) -> dict[str, object]:
-            return {"mount_path": "/spaces/demo"}
+            return {"workspace_id": "demo"}
 
-    def fake_export(
-        workspace_id: str,
-        out: str,
-        *,
-        similarity_k: int,
-        mount_path: str,
-    ) -> ExportResult:
-        recorded.update(
-            workspace_id=workspace_id,
-            out=out,
-            similarity_k=similarity_k,
-            mount_path=mount_path,
-        )
+    def fake_export(workspace_id: str, out: str, *, similarity_k: int) -> ExportResult:
+        recorded.update(workspace_id=workspace_id, out=out, similarity_k=similarity_k)
         return ExportResult()
 
     monkeypatch.setattr("hyperview.cli.export_workspace", fake_export)
 
-    main(
-        [
-            "export",
-            "demo",
-            "--out",
-            str(tmp_path / "bundle"),
-            "--mount-path",
-            "/spaces/demo/",
-            "--json",
-        ]
-    )
+    main(["export", "demo", "--out", str(tmp_path / "bundle"), "--json"])
 
-    assert recorded["mount_path"] == "/spaces/demo/"
-    assert json.loads(capsys.readouterr().out)["export"]["mount_path"] == "/spaces/demo"
+    assert recorded["workspace_id"] == "demo"
+    assert json.loads(capsys.readouterr().out)["export"]["workspace_id"] == "demo"
 
+
+def test_cli_export_rejects_the_removed_mount_path_flag(tmp_path: Path) -> None:
+    """A bundle is location-independent, so the flag must be gone, not ignored."""
+
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "export",
+                "demo",
+                "--out",
+                str(tmp_path / "bundle"),
+                "--mount-path",
+                "/spaces/demo",
+            ]
+        )
 
 def test_cli_provider_and_workspace_commands_use_persistent_registries(
     tmp_path: Path,

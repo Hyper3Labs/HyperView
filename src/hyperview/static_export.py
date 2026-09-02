@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, unquote
+from urllib.parse import quote
 
 from fastapi import HTTPException
 
@@ -30,7 +30,6 @@ SIMILARITY_SHARD_SIZE = 100
 DEFAULT_SIMILARITY_EXPORT_K = 0
 MAX_COLLECTION_EXPORT_K = 100
 STATIC_BUNDLE_SCHEMA_VERSION = 1
-STATIC_MOUNT_PATH_DEFAULT = "/"
 
 
 @dataclass(frozen=True)
@@ -47,7 +46,6 @@ class StaticExportResult:
     similarity_k: int
     num_files: int
     bundle_bytes: int
-    mount_path: str = STATIC_MOUNT_PATH_DEFAULT
     warnings: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
@@ -64,7 +62,6 @@ class StaticExportResult:
             "similarity_k": self.similarity_k,
             "num_files": self.num_files,
             "bundle_bytes": self.bundle_bytes,
-            "mount_path": self.mount_path,
             "warnings": list(self.warnings),
         }
 
@@ -73,7 +70,6 @@ class StaticExportResult:
 class StaticBundleCopyResult:
     source_dir: Path
     output_dir: Path
-    mount_path: str
     num_files: int
     bundle_bytes: int
 
@@ -81,7 +77,6 @@ class StaticBundleCopyResult:
         return {
             "source_dir": str(self.source_dir),
             "output_dir": str(self.output_dir),
-            "mount_path": self.mount_path,
             "num_files": self.num_files,
             "bundle_bytes": self.bundle_bytes,
         }
@@ -123,35 +118,8 @@ def _copy_static_frontend(out_dir: Path) -> None:
     shutil.copytree(static_dir, out_dir, dirs_exist_ok=True)
 
 
-def normalize_static_mount_path(mount_path: str) -> str:
-    """Return a canonical absolute URL path for a mounted static bundle."""
-
-    if not isinstance(mount_path, str) or not mount_path:
-        raise ValueError("mount_path must be a non-empty absolute URL path")
-    if not mount_path.startswith("/"):
-        raise ValueError("mount_path must start with '/'")
-    if "\\" in mount_path or "?" in mount_path or "#" in mount_path:
-        raise ValueError("mount_path must not contain backslashes, a query, or a fragment")
-    if "//" in mount_path:
-        raise ValueError("mount_path must not contain empty path segments")
-    for segment in mount_path.split("/"):
-        decoded = unquote(segment)
-        if decoded in {".", ".."} or "/" in decoded or "\\" in decoded:
-            raise ValueError("mount_path must not contain dot segments or encoded separators")
-    normalized = mount_path.rstrip("/")
-    return normalized or STATIC_MOUNT_PATH_DEFAULT
-
-
-def _mount_prefix(mount_path: str) -> str:
-    return "" if mount_path == STATIC_MOUNT_PATH_DEFAULT else mount_path
-
-
-def _inject_static_config(index_path: Path, mount_path: str) -> None:
-    marker = "window.__HYPERVIEW_STATIC__ = true;"
-    mount_statement = (
-        f"window.__HYPERVIEW_MOUNT_PATH__ = {json.dumps(mount_path)};"
-    )
-    script_body = f"{marker}{mount_statement}"
+def _inject_static_config(index_path: Path) -> None:
+    script_body = "window.__HYPERVIEW_STATIC__ = true;"
     script = f"<script>{script_body}</script>"
     if not index_path.exists():
         raise RuntimeError(f"Frontend index.html is missing from export: {index_path}")
@@ -167,47 +135,6 @@ def _inject_static_config(index_path: Path, mount_path: str) -> None:
     else:
         html = f"{script}\n{html}"
     index_path.write_text(html, encoding="utf-8")
-
-
-def _rebase_frontend_shell(
-    bundle_dir: Path,
-    *,
-    source_mount_path: str,
-    target_mount_path: str,
-) -> None:
-    """Rebase only the copied frontend shell, never exported API/data artifacts."""
-
-    source_prefix = _mount_prefix(source_mount_path)
-    target_prefix = _mount_prefix(target_mount_path)
-    if source_prefix == target_prefix:
-        return
-
-    replacements = (
-        (f"{source_prefix}/_next/", f"{target_prefix}/_next/"),
-        (f"{source_prefix}/icon.svg", f"{target_prefix}/icon.svg"),
-        (f"{source_prefix}/icon.png", f"{target_prefix}/icon.png"),
-        (f"{source_prefix}/favicon.ico", f"{target_prefix}/favicon.ico"),
-    )
-    excluded_root_files = {
-        "hyperview-static.json",
-        "wrangler.jsonc",
-        ".assetsignore",
-    }
-    for path in bundle_dir.rglob("*"):
-        if not path.is_file():
-            continue
-        relative = path.relative_to(bundle_dir)
-        if relative.parts[0] == "api" or relative.name in excluded_root_files:
-            continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue
-        rebased = text
-        for source, target in replacements:
-            rebased = rebased.replace(source, target)
-        if rebased != text:
-            path.write_text(rebased, encoding="utf-8")
 
 
 def _dataset_payload(dataset: Dataset) -> dict[str, Any]:
@@ -755,39 +682,22 @@ def _write_cloudflare_config(out_dir: Path, workspace_id: str) -> str:
     return worker_name
 
 
-def _deployment_payload(
-    out_dir: Path,
-    workspace_id: str,
-    mount_path: str,
-) -> dict[str, Any]:
-    config_path = out_dir / "wrangler.jsonc"
-    assets_ignore_path = out_dir / ".assetsignore"
-    if mount_path == STATIC_MOUNT_PATH_DEFAULT:
-        worker_name = _write_cloudflare_config(out_dir, workspace_id)
-        return {
-            "mount_path": mount_path,
-            "hosting": {"mode": "static-assets"},
-            "cloudflare": {
-                "worker_name": worker_name,
-                "config": "wrangler.jsonc",
-                "command": "npx wrangler deploy --config wrangler.jsonc",
-                "mode": "static-assets-only",
-            },
-        }
+def _deployment_payload(out_dir: Path, workspace_id: str) -> dict[str, Any]:
+    """Describe how to host the bundle.
 
-    config_path.unlink(missing_ok=True)
-    assets_ignore_path.unlink(missing_ok=True)
+    Bundles reference their assets relatively, so one description covers being
+    served at a domain root and being dropped inside a containing site.
+    """
+
+    worker_name = _write_cloudflare_config(out_dir, workspace_id)
     return {
-        "mount_path": mount_path,
-        "hosting": {
-            "mode": "path-mounted-static-assets",
-            "copy_contents_to": mount_path.lstrip("/"),
+        "hosting": {"mode": "static-assets"},
+        "cloudflare": {
+            "worker_name": worker_name,
+            "config": "wrangler.jsonc",
+            "command": "npx wrangler deploy --config wrangler.jsonc",
+            "mode": "static-assets-only",
         },
-        # A static-assets-only Worker maps its asset directory to the origin
-        # root. A path-mounted bundle instead belongs inside a containing
-        # site's document root, so emitting a standalone Wrangler command
-        # here would be incorrect.
-        "cloudflare": None,
     }
 
 
@@ -828,18 +738,12 @@ def _read_static_bundle_manifest(bundle_dir: Path) -> dict[str, Any]:
     return manifest
 
 
-def copy_static_bundle(
-    source: str | Path,
-    out: str | Path,
-    *,
-    mount_path: str = STATIC_MOUNT_PATH_DEFAULT,
-) -> StaticBundleCopyResult:
-    """Copy an existing static bundle and rebase its frontend shell for a URL mount."""
+def copy_static_bundle(source: str | Path, out: str | Path) -> StaticBundleCopyResult:
+    """Copy an existing static bundle onto the packaged frontend."""
 
     source_dir = Path(source).expanduser().resolve()
     out_dir = Path(out).expanduser().resolve()
     manifest = _read_static_bundle_manifest(source_dir)
-    normalized_mount_path = normalize_static_mount_path(mount_path)
     if (
         source_dir == out_dir
         or source_dir in out_dir.parents
@@ -850,31 +754,20 @@ def copy_static_bundle(
     _prepare_output_dir(out_dir)
     shutil.copytree(source_dir, out_dir, dirs_exist_ok=True)
     # Keep reviewed workspace data and custom panel modules, but serve them
-    # through the current packaged frontend. This makes the mount-path
-    # contract reusable for existing exports without regenerating datasets.
+    # through the current packaged frontend.
     _copy_static_frontend(out_dir)
-    # The packaged frontend copied above is always rooted at "/". The source
-    # manifest's mount path describes the replaced shell and must not suppress
-    # rebasing when source and target happen to use the same non-root mount.
-    _rebase_frontend_shell(
-        out_dir,
-        source_mount_path=STATIC_MOUNT_PATH_DEFAULT,
-        target_mount_path=normalized_mount_path,
-    )
-    _inject_static_config(out_dir / "index.html", normalized_mount_path)
+    _inject_static_config(out_dir / "index.html")
 
-    manifest["mount_path"] = normalized_mount_path
+    manifest.pop("mount_path", None)
     manifest["deployment"] = _deployment_payload(
         out_dir,
         str(manifest["workspace"]["id"]),
-        normalized_mount_path,
     )
     _write_json(out_dir / "hyperview-static.json", manifest)
     num_files, bundle_bytes = _bundle_stats(out_dir)
     return StaticBundleCopyResult(
         source_dir=source_dir,
         output_dir=out_dir,
-        mount_path=normalized_mount_path,
         num_files=num_files,
         bundle_bytes=bundle_bytes,
     )
@@ -886,11 +779,9 @@ def export_runtime_workspace(
     out: str | Path,
     *,
     similarity_k: int = DEFAULT_SIMILARITY_EXPORT_K,
-    mount_path: str = STATIC_MOUNT_PATH_DEFAULT,
 ) -> StaticExportResult:
     if similarity_k < 0:
         raise ValueError("similarity_k must be zero or greater")
-    normalized_mount_path = normalize_static_mount_path(mount_path)
     out_dir = Path(out).expanduser().resolve()
     _prepare_output_dir(out_dir)
 
@@ -900,12 +791,7 @@ def export_runtime_workspace(
     dataset = runtime.get_dataset(workspace_id, workspace.dataset_name)
 
     _copy_static_frontend(out_dir)
-    _rebase_frontend_shell(
-        out_dir,
-        source_mount_path=STATIC_MOUNT_PATH_DEFAULT,
-        target_mount_path=normalized_mount_path,
-    )
-    _inject_static_config(out_dir / "index.html", normalized_mount_path)
+    _inject_static_config(out_dir / "index.html")
 
     snapshot = runtime.snapshot(workspace_id)
     # The bundle is scoped to the requested workspace even when the runtime
@@ -951,7 +837,6 @@ def export_runtime_workspace(
         "schema_version": STATIC_BUNDLE_SCHEMA_VERSION,
         "kind": "hyperview-static-space",
         "static": True,
-        "mount_path": normalized_mount_path,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "hyperview_version": __version__,
         "workspace": {
@@ -983,7 +868,6 @@ def export_runtime_workspace(
         "deployment": _deployment_payload(
             out_dir,
             workspace_id,
-            normalized_mount_path,
         ),
         "warnings": warnings,
     }
@@ -1003,7 +887,6 @@ def export_runtime_workspace(
         similarity_k=similarity_k,
         num_files=num_files,
         bundle_bytes=bundle_bytes,
-        mount_path=normalized_mount_path,
         warnings=tuple(warnings),
     )
 
@@ -1013,7 +896,6 @@ def export_workspace(
     out: str | Path,
     *,
     similarity_k: int = DEFAULT_SIMILARITY_EXPORT_K,
-    mount_path: str = STATIC_MOUNT_PATH_DEFAULT,
 ) -> StaticExportResult:
     runtime = HyperViewRuntime()
     try:
@@ -1026,7 +908,6 @@ def export_workspace(
             workspace_id,
             out,
             similarity_k=similarity_k,
-            mount_path=mount_path,
         )
     except HTTPException as exc:
         raise RuntimeError(str(exc.detail)) from exc

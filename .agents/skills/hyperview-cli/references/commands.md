@@ -223,20 +223,12 @@ Export a read-only, self-contained Shared Space for a workspace:
 hyperview export research --out dist/research-demo
 ```
 
-When the bundle will be copied below another static site, declare its stable
-mount path during export:
-
-```bash
-hyperview export research \
-  --out dist/research-demo \
-  --mount-path /spaces/research
-```
-
-The exporter rebases the frontend shell and records `/spaces/research` in
-`hyperview-static.json`. Copy the bundle contents into that exact directory
-inside the containing site's document root. Static API, media, and panel-module
-requests remain scoped to the mounted bundle; no proxy, cookie, or referrer
-routing is required.
+The bundle is location-independent: it references its assets relatively and
+resolves its API, media, and panel modules from the document URL. Serve it at a
+domain root, or copy its contents anywhere inside a containing site's document
+root -- `/spaces/research/`, somewhere deeper, or a different path later -- with
+no re-export and nothing to declare. No proxy, cookie, or referrer routing is
+required.
 
 Sample similarity is omitted by default. Enable a bounded precomputed index
 when the demo exposes nearest-neighbor browsing:

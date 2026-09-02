@@ -18,7 +18,6 @@ from hyperview.runtime import HyperViewRuntime, ProviderRegistry, WorkspaceRegis
 from hyperview.static_export import (
     copy_static_bundle,
     export_runtime_workspace,
-    normalize_static_mount_path,
 )
 from hyperview.storage.schema import representation_id_for_space_key
 
@@ -261,140 +260,75 @@ def test_session_export_uses_runtime_workspace(tmp_path: Path) -> None:
         out_dir,
         workspace_id="demo",
         similarity_k=0,
-        mount_path="/spaces/demo/",
     )
 
     assert payload["workspace_id"] == "demo"
     assert Path(payload["output_dir"]).is_dir()
     assert (out_dir / "hyperview-static.json").is_file()
     assert payload["similarity_k"] == 0
-    assert payload["mount_path"] == "/spaces/demo"
     assert not (out_dir / "api" / "search" / "similar" / "index.json").exists()
 
 
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [
-        ("/", "/"),
-        ("/spaces/demo", "/spaces/demo"),
-        ("/spaces/demo/", "/spaces/demo"),
-    ],
-)
-def test_normalize_static_mount_path(value: str, expected: str) -> None:
-    assert normalize_static_mount_path(value) == expected
+def test_static_export_shell_is_location_independent(tmp_path: Path) -> None:
+    """The bundle must not name its own URL prefix anywhere in the shell."""
 
-
-@pytest.mark.parametrize(
-    "value",
-    [
-        "",
-        "spaces/demo",
-        "//spaces/demo",
-        "/spaces//demo",
-        "/spaces/../demo",
-        "/spaces/%2Fdemo",
-        "/spaces/demo?tab=1",
-        "/spaces/demo#panel",
-        r"/spaces\demo",
-    ],
-)
-def test_normalize_static_mount_path_rejects_unsafe_values(value: str) -> None:
-    with pytest.raises(ValueError):
-        normalize_static_mount_path(value)
-
-
-def test_static_export_mount_path_rebases_shell_but_not_api_data(tmp_path: Path) -> None:
     runtime = _make_runtime(tmp_path)
-    out_dir = tmp_path / "mounted"
+    out_dir = tmp_path / "bundle"
 
-    result = export_runtime_workspace(
-        runtime,
-        "demo",
-        out_dir,
-        mount_path="/spaces/demo/",
-    )
+    export_runtime_workspace(runtime, "demo", out_dir)
 
-    assert result.mount_path == "/spaces/demo"
     index_html = (out_dir / "index.html").read_text(encoding="utf-8")
-    assert 'window.__HYPERVIEW_MOUNT_PATH__ = "/spaces/demo";' in index_html
-    assert 'src="/spaces/demo/_next/' in index_html
-    assert 'href="/spaces/demo/_next/' in index_html
-    assert 'href="/spaces/demo/icon.png' in index_html
+    assert "__HYPERVIEW_MOUNT_PATH__" not in index_html
+    # Relative asset URLs are what make the bundle work under any prefix.
+    assert 'src="./_next/' in index_html
+    assert 'src="/_next/' not in index_html
 
     manifest = json.loads((out_dir / "hyperview-static.json").read_text(encoding="utf-8"))
-    assert manifest["mount_path"] == "/spaces/demo"
-    assert manifest["deployment"]["hosting"] == {
-        "mode": "path-mounted-static-assets",
-        "copy_contents_to": "spaces/demo",
-    }
-    assert manifest["deployment"]["cloudflare"] is None
-    assert not (out_dir / "wrangler.jsonc").exists()
+    assert "mount_path" not in manifest
+    assert manifest["deployment"]["hosting"] == {"mode": "static-assets"}
 
     snapshot = json.loads((out_dir / "api" / "runtime.json").read_text(encoding="utf-8"))
     panels = {panel["id"]: panel for panel in snapshot["workspace"]["ui"]["custom_panels"]}
     assert panels["readout"]["data"]["module_src"].startswith("/api/")
     shard = json.loads(
-        (out_dir / "api" / "samples" / "shards" / "000000.json").read_text(
-            encoding="utf-8"
-        )
+        (out_dir / "api" / "samples" / "shards" / "000000.json").read_text(encoding="utf-8")
     )
     assert shard["samples"][0]["media_url"].startswith("/api/")
 
 
-def test_copy_static_bundle_rebases_existing_reviewed_bundle(tmp_path: Path) -> None:
+def test_copy_static_bundle_reuses_the_packaged_frontend(tmp_path: Path) -> None:
     runtime = _make_runtime(tmp_path)
-    source_dir = tmp_path / "root-bundle"
-    out_dir = tmp_path / "mounted-bundle"
+    source_dir = tmp_path / "source-bundle"
+    out_dir = tmp_path / "copied-bundle"
     export_runtime_workspace(runtime, "demo", source_dir)
     stale_chunk = source_dir / "_next" / "static" / "chunks" / "stale-build.js"
     stale_chunk.parent.mkdir(parents=True, exist_ok=True)
     stale_chunk.write_text("stale", encoding="utf-8")
 
-    result = copy_static_bundle(
-        source_dir,
-        out_dir,
-        mount_path="/spaces/copied/",
-    )
+    copy_static_bundle(source_dir, out_dir)
 
-    assert result.mount_path == "/spaces/copied"
     assert not out_dir.joinpath("_next", "static", "chunks", "stale-build.js").exists()
-    assert source_dir.joinpath("wrangler.jsonc").is_file()
-    assert not out_dir.joinpath("wrangler.jsonc").exists()
-    mounted_index = out_dir.joinpath("index.html").read_text(encoding="utf-8")
-    assert 'window.__HYPERVIEW_MOUNT_PATH__ = "/spaces/copied";' in mounted_index
-    assert 'src="/spaces/copied/_next/' in mounted_index
-    mounted_manifest = json.loads(
+    copied_index = out_dir.joinpath("index.html").read_text(encoding="utf-8")
+    assert "__HYPERVIEW_MOUNT_PATH__" not in copied_index
+    assert 'src="./_next/' in copied_index
+    copied_manifest = json.loads(
         out_dir.joinpath("hyperview-static.json").read_text(encoding="utf-8")
     )
-    assert mounted_manifest["mount_path"] == "/spaces/copied"
-    assert mounted_manifest["warnings"] == []
+    assert "mount_path" not in copied_manifest
+    assert copied_manifest["warnings"] == []
 
 
-def test_copy_static_bundle_preserves_same_non_root_mount_path(tmp_path: Path) -> None:
-    runtime = _make_runtime(tmp_path)
-    source_dir = tmp_path / "source-bundle"
-    out_dir = tmp_path / "mounted-bundle"
-    export_runtime_workspace(
-        runtime,
-        "demo",
-        source_dir,
-        mount_path="/spaces/copied",
-    )
+@pytest.mark.parametrize(
+    "base",
+    [
+        "https://example.test/",
+        "https://example.test/spaces/alpha/",
+        "https://other.test/deeply/nested/demo/",
+    ],
+)
+def test_static_asset_urls_follow_wherever_the_bundle_is_served(base: str) -> None:
+    """The same bundle resolves its own API and media from the document URL."""
 
-    copy_static_bundle(
-        source_dir,
-        out_dir,
-        mount_path="/spaces/copied",
-    )
-
-    mounted_index = out_dir.joinpath("index.html").read_text(encoding="utf-8")
-    assert 'window.__HYPERVIEW_MOUNT_PATH__ = "/spaces/copied";' in mounted_index
-    assert 'src="/spaces/copied/_next/' in mounted_index
-    assert 'src="/_next/' not in mounted_index
-    assert 'href="/_next/' not in mounted_index
-
-
-def test_static_asset_urls_are_scoped_to_the_declared_mount_path() -> None:
     script = r"""
 const fs = require("fs");
 const ts = require("./frontend/node_modules/typescript");
@@ -404,27 +338,25 @@ const compiled = ts.transpileModule(source, {
   fileName: "api.ts",
 }).outputText;
 
+const base = new URL(process.argv[1]);
 global.window = {
   __HYPERVIEW_STATIC__: true,
-  __HYPERVIEW_MOUNT_PATH__: "/spaces/alpha",
-  location: {
-    href: "https://example.test/spaces/alpha/",
-    origin: "https://example.test",
-  },
+  location: { href: base.href, origin: base.origin },
   dispatchEvent: () => {},
 };
 const requests = [];
 global.fetch = async (url) => {
   requests.push(String(url));
   const path = new URL(url).pathname;
+  const prefix = base.pathname;
   const payloads = {
-    "/spaces/alpha/api/dataset.json": { name: "mounted", spaces: [], layouts: [] },
-    "/spaces/alpha/api/samples/index.json": {
+    [prefix + "api/dataset.json"]: { name: "mounted", spaces: [], layouts: [] },
+    [prefix + "api/samples/index.json"]: {
       total: 1,
       shard_size: 500,
       shards: [{ path: "shards/000000.json", offset: 0, count: 1 }],
     },
-    "/spaces/alpha/api/samples/shards/000000.json": {
+    [prefix + "api/samples/shards/000000.json"]: {
       total: 1,
       offset: 0,
       limit: 500,
@@ -457,7 +389,7 @@ new Function("exports", "require", "module", "__filename", "__dirname", compiled
 });
 """
     completed = subprocess.run(
-        ["node", "-e", script],
+        ["node", "-e", script, base],
         cwd=Path(__file__).parents[1],
         check=True,
         capture_output=True,
@@ -465,16 +397,12 @@ new Function("exports", "require", "module", "__filename", "__dirname", compiled
     )
     result = json.loads(completed.stdout)
     assert result["requests"] == [
-        "https://example.test/spaces/alpha/api/dataset.json",
-        "https://example.test/spaces/alpha/api/samples/index.json",
-        "https://example.test/spaces/alpha/api/samples/shards/000000.json",
+        f"{base}api/dataset.json",
+        f"{base}api/samples/index.json",
+        f"{base}api/samples/shards/000000.json",
     ]
-    assert result["sample"]["media_url"] == (
-        "https://example.test/spaces/alpha/api/samples/sample-0/content"
-    )
-    assert result["sample"]["thumbnail_url"] == (
-        "https://example.test/spaces/alpha/api/samples/sample-0/thumbnail"
-    )
+    assert result["sample"]["media_url"] == f"{base}api/samples/sample-0/content"
+    assert result["sample"]["thumbnail_url"] == f"{base}api/samples/sample-0/thumbnail"
 
 
 def test_static_export_warns_when_sample_media_is_missing(tmp_path: Path) -> None:
