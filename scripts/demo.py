@@ -4,7 +4,6 @@
 import argparse
 import os
 
-
 DATASET_NAME = "cifar10_demo"
 HF_DATASET = "uoft-cs/cifar10"
 HF_SPLIT = "train"
