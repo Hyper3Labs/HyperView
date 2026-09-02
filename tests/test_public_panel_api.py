@@ -169,11 +169,14 @@ def _add_layout(
     geometry: str,
     method: str = "umap",
     layout_dimension: int = 2,
+    modality: str = "image",
+    space_key: str | None = None,
 ) -> str:
     space = dataset._storage.ensure_space(
         model_id,
         dim=8,
-        config={"provider": provider, "geometry": geometry, "modality": "image"},
+        config={"provider": provider, "geometry": geometry, "modality": modality},
+        space_key=space_key,
     )
     layout_key = make_layout_key(
         space.space_key,
@@ -212,6 +215,7 @@ def test_list_layouts_describes_what_produced_each_layout() -> None:
     assert record.geometry == "poincare"
     assert record.dimension == 2
     assert record.method == "umap"
+    assert record.modality == "image"
     assert record.params == {"n_neighbors": 15}
     assert record.sample_count == 6
     assert record.space_id == record.space_key
@@ -239,6 +243,36 @@ def test_find_layout_matches_the_description_instead_of_a_pinned_key() -> None:
     assert dataset.find_layout(geometry="euclidean") == euclidean
     assert dataset.find_layout(provider="hyper-models", dimension=2) == poincare
     assert dataset.find_layout(method="umap", geometry="poincare") == poincare
+
+
+def test_find_layout_separates_two_spaces_of_one_model_by_modality() -> None:
+    dataset = _make_dataset(f"find_layout_modality_{uuid4().hex}")
+    image_only = _add_layout(
+        dataset,
+        model_id="hyper3-clip-v0.5",
+        provider="hyper-models",
+        geometry="poincare",
+        modality="image",
+        space_key="hyper3-clip-v0_5__image",
+    )
+    multimodal = _add_layout(
+        dataset,
+        model_id="hyper3-clip-v0.5",
+        provider="hyper-models",
+        geometry="poincare",
+        modality="multimodal",
+        space_key="hyper3-clip-v0_5__multimodal",
+    )
+    assert image_only != multimodal
+
+    assert dataset.find_layout(model="hyper3-clip-v0.5", modality="image") == image_only
+    assert dataset.find_layout(model="hyper3-clip-v0.5", modality="multimodal") == multimodal
+
+    # Without the modality the two are indistinguishable, and the error says so.
+    with pytest.raises(ValueError) as error:
+        dataset.find_layout(model="hyper3-clip-v0.5", geometry="poincare")
+    assert "modality=image" in str(error.value)
+    assert "modality=multimodal" in str(error.value)
 
 
 def test_find_layout_returns_none_when_nothing_matches() -> None:

@@ -240,6 +240,18 @@ class LayoutRecord(LayoutInfo):
         return space.provider if space is not None else None
 
     @property
+    def modality(self) -> str | None:
+        """What the embedding space was computed over: ``image``, ``text``, or
+        ``multimodal``.
+
+        The same model often has both an image-only and a multimodal space in
+        one dataset, and only the modality tells them apart.
+        """
+
+        space = self._spaces.get(self.space_key)
+        return space.modality if space is not None else None
+
+    @property
     def key(self) -> str:
         """The layout key, as passed to ``hv.ui.Scatter(layout_key=...)``."""
 
@@ -268,6 +280,7 @@ class LayoutRecord(LayoutInfo):
             **super().to_api_dict(),
             "model_id": self.model_id,
             "provider": self.provider,
+            "modality": self.modality,
             "layout_dimension": self.layout_dimension,
         }
 
@@ -276,8 +289,9 @@ class LayoutRecord(LayoutInfo):
 
         return (
             f"{self.layout_key} (model={self.model_id}, provider={self.provider}, "
-            f"geometry={self.geometry}, dimension={self.dimension}, "
-            f"method={self.method}, samples={self.sample_count})"
+            f"modality={self.modality}, geometry={self.geometry}, "
+            f"dimension={self.dimension}, method={self.method}, "
+            f"samples={self.sample_count})"
         )
 
 
@@ -983,6 +997,7 @@ class Dataset:
         *,
         model: str | None = None,
         provider: str | None = None,
+        modality: str | None = None,
         geometry: str | None = None,
         dimension: int | None = None,
         method: str | None = None,
@@ -998,6 +1013,10 @@ class Dataset:
         Args:
             model: Model id the embedding space was computed with.
             provider: Embedding provider alias, e.g. ``"hyper-models"``.
+            modality: What the embedding space covers: ``image``, ``text``, or
+                ``multimodal``. One model often has both an image-only and a
+                multimodal space in the same dataset, and nothing else
+                separates their layouts.
             geometry: Layout geometry: ``euclidean``, ``poincare``, or ``spherical``.
             dimension: Layout dimension, 2 or 3.
             method: Projection method, e.g. ``"umap"`` or ``"pca"``.
@@ -1013,6 +1032,7 @@ class Dataset:
         criteria: dict[str, Any] = {
             "model": model,
             "provider": provider,
+            "modality": modality,
             "geometry": geometry,
             "dimension": dimension,
             "method": method,
@@ -1022,6 +1042,7 @@ class Dataset:
             for record in self.list_layouts()
             if (model is None or record.model_id == model)
             and (provider is None or record.provider == provider)
+            and (modality is None or record.modality == modality)
             and (geometry is None or record.geometry == geometry)
             and (dimension is None or record.dimension == dimension)
             and (method is None or record.method == method)
