@@ -1,18 +1,29 @@
-"""Static workspace export for read-only HyperView demos."""
+"""Bundle export for HyperView workspaces.
+
+One export produces one bundle. The same folder hosts two ways: as a **Static
+Space** (files on a static host, read-only, no Python) and as a **Live Space**
+(``hyperview serve --from <bundle>`` in a container, backed by a real runtime).
+The artifacts under ``api/`` serve the Static Space; the artifacts under
+``restore/`` plus ``extensions/`` carry what a Live Space needs and a browser
+does not -- embedding vectors and full extension folders.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import io
 import json
+import platform
 import re
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+import numpy as np
 from fastapi import HTTPException
 
 from hyperview._version import __version__
@@ -30,6 +41,14 @@ SIMILARITY_SHARD_SIZE = 100
 DEFAULT_SIMILARITY_EXPORT_K = 0
 MAX_COLLECTION_EXPORT_K = 100
 STATIC_BUNDLE_SCHEMA_VERSION = 1
+# Versions the restore contract, independently of the Static Space schema.
+# `schema_version` stays at 1 because restore only adds manifest keys and
+# bundle paths; every field a Static Space consumer already reads is unchanged,
+# and `_read_static_bundle_manifest` rejects any other `schema_version`.
+RESTORE_SCHEMA_VERSION = 1
+RESTORE_DIR = "restore"
+BUNDLE_EXTENSIONS_DIR = "extensions"
+SAMPLE_MEDIA_FILENAME = "content"
 
 
 @dataclass(frozen=True)
@@ -461,6 +480,134 @@ def _write_embeddings(out_dir: Path, dataset: Dataset) -> int:
     return len(layouts)
 
 
+def _producer_payload() -> dict[str, Any]:
+    """Record what produced the vectors in this bundle.
+
+    A restored Live Space answers typed text queries by encoding the query with
+    the same model that produced the stored sample vectors. When that model
+    lives in `hyper-models`, the version that wrote the vectors is the only
+    thing that says whether a given container can reproduce them.
+    """
+
+    try:
+        hyper_models_version: str | None = importlib_metadata.version("hyper-models")
+    except importlib_metadata.PackageNotFoundError:
+        hyper_models_version = None
+    return {
+        "hyperview": __version__,
+        "hyper_models": hyper_models_version,
+        "python": platform.python_version(),
+    }
+
+
+def _write_restore_embeddings(out_dir: Path, dataset: Dataset) -> list[dict[str, Any]]:
+    """Write per-space sample vectors and describe them for restore.
+
+    A Static Space never reads these: the browser only needs layout coordinates
+    and, optionally, a precomputed neighbor index. A Live Space does, because
+    answering a typed text query means encoding the query and searching the
+    sample vectors in the model's own space -- which cannot be reconstructed
+    from a 2D projection.
+
+    Vectors go to compressed ``.npz`` rather than JSON: a float32 array of
+    100k x 512 is roughly 200MB packed and about five times that as decimal
+    text, and the values round-trip exactly either way.
+    """
+
+    entries: list[dict[str, Any]] = []
+    for space in dataset.list_spaces():
+        ids, vectors = dataset._storage.get_embeddings(space.space_key)
+        vector_array = np.asarray(vectors, dtype=np.float32)
+        if len(ids) == 0:
+            vector_array = np.empty((0, space.dim), dtype=np.float32)
+
+        relative = f"{RESTORE_DIR}/spaces/{quote(space.space_key, safe='')}/vectors.npz"
+        target = out_dir / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("wb") as handle:
+            np.savez_compressed(
+                handle,
+                ids=np.asarray(list(ids), dtype=np.str_),
+                vectors=vector_array,
+            )
+
+        entries.append(
+            {
+                "space_key": space.space_key,
+                "model_id": space.model_id,
+                "dim": space.dim,
+                "count": len(ids),
+                "provider": space.provider,
+                "geometry": space.geometry,
+                "modality": space.modality,
+                "index_id": space.index_id,
+                "representation_id": space.representation_id,
+                "config": space.config,
+                "vectors": relative,
+            }
+        )
+    return entries
+
+
+def _restore_layout_payload(dataset: Dataset) -> list[dict[str, Any]]:
+    """Describe layouts against the coordinate files the export already wrote."""
+
+    return [
+        {
+            "layout_key": layout.layout_key,
+            "space_key": layout.space_key,
+            "method": layout.method,
+            "geometry": layout.geometry,
+            "params": layout.params,
+            "count": layout.count,
+            "coords": f"api/embeddings/{quote(layout.layout_key, safe='')}.json",
+        }
+        for layout in dataset.list_layouts()
+    ]
+
+
+def _copy_extension_folders(out_dir: Path, runtime: HyperViewRuntime) -> list[dict[str, Any]]:
+    """Copy every installed extension's full folder into the bundle.
+
+    ``_copy_panel_modules`` publishes only the browser-loadable panel source a
+    Static Space can execute, and deliberately drops ``.py`` and ``.toml``. A
+    Live Space runs the extension for real, so it needs the manifest, the
+    Python tools, and any assets -- the whole folder, installed through the
+    normal ``install_extension`` path on restore.
+
+    Every installed extension is copied, not only the ones the view renders:
+    the runtime snapshot lists all of their tools and panel definitions, so
+    restoring less than all of them would not reproduce the snapshot.
+    """
+
+    entries: list[dict[str, Any]] = []
+    for installation in runtime.list_extensions():
+        name = installation.manifest.name
+        source = installation.manifest.folder
+        if not source.is_dir():
+            continue
+        relative = f"{BUNDLE_EXTENSIONS_DIR}/{name}"
+        target = out_dir / relative
+        if target.exists():
+            shutil.rmtree(target)
+        shutil.copytree(
+            source,
+            target,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".git"),
+        )
+        entries.append(
+            {
+                "name": name,
+                "path": relative,
+                "source": installation.source,
+                "workspace_id": installation.workspace_id,
+                "add_panels": installation.add_panels,
+                "panels": list(installation.panel_ids),
+            }
+        )
+    return entries
+
+
 def _write_similarity(out_dir: Path, dataset: Dataset, *, k: int) -> int:
     spaces = dataset.list_spaces()
     if not spaces or k <= 0:
@@ -718,6 +865,12 @@ def _bundle_stats(out_dir: Path) -> tuple[int, int]:
     return len(files), sum(path.stat().st_size for path in files)
 
 
+def read_bundle_manifest(bundle_dir: str | Path) -> dict[str, Any]:
+    """Read and validate a bundle's ``hyperview-static.json`` manifest."""
+
+    return _read_static_bundle_manifest(Path(bundle_dir).expanduser().resolve())
+
+
 def _read_static_bundle_manifest(bundle_dir: Path) -> dict[str, Any]:
     manifest_path = bundle_dir / "hyperview-static.json"
     if not bundle_dir.is_dir() or not manifest_path.is_file():
@@ -833,6 +986,9 @@ def export_runtime_workspace(
     num_similarity_queries = _write_similarity(out_dir, dataset, k=similarity_k)
     _copy_panel_modules(out_dir, runtime, workspace_id, compatible_panel_ids)
 
+    restore_spaces = _write_restore_embeddings(out_dir, dataset)
+    restore_extensions = _copy_extension_folders(out_dir, runtime)
+
     manifest = {
         "schema_version": STATIC_BUNDLE_SCHEMA_VERSION,
         "kind": "hyperview-static-space",
@@ -869,6 +1025,30 @@ def export_runtime_workspace(
             out_dir,
             workspace_id,
         ),
+        "producer": _producer_payload(),
+        "restore": {
+            "schema_version": RESTORE_SCHEMA_VERSION,
+            "supported": True,
+            "workspace_id": workspace_id,
+            "dataset": {
+                "name": workspace.dataset_name,
+                "num_samples": len(dataset),
+                "samples": "api/samples/index.json",
+                "fields": "api/dataset.json",
+            },
+            "media": {
+                "root": "api/samples",
+                "filename": SAMPLE_MEDIA_FILENAME,
+            },
+            "spaces": restore_spaces,
+            "layouts": _restore_layout_payload(dataset),
+            "collections": [
+                str(collection.get("id"))
+                for collection in snapshot.get("workspace", {}).get("collections", [])
+                if isinstance(collection, dict) and collection.get("id")
+            ],
+            "extensions": restore_extensions,
+        },
         "warnings": warnings,
     }
     _write_json(out_dir / "hyperview-static.json", manifest)
