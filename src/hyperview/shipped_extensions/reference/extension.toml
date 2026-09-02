@@ -1,5 +1,5 @@
 name = "reference"
-description = "HyperView v1 extension contract reference"
+description = "Reference extension: the panel SDK v2 contract plus a Python tool"
 
 [[tools]]
 file = "tools.py"
