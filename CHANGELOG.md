@@ -1,5 +1,54 @@
 # Changelog
 
+## 1.1.0 - 2026-09-02
+
+One workspace, two Spaces. `hyperview export` writes a bundle, and that folder
+now hosts two ways: as a **Static Space** (files on any static host) or as a
+**Live Space** (`hyperview serve --from bundle/` in a container). `hyperview
+publish` ships either to Hugging Face, Cloudflare, or a directory. Demo scripts
+no longer need workarounds to wire panels and extensions.
+
+### Features
+- Add `hyperview serve --from <bundle> [--public]` and `hv.launch(from_bundle=)`,
+  which restore a bundle's dataset, embedding spaces, layouts, collections,
+  extensions, and exported view under the same ids and keys; restore is
+  idempotent across container restarts. Bundles now carry per-space sample
+  vectors under `restore/` and each extension's full folder under
+  `extensions/`, plus `restore` and `producer` manifest sections.
+- Add `hyperview publish <bundle> --to hf:<owner>/<name> --mode static|live`,
+  `--to cloudflare`, and `--to dir:<path>`, with `--dry-run`. Live mode
+  generates the Dockerfile and Space README from the manifest.
+- Add `Session.create_collection`, `Session.list_collections`,
+  `Dataset.find_layout`, and `Dataset.list_layouts`, so a script no longer
+  creates collections through a UI side effect or pins layout keys as hashes.
+- Add `hv.ui.Panel(panel_type=...)` as the placement primitive, `hv.ui.Explorer`,
+  `state=` on every panel, typed props on `hv.ui.Samples` and `hv.ui.Scatter`,
+  `hv.launch(extensions=[...])`, and panel-type validation in `apply_view`.
+- Expose `components` (`Panel`, `PanelHeader`, `PanelToolbar`, and toolbar
+  buttons) on the panel SDK global, and publish the SDK surface as
+  `hyperview.panel_sdk_surface()` so conformance checkers stop copying it.
+- Accept an optional panel target on `collection.filter.set`,
+  `collection.selection.set`, and `collection.neighbors.create`, so any panel
+  instance can own a collection-backed view.
+- Make bundles location-independent: assets resolve relative to the document,
+  and `--mount-path` is gone.
+
+### Fixes
+- Route Static Space collection commands to the panel that issued them instead
+  of always writing the samples panel's state.
+- Keep the scatter definition in a Static Space without layouts, marked
+  `static_compatible=false`, instead of deleting it.
+- Copy extension folders into a bundle exported from the CLI, where the bare
+  runtime previously saw no installed extensions.
+- Serve restored media with the sample's recorded media type.
+- Never send the local session token to a remote host that shares a port.
+- Scope `HYPERVIEW_NO_AUTH=1` to the viewer surface: provider registration,
+  extension install, tool execution, and compute answer 403 on a public server.
+
+### Naming
+- The read-only host mode is a **Static Space**; "Shared Space", "Shared View",
+  and "static demo" are retired.
+
 ## 1.0.0 - 2026-09-01
 
 The v1 release unifies what were four drifting surfaces -- CLI, Python API, HTTP
