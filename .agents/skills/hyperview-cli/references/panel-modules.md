@@ -23,11 +23,19 @@ visual design. Panel authors are free to create any JSX, CSS, SVG, Canvas, or
 WebGL interface appropriate to the task. Prefer public hooks only; never call
 private runtime/frontend internals from an extension panel.
 
-Panels may use their own visual system. When matching the host is useful,
-HyperView exposes resolved optional color tokens: `--hv-color-background`,
-`--hv-color-foreground`, `--hv-color-surface`, `--hv-color-surface-muted`,
-`--hv-color-border`, `--hv-color-accent`, `--hv-color-accent-contrast`, and
-`--hv-color-muted-foreground`. These are conveniences, not required styling.
+Panels may use their own visual system. When matching the host is useful, there
+are two conveniences, neither required.
+
+`HyperViewPanelSDK.components` is the panel chrome the built-in panels are made
+of: `Panel`, `PanelHeader`, `PanelToolbar`, `PanelToolbarButton`, and
+`PanelToolbarIconButton`. Reach for these when a panel should read as part of
+the workspace; they track the host's theme on their own, so a panel built from
+them does not drift when the theme changes.
+
+For a panel with its own visual system, HyperView also exposes resolved color
+tokens: `--hv-color-background`, `--hv-color-foreground`, `--hv-color-surface`,
+`--hv-color-surface-muted`, `--hv-color-border`, `--hv-color-accent`,
+`--hv-color-accent-contrast`, and `--hv-color-muted-foreground`.
 
 Use this surface for browser panel code. Package it as an extension even
 when it does not need Python tools. If the task is to open several panels in a
@@ -35,10 +43,24 @@ particular arrangement, use a workspace view from Python
 (`hv.ui.View(...)` with `hv.launch(..., view=...)`) or the CLI `hyperview ui ...`
 commands.
 
-An explicit view containing only `hv.ui.Samples` and/or
-`hv.ui.ExtensionPanel` works directly from dataset records and does not need a
-dummy embedding or layout. A view containing `hv.ui.Scatter` still requires a
-real layout or embedding space.
+A view that contains no `hv.ui.Scatter` works directly from dataset records and
+does not need a dummy embedding or layout. A view containing `hv.ui.Scatter`
+still requires a real layout or embedding space.
+
+Register the extension before applying the view. An extension panel type does
+not exist until its extension is registered, so pass the extension to the call
+that applies the view:
+
+```python
+session = hv.launch(dataset, block=False, extensions=[".hyperview/extensions/catalog-readout"])
+session.ui.apply_view(view)
+```
+
+`session.ui.apply_view(view, extensions=[...])` does the same for a session that
+is already running. Each entry is a path to an extension folder or the name of
+an extension shipped with HyperView. Applying a view validates every panel type
+first, so a panel type nothing registers fails with a message naming it and
+listing what is registered.
 
 ## Panel Module Contract
 
@@ -73,11 +95,41 @@ export default function MyPanel() {
 }
 ```
 
+A panel built from the shared chrome looks like this:
+
+```jsx
+const sdk = globalThis.HyperViewPanelSDK;
+const { React, components, hooks } = sdk;
+const { Panel, PanelHeader, PanelToolbar, PanelToolbarButton } = components;
+const { usePanelState, useSamples } = hooks;
+
+export default function CasePanel() {
+  const { props } = usePanelState();
+  const { total } = useSamples(props.collectionId);
+
+  return (
+    <Panel>
+      <PanelHeader title="Cases" />
+      <PanelToolbar
+        items={[{ id: "count", label: "Samples", value: String(total) }]}
+        actions={<PanelToolbarButton onClick={() => {}}>Reset</PanelToolbarButton>}
+      />
+      <div style={{ padding: 12, overflow: "auto" }}>…</div>
+    </Panel>
+  );
+}
+```
+
+`PanelToolbar` takes `items` (each `{ id, label, value }`, or a `kind: "select"`
+item with `options` and `onValueChange`) and an `actions` node on the right.
+
 ## Stable SDK Surface
 
 Current global SDK fields:
 
 - `React`
+- `components.Panel`, `components.PanelHeader`, `components.PanelToolbar`,
+  `components.PanelToolbarButton`, `components.PanelToolbarIconButton`
 - `hooks.useCommandClient()`
 - `hooks.usePanelState()`
 - `hooks.usePanelActions()`
@@ -167,6 +219,34 @@ export default function LabelCountsPanel() {
   return <pre>{JSON.stringify(result, null, 2)}</pre>;
 }
 ```
+
+## Native Panel Props
+
+The two native panels HyperView views place most often have typed props. The
+runtime validates them when the view is applied, so a misspelled `mode` or a
+boolean passed as a string fails there rather than rendering the wrong thing in
+the browser. Props the schema does not name still pass through untouched — a
+panel may accept anything its renderer understands.
+
+`hv.ui.Samples` takes the documented props as keyword arguments, in snake_case,
+and maps them to the camelCase the renderer reads:
+
+| Python keyword | Prop | Meaning |
+|---|---|---|
+| `mode=` | `mode` | `auto`, `browse`, `ranked`, or `results` |
+| `collection_id=` | `collectionId` | Collection the panel opens on |
+| `anchor_sample_id=` | `anchorSampleId` | Anchor shown above a prepared collection |
+| `label_field=` | `labelField` | Metadata key used as the tile title |
+| `show_text_search=` | `showTextSearch` | Show the live query bar |
+| `rank=` | `rank` | `{anchor_sample_id, layout_key, space_key, k, source, show_distance}` |
+
+```python
+hv.ui.Samples(id="results", mode="results", collection_id=collection_id, show_text_search=True)
+```
+
+`hv.ui.Scatter` takes `preset=` and `presets=` the same way; its layout binding
+(`layout_key=`, `geometry=`, `layout_dimension=`) stays where it is, as panel
+placement rather than props.
 
 ## Placement
 

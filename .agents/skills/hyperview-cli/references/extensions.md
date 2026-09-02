@@ -119,7 +119,8 @@ sibling prop updates, panel state) over visual polish.
 const sdk = globalThis.HyperViewPanelSDK;
 if (!sdk) throw new Error("HyperViewPanelSDK is not available on window.");
 
-const { React, hooks } = sdk;
+const { React, components, hooks } = sdk;
+const { Panel, PanelHeader, PanelToolbar } = components;
 const { useSelection, usePanelState } = hooks;
 
 export default function SelectionProfilePanel() {
@@ -132,17 +133,21 @@ export default function SelectionProfilePanel() {
   }, [patchState, selectionKey]);
 
   return (
-    <main style={{ padding: 12, font: "12px system-ui" }}>
-      <div>{`Selected: ${selectedIds.length}`}</div>
-      <pre>{JSON.stringify(state, null, 2)}</pre>
-    </main>
+    <Panel>
+      <PanelHeader title="Selection profile" />
+      <PanelToolbar items={[{ id: "count", label: "Selected", value: String(selectedIds.length) }]} />
+      <pre style={{ padding: 12, overflow: "auto" }}>{JSON.stringify(state, null, 2)}</pre>
+    </Panel>
   );
 }
 ```
 
 Available SDK hooks are intentionally thin: `useCommandClient`, `usePanelState`,
 `usePanelActions`, `useSelection`, `useSampleResults`, `useCollection`,
-`useSamples`, `useTool`, `listTools`, and `useHostAdapter`. See
+`useSamples`, `useTool`, `listTools`, and `useHostAdapter`. `sdk.components`
+carries the panel chrome the built-in panels use: `Panel`, `PanelHeader`,
+`PanelToolbar`, `PanelToolbarButton`, `PanelToolbarIconButton`. A panel is
+still free to render anything it wants instead. See
 [panel-modules.md](panel-modules.md) for return shapes.
 
 For dataset-wide panel behavior, prefer runtime collections and
@@ -239,25 +244,59 @@ Compose a demo view from Python:
 ```python
 import hyperview as hv
 
+# Register the extension with the call that launches the runtime. An extension
+# panel type does not exist until its extension is registered, and the view
+# below places one.
+session = hv.launch(
+    dataset,
+    block=False,
+    open_browser=False,
+    extensions=[".hyperview/extensions/catalog-readout"],
+)
+
+# Layout keys carry a content hash, so describe the layout instead of pinning
+# its key as a constant that a rebuild invalidates.
+clip_layout = dataset.find_layout(provider="embed-anything", geometry="euclidean")
+hycoclip_layout = dataset.find_layout(model="hycoclip-vit-s", geometry="poincare")
+
+# A collection is a durable, ordered set of samples a panel can open on.
+top_matches = session.create_collection(match_ids, name="Top matches")
+
 view = hv.ui.View(
     hv.ui.Horizontal(
         hv.ui.Scatter("clip-map", title="CLIP", layout_key=clip_layout),
         hv.ui.Scatter("hycoclip-map", title="HyCoCLIP", layout_key=hycoclip_layout),
     ),
+    hv.ui.Samples(id="results", mode="results", collection_id=top_matches),
+    hv.ui.Panel("explorer", id="labels", position="right"),
     hv.ui.ExtensionPanel(
         "readout",
         extension="catalog-readout",
         panel="readout",
         position="right",
         layout=hv.ui.PanelLayout(width=340, min_width=280),
+        state={"activeCaseId": "facilities"},
     ),
     active_panel="readout",
 )
 
-session = hv.launch(dataset, block=False)
-session.ui.add_extension(".hyperview/extensions/catalog-readout")
 session.ui.apply_view(view)
 ```
+
+`hv.ui.Panel(panel_type, id=...)` places any registered panel type;
+`Scatter`, `Samples`, `Explorer`, and `ExtensionPanel` are sugar over it.
+`state=` is a panel's opening runtime state, applied with the view, so no
+follow-up `patch_panel_state` call is needed.
+
+For a session that is already running, register the extension in the same call
+that applies the view:
+
+```python
+session.ui.apply_view(view, extensions=[".hyperview/extensions/catalog-readout"])
+```
+
+`session.ui.add_extension(folder)` still registers an extension on its own when
+the ordering is already handled.
 
 ## Constraints
 
