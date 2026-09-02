@@ -17,6 +17,7 @@ from hyperview import Dataset
 from hyperview.api import Session
 from hyperview.core.selection import OrbitViewState3D
 from hyperview.figures import FigureRenderOptions, render_layout_figure
+from hyperview.publish import PublishResult, publish
 from hyperview.runtime import HyperViewRuntime, ProviderRegistry, WorkspaceRegistry
 from hyperview.server.security import is_local_host, read_server_info
 from hyperview.static_export import DEFAULT_SIMILARITY_EXPORT_K, export_workspace
@@ -280,6 +281,51 @@ def _build_control_parser() -> argparse.ArgumentParser:
         help="Precompute this many neighbors per sample and space (disabled by default).",
     )
     _add_json_flag(export_parser)
+
+    publish_parser = subparsers.add_parser("publish")
+    publish_parser.add_argument("bundle_dir")
+    publish_parser.add_argument(
+        "--to",
+        required=True,
+        help="hf:<owner>/<name>, cloudflare, or dir:<path>.",
+    )
+    publish_parser.add_argument(
+        "--mode",
+        choices=["static", "live"],
+        default="static",
+        help="static publishes the files; live publishes a container that serves them.",
+    )
+    publish_parser.add_argument(
+        "--private",
+        action="store_true",
+        help="Create the Hugging Face Space private.",
+    )
+    publish_parser.add_argument("--title", default=None, help="Space title override.")
+    publish_parser.add_argument("--emoji", default=None, help="Space emoji override.")
+    publish_parser.add_argument(
+        "--extra-pip",
+        action="append",
+        default=None,
+        metavar="PKG==VERSION",
+        help="Extra requirement for a Live Space image. Repeatable.",
+    )
+    publish_parser.add_argument(
+        "--hardware",
+        default=None,
+        help="Hugging Face hardware flavor to request, such as cpu-upgrade.",
+    )
+    publish_parser.add_argument(
+        "--project",
+        default=None,
+        help="Cloudflare Worker name, overriding the one recorded in the manifest.",
+    )
+    publish_parser.add_argument("--commit-message", default=None)
+    publish_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the plan without touching the network or the destination.",
+    )
+    _add_json_flag(publish_parser)
 
     dataset_parser = subparsers.add_parser("dataset")
     dataset_subparsers = dataset_parser.add_subparsers(dest="dataset_command", required=True)
@@ -754,6 +800,58 @@ def _run_export_command(args: argparse.Namespace) -> None:
     )
     for warning in result.warnings:
         print(f"Warning: {warning}", file=sys.stderr)
+
+
+def _run_publish_command(args: argparse.Namespace) -> None:
+    result = publish(
+        args.bundle_dir,
+        args.to,
+        mode=args.mode,
+        private=args.private,
+        dry_run=args.dry_run,
+        project=args.project,
+        title=args.title,
+        emoji=args.emoji,
+        extra_pip=tuple(args.extra_pip or ()),
+        hardware=args.hardware,
+        commit_message=args.commit_message,
+    )
+    if args.json:
+        _print_output({"publish": result.to_dict()}, as_json=True)
+        return
+    _print_publish_result(result)
+
+
+def _print_publish_result(result: PublishResult) -> None:
+    plan = result.plan
+    label = "Live Space" if plan.mode == "live" else "Static Space"
+    if result.dry_run:
+        print("Dry run: nothing was uploaded, deployed, or written outside a temporary directory.")
+    print(f"Target:   {plan.target} ({label})")
+    if plan.destination:
+        print(f"Destination: {plan.destination}")
+    print(f"Bundle:   {plan.bundle_dir}")
+    print(f"Files:    {plan.num_files} ({plan.bundle_bytes} bytes)")
+    if plan.target == "hf":
+        print(f"Private:  {'yes' if plan.private else 'no'}")
+        if plan.hardware:
+            print(f"Hardware: {plan.hardware}")
+    if plan.packages:
+        pins = ", ".join(f"{name}=={version}" for name, version in plan.packages.items())
+        print(f"Pins:     {pins}")
+    if plan.command:
+        print(f"Command:  {' '.join(plan.command)}")
+    for note in plan.notes:
+        print(f"Note:     {note}")
+    if result.dry_run:
+        for name, content in plan.generated_files.items():
+            print(f"\n----- {name} -----")
+            print(content.rstrip("\n"))
+        return
+    if result.url:
+        print(f"Published to {result.url}")
+    if result.output_dir:
+        print(f"Copied the bundle to {result.output_dir}")
 
 
 def _run_dataset_command(args: argparse.Namespace) -> None:
@@ -1510,6 +1608,9 @@ def main(argv: list[str] | None = None):
         return
     if args.command == "export":
         _run_export_command(args)
+        return
+    if args.command == "publish":
+        _run_publish_command(args)
         return
     if args.command == "dataset":
         _run_dataset_command(args)

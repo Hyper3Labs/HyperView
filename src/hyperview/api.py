@@ -20,6 +20,7 @@ import uvicorn
 import hyperview.ui as ui_module
 from hyperview.control import CommandEnvelope, ControlService, create_default_command_registry
 from hyperview.core.dataset import Dataset
+from hyperview.publish import publish
 from hyperview.runtime import HyperViewRuntime, ProviderRegistry
 from hyperview.server.app import create_app, set_runtime
 from hyperview.server.security import (
@@ -41,6 +42,7 @@ __all__ = [
     "launch",
     "Session",
     "export_workspace",
+    "publish",
     "register_provider",
     "unregister_provider",
 ]

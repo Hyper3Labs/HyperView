@@ -738,6 +738,9 @@ ml = [
     { name = "torch" },
     { name = "torchvision" },
 ]
+publish = [
+    { name = "huggingface-hub" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -749,6 +752,7 @@ requires-dist = [
     { name = "filelock", specifier = ">=3.20.3" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.28.1" },
     { name = "huggingface-hub", specifier = ">=1.11.0,<2.0" },
+    { name = "huggingface-hub", marker = "extra == 'publish'", specifier = ">=1.11.0,<2.0" },
     { name = "hyper-models", specifier = ">=0.3.1" },
     { name = "hyper-models", extras = ["ml"], marker = "extra == 'ml'", specifier = ">=0.3.1" },
     { name = "lancedb", specifier = ">=0.33.0" },
@@ -767,7 +771,7 @@ requires-dist = [
     { name = "umap-learn", specifier = ">=0.5.11" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.40.0" },
 ]
-provides-extras = ["dev", "ml"]
+provides-extras = ["dev", "ml", "publish"]
 
 [[package]]
 name = "idna"
