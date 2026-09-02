@@ -249,9 +249,26 @@ def _manifest_packages(manifest: dict[str, Any]) -> dict[str, str]:
 
 
 def _requirements(packages: dict[str, str], extra_pip: tuple[str, ...]) -> list[str]:
-    requirements = [f"{name}=={version}" for name, version in packages.items()]
-    requirements.extend(extra_pip)
+    """Pin what the manifest records, letting ``extra_pip`` override by name.
+
+    A bundle exported from a working tree records a development version; passing
+    ``--extra-pip hyperview==1.1.0`` must replace that pin, not sit next to it,
+    or pip refuses the two conflicting specifiers.
+    """
+
+    overrides = {_requirement_name(spec): spec for spec in extra_pip}
+    requirements = [
+        overrides.pop(name, f"{name}=={version}") for name, version in packages.items()
+    ]
+    requirements.extend(overrides.values())
     return requirements
+
+
+def _requirement_name(spec: str) -> str:
+    """The distribution name of a pip requirement, normalised like ``packages``."""
+
+    name = re.split(r"[=<>!~\[; ]", spec.strip(), maxsplit=1)[0]
+    return name.lower().replace("_", "-")
 
 
 def _unpublishable_pin_notes(packages: dict[str, str]) -> list[str]:
@@ -267,7 +284,7 @@ def _unpublishable_pin_notes(packages: dict[str, str]) -> list[str]:
         if ".dev" in version or "+" in version:
             notes.append(
                 f"{name}=={version} is a development version and is unlikely to be on PyPI. "
-                f"Publish from a released HyperView, or pass --extra-pip '{name}==<released>'."
+                f"Publish from a released HyperView, or pass --extra-pip '{name}==<released>' to override the pin."
             )
     return notes
 

@@ -478,3 +478,18 @@ def test_cli_json_dry_run_is_machine_readable(bundle_dir: Path, capsys) -> None:
     assert payload["publish"]["dry_run"] is True
     assert payload["publish"]["plan"]["target"] == "dir"
     assert not Path("/tmp/nowhere").exists()
+
+
+def test_extra_pip_overrides_a_manifest_pin_by_name() -> None:
+    from hyperview.publish import _requirements
+
+    packages = {"hyperview": "1.0.1.dev1+gabc", "hyper-models": "0.3.1"}
+    assert _requirements(packages, ("hyperview==1.1.0", "torch==2.4.0")) == [
+        "hyperview==1.1.0",
+        "hyper-models==0.3.1",
+        "torch==2.4.0",
+    ]
+    assert _requirements(packages, ("Hyper_Models==0.4.0",)) == [
+        "hyperview==1.0.1.dev1+gabc",
+        "Hyper_Models==0.4.0",
+    ]
