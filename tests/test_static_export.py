@@ -226,7 +226,7 @@ def test_static_export_writes_bundle_snapshot_samples_media_and_flag(tmp_path: P
     assert wrangler["assets"]["not_found_handling"] == "single-page-application"
 
 
-def test_static_export_without_layout_does_not_advertise_scatter(tmp_path: Path) -> None:
+def test_static_export_without_layout_marks_scatter_incompatible(tmp_path: Path) -> None:
     dataset = Dataset("static_export_no_layout", persist=False)
     image_path = tmp_path / "sample.png"
     Image.new("RGB", (12, 10), (40, 40, 180)).save(image_path)
@@ -245,10 +245,13 @@ def test_static_export_without_layout_does_not_advertise_scatter(tmp_path: Path)
     assert manifest["capabilities"]["layouts"] is False
     assert manifest["capabilities"]["lasso_2d"] is False
     assert manifest["artifacts"]["embeddings"] is None
-    assert all(
-        definition["panel_type"] != "scatter"
+    scatter = next(
+        definition
         for definition in snapshot["panel_definitions"]
+        if definition["panel_type"] == "scatter"
     )
+    assert scatter["static_compatible"] is False
+    assert scatter["static_reason"] == "No layouts in this dataset"
 
 
 def test_session_export_uses_runtime_workspace(tmp_path: Path) -> None:

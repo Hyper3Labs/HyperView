@@ -199,12 +199,28 @@ function StaticPanelUnavailable({ panel }: { panel: RuntimePanel }) {
 
 export function PanelHost(props: IDockviewPanelProps<PanelHostParams>) {
   const panelId = props.params?.panelId ?? "";
+  const panelType = props.params?.builtinPanelType;
   const panel = useStore((state) =>
     state.customPanels.find((candidate) => candidate.id === panelId) ?? null
+  );
+  const definition = useStore((state) =>
+    state.panelDefinitions.find((candidate) => candidate.panel_type === panelType) ?? null
   );
   const panelState = useStore((state) => state.panelStates[panelId]);
 
   if (!panel) {
+    // A definition-backed panel has no runtime panel to carry the reason, so
+    // the bundle's declaration on the definition is what gates it.
+    if (isStaticBundle() && definition?.static_compatible === false) {
+      return (
+        <PanelMessage
+          title={definition.title || props.params?.definitionTitle || "Panel"}
+          icon={<AlertTriangle className="h-3.5 w-3.5" />}
+        >
+          {definition.static_reason ?? "This panel requires the full HyperView server."}
+        </PanelMessage>
+      );
+    }
     const renderer = props.params?.renderer;
     const Component = getNativePanelComponent(renderer);
     if (!Component || !renderer) return <PanelUnavailable />;

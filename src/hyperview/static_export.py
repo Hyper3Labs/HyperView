@@ -30,6 +30,7 @@ SIMILARITY_SHARD_SIZE = 100
 DEFAULT_SIMILARITY_EXPORT_K = 0
 MAX_COLLECTION_EXPORT_K = 100
 STATIC_BUNDLE_SCHEMA_VERSION = 1
+NO_LAYOUTS_STATIC_REASON = "No layouts in this dataset"
 
 
 @dataclass(frozen=True)
@@ -804,11 +805,13 @@ def export_runtime_workspace(
     has_layouts = bool(layouts)
     has_2d_layout = any(parse_layout_dimension(layout.layout_key) == 2 for layout in layouts)
     if not has_layouts:
-        snapshot["panel_definitions"] = [
-            definition
-            for definition in snapshot.get("panel_definitions", [])
-            if definition.get("panel_type") != "scatter"
-        ]
+        # Keep the definition and let the declarative static contract carry the
+        # reason: dropping it by name leaves an exported scatter panel pointing
+        # at a definition the bundle no longer describes.
+        for definition in snapshot.get("panel_definitions", []):
+            if definition.get("panel_type") == "scatter":
+                definition["static_compatible"] = False
+                definition["static_reason"] = NO_LAYOUTS_STATIC_REASON
     panel_statuses, compatible_panel_ids, panel_warnings = _annotate_static_panels(
         snapshot, runtime, workspace_id
     )

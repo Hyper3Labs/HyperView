@@ -80,6 +80,8 @@ export function Header() {
     return panelDefinitions.flatMap((definition) => {
       const layout = definition.default_layout;
       if (layout.position !== "center") return [];
+      // A bundle that declares a definition unusable should not offer it.
+      if (isStaticBundle() && definition.static_compatible === false) return [];
       const declaredId = layout.id;
       const id = typeof declaredId === "string" && declaredId ? declaredId : definition.panel_type;
       return [{

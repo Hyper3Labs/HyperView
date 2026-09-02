@@ -129,6 +129,13 @@ function definitionLayout(definition: RuntimePanelDefinition) {
   return definition.default_layout ?? {};
 }
 
+// A bundle can declare a definition unusable (a scatter panel in a dataset with
+// no exported layouts, say). Keep those out of the default view instead of
+// docking a panel that can only report why it is empty.
+function isDefinitionAvailable(definition: RuntimePanelDefinition) {
+  return !isStaticBundle() || definition.static_compatible !== false;
+}
+
 function defaultPanelId(definition: RuntimePanelDefinition) {
   const id = definitionLayout(definition).id;
   return typeof id === "string" && id.length > 0 ? id : definition.panel_type;
@@ -829,7 +836,11 @@ export function DockviewWorkspace() {
   const buildDefaultLayout = useCallback(
     (api: DockviewApi) => {
       const orderedDefinitions = panelDefinitions
-        .filter((definition) => typeof definitionLayout(definition).id === "string")
+        .filter(
+          (definition) =>
+            typeof definitionLayout(definition).id === "string" &&
+            isDefinitionAvailable(definition)
+        )
         .toSorted(compareDefaultPanelCreationOrder);
 
       for (const definition of orderedDefinitions) {
