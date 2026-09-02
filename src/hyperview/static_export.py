@@ -698,6 +698,25 @@ def _deployment_payload(out_dir: Path, workspace_id: str) -> dict[str, Any]:
             "command": "npx wrangler deploy --config wrangler.jsonc",
             "mode": "static-assets-only",
         },
+        # Where this bundle can be published, and under which hosting model.
+        # A Static Space serves these files; a Live Space runs the HyperView
+        # server over the same bundle so visitors also get queries and compute.
+        "targets": {
+            "static": {
+                "space": "Static Space",
+                "commands": [
+                    "hyperview publish <bundle> --to hf:<owner>/<name> --mode static",
+                    "hyperview publish <bundle> --to cloudflare",
+                    "hyperview publish <bundle> --to dir:<path>",
+                ],
+            },
+            "live": {
+                "space": "Live Space",
+                "commands": [
+                    "hyperview publish <bundle> --to hf:<owner>/<name> --mode live",
+                ],
+            },
+        },
     }
 
 
