@@ -215,9 +215,9 @@ hyperview figure export figures/embedding-panel-a.png \
   --title "ArcFace spherical embeddings"
 ```
 
-## Shared Spaces
+## Static Spaces
 
-Export a read-only, self-contained Shared Space for a workspace:
+Export a read-only, self-contained bundle and host its files as a Static Space:
 
 ```bash
 hyperview export research --out dist/research-demo
@@ -241,7 +241,10 @@ The bundle contains the packaged static frontend, `api/runtime.json`,
 `api/dataset.json`, sample shards under `api/samples/`, media and thumbnails,
 layout coordinate JSON under `api/embeddings/`, materialized collection items
 under `api/collections/`, and extension panel modules under
-`api/panels/content/`. It also writes a versioned `hyperview-static.json`
+`api/panels/content/`. It also carries what only a Live Space reads:
+per-space sample embedding vectors under `restore/spaces/` and each installed
+extension's full folder (manifest, Python tools, assets) under `extensions/`.
+It writes a versioned `hyperview-static.json`
 manifest and a static-assets-only `wrangler.jsonc` configuration. Deploy the
 bundle to Cloudflare from its output directory with:
 
@@ -254,7 +257,7 @@ mode the frontend reads JSON files from the bundle. Selection, prepared-case
 panel prop changes, panel state, filtering, and result presentation remain
 ephemeral client-side interactions. Durable workspace writes, Python tools,
 model execution, and arbitrary inference/search are unavailable; controls for
-those capabilities are hidden. The host shows the notice
+those capabilities are hidden. The host shows a read-only notice, currently labelled
 `Shared Space`.
 
 Python launch/session code can export the same bundle:
@@ -329,12 +332,57 @@ Authentication for Hugging Face targets comes from `HF_TOKEN` or a prior
 `hf auth login`; HyperView does not prompt for one.
 
 From Python:
+## Live Spaces from a bundle
+
+The same bundle also runs as a **Live Space**: a real runtime with the
+dataset, embedding spaces, layouts, collections, extensions, and the exported
+view already applied. Serve one with `--from`:
+
+```bash
+hyperview serve --from dist/research-demo --no-browser
+```
+
+The dataset lands in the current `HYPERVIEW_DATASETS_DIR` under the name the
+bundle records. Restoring the same bundle again reuses it, so a container that
+restarts comes back to the same Space instead of re-ingesting.
+
+`--public` drops the session token, the same as setting `HYPERVIEW_NO_AUTH=1`.
+Viewer-facing commands (panel state, selection, collections, layout view) stay
+open; everything that imports modules, installs extension code, or starts
+unbounded compute stays closed, and Python tools return 403.
+
+```bash
+hyperview serve --from dist/research-demo --public --host 0.0.0.0 --port 7860 --no-browser
+```
+
+Restore under a different workspace id with `--workspace-id`, which applies
+only together with `--from`:
+
+```bash
+hyperview serve --from dist/research-demo --workspace-id research-live --no-browser
+```
+
+Unlike a Static Space, a Live Space answers typed text queries, runs Python
+tools, computes new embeddings and layouts, and persists workspace mutations,
+because the bundle carries the per-space sample vectors and each extension's
+full folder.
+
+Python code can restore the same bundle:
 
 ```python
 import hyperview as hv
 
 hv.publish("dist/research-demo", to="hf:hyper3labs/research-demo", mode="static")
 hv.publish("dist/research-demo", to="hf:hyper3labs/research-live", mode="live", dry_run=True)
+hv.launch(from_bundle="dist/research-demo", open_browser=False)
+```
+
+To restore without serving -- to inspect or mutate the workspace first:
+
+```python
+import hyperview as hv
+
+workspace_id = hv.restore_workspace("dist/research-demo")
 ```
 
 ## Runtime UI

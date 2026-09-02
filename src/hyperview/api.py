@@ -18,6 +18,7 @@ from uuid import uuid4
 import uvicorn
 
 import hyperview.ui as ui_module
+from hyperview.bundle_restore import restore_bundle
 from hyperview.control import CommandEnvelope, ControlService, create_default_command_registry
 from hyperview.core.dataset import Dataset
 from hyperview.publish import publish
@@ -43,6 +44,7 @@ __all__ = [
     "Session",
     "export_workspace",
     "publish",
+    "restore_workspace",
     "register_provider",
     "unregister_provider",
 ]
@@ -875,8 +877,39 @@ class SessionUiController:
         ]
 
 
+def restore_workspace(
+    bundle: str | Path,
+    runtime: HyperViewRuntime | None = None,
+    *,
+    workspace_id: str | None = None,
+) -> str:
+    """Load an exported bundle into a runtime and return its workspace id.
+
+    A bundle written by ``hyperview export`` hosts two ways: as a **Static
+    Space** (files on a static host) or, after this call, as a **Live Space**
+    backed by a real runtime. The dataset lands in the current
+    ``HYPERVIEW_DATASETS_DIR``; restoring the same bundle again reuses it.
+
+    Args:
+        bundle: Path to a folder written by ``hyperview export``.
+        runtime: Runtime to restore into. A new one is created when omitted.
+        workspace_id: Workspace id to restore under. Defaults to the id the
+            bundle was exported from.
+
+    Returns:
+        The workspace id the bundle was restored under.
+
+    Example:
+        >>> import hyperview as hv
+        >>> workspace_id = hv.restore_workspace("dist/research")
+    """
+
+    _runtime, result = restore_bundle(bundle, runtime=runtime, workspace_id=workspace_id)
+    return result.workspace_id
+
+
 def launch(
-    dataset: Dataset,
+    dataset: Dataset | None = None,
     port: int = 6262,
     host: str = "127.0.0.1",
     open_browser: bool = True,
@@ -886,6 +919,7 @@ def launch(
     view: ui_module.View | None = None,
     block: bool = True,
     workspace_id: str = "default",
+    from_bundle: str | Path | None = None,
 ) -> Session:
     """Launch the HyperView visualization server.
 
@@ -897,7 +931,7 @@ def launch(
         extension-only views can also launch directly from dataset rows.
 
     Args:
-        dataset: The dataset to visualize.
+        dataset: The dataset to visualize. Omit when passing ``from_bundle``.
         port: Port to run the server on.
         host: Host to bind to.
         open_browser: Whether to open a browser window.
@@ -910,7 +944,12 @@ def launch(
         view: Optional UI view composition to apply before opening the app.
         block: If True in script mode, keep the server alive until interrupted.
             Set to False when the caller wants to manage the returned session.
-        workspace_id: Workspace id to attach the dataset to.
+        workspace_id: Workspace id to attach the dataset to. Ignored when
+            ``from_bundle`` is given without an explicit value, because the
+            bundle names the workspace it was exported from.
+        from_bundle: Path to a folder written by ``hyperview export``. Restores
+            it as a Live Space -- dataset, embedding spaces, layouts,
+            collections, extensions, and the exported view -- and serves it.
 
     Returns:
         A Session object.
@@ -922,7 +961,33 @@ def launch(
         >>> dataset.compute_embeddings(model="openai/clip-vit-base-patch32")
         >>> dataset.compute_visualization()
         >>> hv.launch(dataset)
+
+    Example:
+        >>> import hyperview as hv
+        >>> hv.launch(from_bundle="dist/research")
     """
+    if from_bundle is not None:
+        if dataset is not None:
+            raise ValueError("Pass either a dataset or from_bundle, not both")
+        if view is not None:
+            raise ValueError(
+                "Cannot apply a launch view to a restored bundle because the bundle "
+                "already carries the exported view."
+            )
+        return _launch_from_bundle(
+            from_bundle,
+            port=port,
+            host=host,
+            open_browser=open_browser,
+            notebook=notebook,
+            height=height,
+            block=block,
+            workspace_id=workspace_id,
+        )
+
+    if dataset is None:
+        raise ValueError("launch() requires either a dataset or from_bundle")
+
     if notebook is None:
         # Colab is always a notebook environment, even if _is_notebook() fails to detect it
         notebook = _is_notebook() or _is_colab()
@@ -1045,6 +1110,67 @@ def launch(
         if block:
             session.wait()
 
+    return session
+
+
+def _launch_from_bundle(
+    bundle: str | Path,
+    *,
+    port: int,
+    host: str,
+    open_browser: bool,
+    notebook: bool | None,
+    height: int,
+    block: bool,
+    workspace_id: str,
+) -> Session:
+    """Restore a bundle and serve it as a Live Space."""
+
+    if notebook is None:
+        notebook = _is_notebook() or _is_colab()
+    if _is_colab() and host == "127.0.0.1":
+        host = "0.0.0.0"
+
+    connect_host = "127.0.0.1" if host == "0.0.0.0" else host
+    if _can_connect(connect_host, port, timeout_s=0.2):
+        raise RuntimeError(
+            "HyperView failed to start because the port is already in use "
+            f"(port={port}). Choose a different port or stop the process "
+            "listening on that port."
+        )
+
+    # "default" is the signature's default rather than a caller's choice, so
+    # only an explicit id overrides the workspace the bundle was exported from.
+    runtime, result = restore_bundle(
+        bundle,
+        workspace_id=workspace_id if workspace_id != "default" else None,
+    )
+    for warning in result.warnings:
+        print(f"Warning: {warning}")
+
+    dataset = runtime.get_dataset(result.workspace_id)
+    session = Session(runtime, host, port, dataset)
+    session.start(background=True)
+
+    print(
+        f"\nRestored Live Space '{result.workspace_id}' from {result.bundle_dir} "
+        f"({result.num_samples} samples, {result.num_layouts} layouts, "
+        f"{result.num_extensions} extensions)"
+    )
+    if notebook:
+        if _is_colab():
+            print(f"HyperView is running (Colab, port={session.port}).")
+        else:
+            print(f"HyperView is running at {session.url}. Opening a new tab...")
+        session.show(height=height)
+        return session
+
+    print(f"HyperView is running at {session.url}")
+    print("   Press Ctrl+C to stop.\n")
+    if open_browser:
+        session.open_browser()
+    if block:
+        session.wait()
     return session
 
 

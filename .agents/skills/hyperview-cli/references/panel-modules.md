@@ -95,7 +95,7 @@ Current global SDK fields:
   canonical class label. This affects presentation only; IDs and metadata stay intact.
 - A canonical Samples panel may set `showTextSearch: true` even when it starts
   with a prepared collection. HyperView still exposes the query bar only when
-  the active Live Space advertises a text-capable index; Shared Spaces hide it.
+  the active Live Space advertises a text-capable index; Static Spaces hide it.
 - `hooks.useTool()`
 - `hooks.listTools()`
 - `hooks.useHostAdapter()`

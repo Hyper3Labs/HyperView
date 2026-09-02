@@ -1098,7 +1098,14 @@ def create_app(
 
         file_path = _resolve_sample_media_path(sample)
 
-        return FileResponse(file_path, headers=_media_cache_headers(file_path, variant="content"))
+        # Prefer the type recorded on the sample. FileResponse otherwise guesses
+        # from the filename, which is wrong for media stored under a name that
+        # carries no extension -- as a restored bundle's copies are.
+        return FileResponse(
+            file_path,
+            media_type=sample.media_type,
+            headers=_media_cache_headers(file_path, variant="content"),
+        )
 
     @app.get("/api/samples/{sample_id}/thumbnail")
     async def get_sample_thumbnail(

@@ -1143,6 +1143,117 @@ class Dataset:
         self._storage.add_layout_coords(layout_key, list(ids), coords_arr)
         return layout_key
 
+    def register_embeddings(
+        self,
+        space_key: str,
+        model_id: str,
+        ids: list[str],
+        vectors: np.ndarray | list[list[float]],
+        *,
+        config: dict[str, Any] | None = None,
+    ) -> str:
+        """Store vectors in an embedding space under an explicit ``space_key``.
+
+        ``compute_embeddings`` derives the space key from the embedding spec it
+        just ran. Callers that already hold both the vectors and the key they
+        were produced under -- restoring a bundle, or importing vectors
+        computed elsewhere -- need the source key preserved verbatim, because
+        index ids (``space:<space_key>``), layout rows, and panel props pin it.
+
+        Args:
+            space_key: Storage key for the space. Used exactly as given.
+            model_id: Model identifier recorded on the space.
+            ids: Sample ids, aligned with ``vectors``.
+            vectors: (N, D) array of embedding vectors.
+            config: Optional space config (provider, geometry, modality, params).
+
+        Returns:
+            The ``space_key`` the vectors were stored under.
+        """
+        if not space_key or not space_key.strip():
+            raise ValueError("space_key must be a non-empty string")
+
+        vector_array = np.asarray(vectors, dtype=np.float32)
+        if vector_array.ndim != 2 or vector_array.shape[1] < 1:
+            raise ValueError(f"vectors must be (N, D) with D>=1, got shape {vector_array.shape}")
+        if len(ids) != vector_array.shape[0]:
+            raise ValueError(
+                f"ids and vectors must be the same length, got {len(ids)} and "
+                f"{vector_array.shape[0]}"
+            )
+
+        self._storage.ensure_space(
+            model_id=model_id,
+            dim=int(vector_array.shape[1]),
+            config=config,
+            space_key=space_key,
+        )
+        self._storage.add_embeddings(space_key, list(ids), vector_array)
+        return space_key
+
+    def register_layout(
+        self,
+        layout_key: str,
+        space_key: str,
+        ids: list[str],
+        coords: np.ndarray | list[list[float]],
+        *,
+        method: str = "precomputed",
+        geometry: str = "euclidean",
+        params: dict[str, Any] | None = None,
+    ) -> str:
+        """Store layout coordinates under an explicit ``layout_key``.
+
+        ``compute_visualization`` and ``set_coords`` hash the projection
+        parameters into the key. A workspace view pins the resulting key in
+        panel props and in ``active_layout_key``, so re-deriving it from
+        parameters is not good enough for anything that has to reproduce an
+        existing view: the key itself is the identity and is passed in.
+
+        Args:
+            layout_key: Storage key for the layout. Used exactly as given, and
+                must carry the usual ``__2d``/``__3d`` dimension suffix.
+            space_key: Embedding space this layout projects.
+            ids: Sample ids, aligned with ``coords``.
+            coords: (N, D) array of layout coordinates.
+            method: Projection method recorded on the layout.
+            geometry: Layout geometry recorded on the layout.
+            params: Optional projection parameters recorded on the layout.
+
+        Returns:
+            The ``layout_key`` the coordinates were stored under.
+        """
+        if not layout_key or not layout_key.strip():
+            raise ValueError("layout_key must be a non-empty string")
+
+        coords_arr = np.asarray(coords, dtype=np.float32)
+        if coords_arr.ndim != 2 or coords_arr.shape[1] < 2:
+            raise ValueError(f"coords must be (N, D) with D>=2, got shape {coords_arr.shape}")
+        if len(ids) != coords_arr.shape[0]:
+            raise ValueError(
+                f"ids and coords must be the same length, got {len(ids)} and "
+                f"{coords_arr.shape[0]}"
+            )
+
+        # parse_layout_dimension raises for a key without a dimension suffix,
+        # which is exactly the check we want before creating storage tables.
+        expected_dimension = parse_layout_dimension(layout_key)
+        if int(coords_arr.shape[1]) != expected_dimension:
+            raise ValueError(
+                f"layout_key '{layout_key}' declares {expected_dimension}D coordinates, "
+                f"got {coords_arr.shape[1]}D"
+            )
+
+        self._storage.ensure_layout(
+            layout_key=layout_key,
+            space_key=space_key,
+            method=method,
+            geometry=geometry,
+            params=params,
+        )
+        self._storage.add_layout_coords(layout_key, list(ids), coords_arr)
+        return layout_key
+
     @property
     def samples(self) -> list[Sample]:
         """Get all samples as a list."""

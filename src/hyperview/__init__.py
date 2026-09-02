@@ -19,6 +19,7 @@ Session = _api.Session
 launch = _api.launch
 export_workspace = _api.export_workspace
 publish = _api.publish
+restore_workspace = _api.restore_workspace
 register_provider = _api.register_provider
 unregister_provider = _api.unregister_provider
 __version__ = _version.__version__
@@ -31,6 +32,7 @@ __all__ = [
     "export_workspace",
     "panel_sdk_surface",
     "publish",
+    "restore_workspace",
     "register_provider",
     "unregister_provider",
     "ui",
