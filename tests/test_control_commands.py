@@ -235,7 +235,7 @@ def test_panel_add_update_remove_commands_share_dispatch_path(tmp_path: Path) ->
             args={
                 "title": "Sample Browser",
                 "visible": False,
-                "props": {"mode": "compact"},
+                "props": {"mode": "browse"},
             },
         )
     )
@@ -244,7 +244,7 @@ def test_panel_add_update_remove_commands_share_dispatch_path(tmp_path: Path) ->
     panel = update_result.workspace["ui"]["custom_panels"][0]
     assert panel["title"] == "Sample Browser"
     assert panel["visible"] is False
-    assert panel["props"] == {"mode": "compact"}
+    assert panel["props"] == {"mode": "browse"}
 
     remove_result = service.run(
         CommandEnvelope(

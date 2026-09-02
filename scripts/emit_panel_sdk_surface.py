@@ -33,6 +33,9 @@ _INSTALL_BLOCK = re.compile(
     re.DOTALL,
 )
 _HOOKS_BLOCK = re.compile(r"\n(?P<indent>\s*)hooks:\s*\{(?P<body>.*?)\n(?P=indent)\},", re.DOTALL)
+_COMPONENTS_BLOCK = re.compile(
+    r"\n(?P<indent>\s*)components:\s*\{(?P<body>.*?)\n(?P=indent)\},", re.DOTALL
+)
 _VERSION = re.compile(r"""version:\s*["'](?P<version>[^"']+)["']""")
 
 
@@ -72,11 +75,18 @@ def read_panel_sdk_surface(source: Path = SDK_SOURCE) -> dict[str, Any]:
     if not hook_names:
         raise SystemExit(f"{source}: the SDK global exposes no hooks")
 
-    keys = sorted(set(_entry_names(body.replace(hooks.group(0), "\n"))) | {"hooks"})
+    components = _COMPONENTS_BLOCK.search(body)
+    component_names = sorted(set(_entry_names(components.group("body")))) if components else []
+
+    remainder = body.replace(hooks.group(0), "\n")
+    if components is not None:
+        remainder = remainder.replace(components.group(0), "\n")
+    keys = sorted(set(_entry_names(remainder)) | {"hooks"} | ({"components"} if components else set()))
     return {
         "version": version.group("version"),
         "keys": keys,
         "hooks": hook_names,
+        "components": component_names,
     }
 
 

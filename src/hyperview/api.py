@@ -117,6 +117,17 @@ def _discover_existing_token(host: str, port: int) -> str | None:
     return existing_token if isinstance(existing_token, str) else None
 
 
+def _looks_like_path(entry: str) -> bool:
+    """Return whether an ``extensions=`` entry names a folder rather than a shipped name."""
+
+    return (
+        os.sep in entry
+        or (os.altsep is not None and os.altsep in entry)
+        or entry.startswith((".", "~"))
+        or Path(entry).is_dir()
+    )
+
+
 def _view_requires_visualization(view: ui_module.View | None) -> bool:
     """Return whether launching ``view`` requires a dataset layout.
 
@@ -129,14 +140,10 @@ def _view_requires_visualization(view: ui_module.View | None) -> bool:
     if view is None:
         return False
 
-    def item_requires_visualization(item: object) -> bool:
-        if isinstance(item, ui_module.Scatter):
-            return True
-        if isinstance(item, ui_module.Container):
-            return any(item_requires_visualization(child) for child in item.contents)
-        return False
-
-    return any(item_requires_visualization(item) for item in view.contents)
+    return any(
+        panel.panel_type == ui_module.SCATTER_PANEL_TYPE
+        for panel in ui_module.iter_view_panels(view)
+    )
 
 
 def register_provider(
@@ -205,6 +212,17 @@ class Session:
     @property
     def _connect_host(self) -> str:
         return "127.0.0.1" if self.host == "0.0.0.0" else self.host
+
+    def _owned_runtime(self) -> HyperViewRuntime:
+        """Return the runtime this process owns, or explain why it cannot."""
+
+        if not self._controls_runtime:
+            raise RuntimeError(
+                "This session is attached to an existing HyperView server. "
+                "It can only mutate sessions started by this process; use the "
+                "control-plane CLI/API or launch with reuse_server=False."
+            )
+        return self.runtime
 
     @property
     def _health_url(self) -> str:
@@ -375,6 +393,42 @@ class Session:
         """Open the visualizer in a browser window."""
         webbrowser.open(self.url)
 
+    def create_collection(
+        self,
+        sample_ids: Iterable[str],
+        *,
+        name: str | None = None,
+        workspace_id: str | None = None,
+    ) -> str:
+        """Store an ordered list of samples as a workspace collection.
+
+        Returns the collection id. Bind it to a panel with
+        ``hv.ui.Samples(collection_id=...)`` (or any panel prop). The
+        collection lives in durable workspace state, so a static export keeps
+        it as long as a view references the id.
+
+        Args:
+            sample_ids: Sample ids, in the order the panel should show them.
+            name: Human-readable label shown as the collection's source.
+            workspace_id: Workspace to store the collection in. Defaults to
+                ``"default"``.
+        """
+
+        collection = self._owned_runtime().create_collection(
+            workspace_id or "default",
+            list(sample_ids),
+            name=name,
+        )
+        return collection.id
+
+    def list_collections(self, workspace_id: str | None = None) -> list[dict[str, Any]]:
+        """Return the workspace's stored collections as plain dictionaries."""
+
+        return [
+            collection.to_dict()
+            for collection in self._owned_runtime().list_collections(workspace_id or "default")
+        ]
+
     def export(
         self,
         out: str | os.PathLike[str],
@@ -444,18 +498,43 @@ class SessionUiController:
         self._session = session
 
     def _runtime(self) -> HyperViewRuntime:
-        if not self._session._controls_runtime:
-            raise RuntimeError(
-                "This session is attached to an existing HyperView server. "
-                "session.ui can only mutate sessions started by this process; "
-                "use the control-plane CLI/API or launch with reuse_server=False."
-            )
-        return self._session.runtime
+        return self._session._owned_runtime()
 
-    def apply_view(self, view: ui_module.View, *, workspace_id: str = "default") -> None:
-        """Apply a Rerun-style view composition to a workspace."""
+    def apply_view(
+        self,
+        view: ui_module.View,
+        *,
+        workspace_id: str = "default",
+        extensions: Iterable[str | os.PathLike[str]] | None = None,
+    ) -> None:
+        """Apply a Rerun-style view composition to a workspace.
 
+        Extension panel types only exist once the extension is registered, so
+        registration must happen before the view is applied. Passing
+        ``extensions`` guarantees that ordering: each entry is installed here,
+        immediately before the view is validated and compiled. An entry is
+        either a path to an extension folder or the name of an extension
+        shipped with HyperView.
+        """
+
+        for entry in extensions or ():
+            self._install_extension_entry(entry, workspace_id=workspace_id)
         view.apply(self._runtime(), workspace_id)
+
+    def _install_extension_entry(
+        self,
+        entry: str | os.PathLike[str],
+        *,
+        workspace_id: str,
+    ):
+        """Install one ``extensions=`` entry: a folder path or a shipped name."""
+
+        if isinstance(entry, os.PathLike) or _looks_like_path(str(entry)):
+            folder = Path(entry).expanduser()
+            if not folder.is_dir():
+                raise FileNotFoundError(f"Extension folder not found: {folder}")
+            return self.add_extension(folder, workspace_id=workspace_id)
+        return self.add_shipped_extension(str(entry), workspace_id=workspace_id)
 
     def add_scatter(
         self,
@@ -920,6 +999,7 @@ def launch(
     block: bool = True,
     workspace_id: str = "default",
     from_bundle: str | Path | None = None,
+    extensions: Iterable[str | os.PathLike[str]] | None = None,
 ) -> Session:
     """Launch the HyperView visualization server.
 
@@ -950,6 +1030,11 @@ def launch(
         from_bundle: Path to a folder written by ``hyperview export``. Restores
             it as a Live Space -- dataset, embedding spaces, layouts,
             collections, extensions, and the exported view -- and serves it.
+        extensions: Extensions to register before anything else runs against
+            the new runtime. Each entry is either a path to an extension folder
+            or the name of an extension shipped with HyperView. A view can only
+            place an extension panel whose extension is already registered, and
+            this parameter guarantees that ordering.
 
     Returns:
         A Session object.
@@ -973,6 +1058,11 @@ def launch(
             raise ValueError(
                 "Cannot apply a launch view to a restored bundle because the bundle "
                 "already carries the exported view."
+            )
+        if extensions:
+            raise ValueError(
+                "Cannot install extensions while restoring a bundle because the "
+                "bundle already carries the extensions its view needs."
             )
         return _launch_from_bundle(
             from_bundle,
@@ -1022,11 +1112,11 @@ def launch(
                     "choose a different port."
                 )
 
-            if view is not None:
+            if view is not None or extensions:
                 raise RuntimeError(
-                    "Cannot apply a launch view while reuse_server=True because the "
-                    "existing server owns the runtime state. Use reuse_server=False "
-                    "or apply the view through the control-plane API."
+                    "Cannot apply a launch view or install extensions while "
+                    "reuse_server=True because the existing server owns the runtime "
+                    "state. Use reuse_server=False or go through the control-plane API."
                 )
             runtime = HyperViewRuntime()
             runtime.attach_dataset_instance(workspace_id, dataset, activate_workspace=True)
@@ -1086,6 +1176,8 @@ def launch(
     runtime = HyperViewRuntime()
     runtime.attach_dataset_instance(workspace_id, dataset, activate_workspace=True)
     session = Session(runtime, host, port, dataset)
+    for entry in extensions or ():
+        session.ui._install_extension_entry(entry, workspace_id=workspace_id)
     if view is not None:
         session.ui.apply_view(view, workspace_id=workspace_id)
 

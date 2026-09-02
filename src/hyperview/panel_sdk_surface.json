@@ -1,4 +1,11 @@
 {
+  "components": [
+    "Panel",
+    "PanelHeader",
+    "PanelToolbar",
+    "PanelToolbarButton",
+    "PanelToolbarIconButton"
+  ],
   "hooks": [
     "listTools",
     "useActiveLayout",
@@ -23,6 +30,7 @@
   ],
   "keys": [
     "React",
+    "components",
     "createClient",
     "hooks",
     "version"

@@ -3,6 +3,10 @@
 The model mirrors Rerun's blueprint split at a small scale: panel definitions
 come from built-ins or extensions, while a ``View`` describes concrete panel
 instances and how they should be arranged in the workspace.
+
+``Panel`` is the general primitive: it places one instance of any registered
+panel type. ``Scatter``, ``Samples``, ``Explorer``, and ``ExtensionPanel`` are
+sugar over it for the panel types a script reaches for most often.
 """
 
 from __future__ import annotations
@@ -10,12 +14,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from hyperview.extensions import resolve_panel_source
 from hyperview.runtime import CustomPanelSpec, HyperViewRuntime
 
 PanelPosition = Literal["center", "right", "bottom"]
 PanelDirection = Literal["right", "left", "above", "below", "within"]
 ContainerKind = Literal["horizontal", "vertical", "tabs", "grid"]
+
+SCATTER_PANEL_TYPE = "scatter"
+SAMPLES_PANEL_TYPE = "samples"
+EXPLORER_PANEL_TYPE = "explorer"
 
 
 @dataclass(frozen=True)
@@ -48,48 +55,273 @@ class PanelLayout:
         }
 
 
-@dataclass(frozen=True)
-class ExtensionPanel:
-    """A module panel instance backed by an installed extension panel asset."""
+def _clean_props(props: dict[str, Any] | None, typed: dict[str, Any]) -> dict[str, Any]:
+    """Merge free-form props with typed keyword props, dropping unset ones.
 
+    Free-form props stay open on purpose: a panel may accept anything its
+    renderer understands. Typed keywords are a shortcut for the documented
+    props, and win when both name the same prop.
+    """
+
+    merged = dict(props or {})
+    merged.update({key: value for key, value in typed.items() if value is not None})
+    return merged
+
+
+@dataclass(frozen=True, init=False)
+class Panel:
+    """One instance of a registered panel type, placed in a view.
+
+    ``panel_type`` is the name the runtime registers a panel under: ``"samples"``,
+    ``"scatter"``, and ``"explorer"`` for the built-ins, and for an extension
+    panel whatever its manifest declares — ``"<extension>.<panel id>"`` unless
+    the manifest sets an explicit ``panel_type``. Applying a view validates
+    every panel type, so a typo names itself instead of opening an empty
+    workspace.
+    """
+
+    panel_type: str
     id: str
-    extension: str
-    panel: str
     title: str | None = None
+    props: dict[str, Any] = field(default_factory=dict)
+    state: dict[str, Any] | None = None
     position: PanelPosition | None = None
     reference_panel_id: str | None = None
     direction: PanelDirection | None = None
     layout: PanelLayout | None = None
-    props: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class Scatter:
-    """A scatter panel instance pinned to an explicit layout."""
-
-    id: str
-    title: str
-    layout_key: str
-    position: PanelPosition = "center"
-    reference_panel_id: str | None = None
-    direction: PanelDirection | None = None
+    layout_key: str | None = None
     geometry: str | None = None
     layout_dimension: int | None = None
-    layout: PanelLayout | None = None
-    props: dict[str, Any] = field(default_factory=dict)
+
+    def __init__(
+        self,
+        panel_type: str,
+        *,
+        id: str,
+        title: str | None = None,
+        props: dict[str, Any] | None = None,
+        state: dict[str, Any] | None = None,
+        position: PanelPosition | None = None,
+        layout: PanelLayout | None = None,
+        reference_panel_id: str | None = None,
+        direction: PanelDirection | None = None,
+        layout_key: str | None = None,
+        geometry: str | None = None,
+        layout_dimension: int | None = None,
+    ) -> None:
+        """Place one panel instance.
+
+        Args:
+            panel_type: Registered panel type.
+            id: Panel instance id, unique within the view.
+            title: Panel title. Defaults to the panel definition's title.
+            props: Panel props, passed to the renderer.
+            state: The panel's opening runtime state. HyperView applies it when
+                the view is applied, on top of the definition's default state,
+                so a script does not have to patch panel state afterwards.
+            position: ``center``, ``right``, or ``bottom``. Defaults to the
+                panel definition's own default placement.
+            layout: Size hints, as a :class:`PanelLayout`.
+            reference_panel_id: Panel this one is placed relative to.
+            direction: Where to place it relative to ``reference_panel_id``.
+            layout_key: For scatter panels, the layout to pin the panel to.
+            geometry: For scatter panels, the layout geometry.
+            layout_dimension: For scatter panels, 2 or 3.
+        """
+
+        setter = object.__setattr__
+        setter(self, "panel_type", panel_type)
+        setter(self, "id", id)
+        setter(self, "title", title)
+        setter(self, "props", dict(props or {}))
+        setter(self, "state", dict(state) if state is not None else None)
+        setter(self, "position", position)
+        setter(self, "reference_panel_id", reference_panel_id)
+        setter(self, "direction", direction)
+        setter(self, "layout", layout)
+        setter(self, "layout_key", layout_key)
+        setter(self, "geometry", geometry)
+        setter(self, "layout_dimension", layout_dimension)
 
 
-@dataclass(frozen=True)
-class Samples:
-    """A built-in samples panel instance."""
+@dataclass(frozen=True, init=False)
+class ExtensionPanel(Panel):
+    """A panel instance backed by an installed extension panel asset.
 
-    id: str = "samples"
-    title: str = "Samples"
-    position: PanelPosition = "right"
-    reference_panel_id: str | None = None
-    direction: PanelDirection | None = None
-    layout: PanelLayout | None = None
-    props: dict[str, Any] = field(default_factory=dict)
+    ``ExtensionPanel(extension="x", panel="y")`` is
+    ``Panel(panel_type="x.y")`` for an extension whose manifest does not
+    override ``panel_type``. The extension must be registered before the view
+    is applied; see ``hv.launch(..., extensions=[...])``.
+    """
+
+    extension: str = ""
+    panel: str = ""
+
+    def __init__(
+        self,
+        id: str,
+        extension: str,
+        panel: str,
+        title: str | None = None,
+        position: PanelPosition | None = None,
+        reference_panel_id: str | None = None,
+        direction: PanelDirection | None = None,
+        layout: PanelLayout | None = None,
+        props: dict[str, Any] | None = None,
+        *,
+        state: dict[str, Any] | None = None,
+    ) -> None:
+        Panel.__init__(
+            self,
+            f"{extension}.{panel}",
+            id=id,
+            title=title,
+            props=props,
+            state=state,
+            position=position,
+            layout=layout,
+            reference_panel_id=reference_panel_id,
+            direction=direction,
+        )
+        object.__setattr__(self, "extension", extension)
+        object.__setattr__(self, "panel", panel)
+
+
+@dataclass(frozen=True, init=False)
+class Scatter(Panel):
+    """A scatter panel instance pinned to an explicit layout."""
+
+    def __init__(
+        self,
+        id: str,
+        title: str = "Embeddings",
+        layout_key: str | None = None,
+        position: PanelPosition = "center",
+        reference_panel_id: str | None = None,
+        direction: PanelDirection | None = None,
+        geometry: str | None = None,
+        layout_dimension: int | None = None,
+        layout: PanelLayout | None = None,
+        props: dict[str, Any] | None = None,
+        *,
+        state: dict[str, Any] | None = None,
+        preset: str | None = None,
+        presets: dict[str, Any] | None = None,
+    ) -> None:
+        Panel.__init__(
+            self,
+            SCATTER_PANEL_TYPE,
+            id=id,
+            title=title,
+            props=_clean_props(props, {"preset": preset, "presets": presets}),
+            state=state,
+            position=position,
+            layout=layout,
+            reference_panel_id=reference_panel_id,
+            direction=direction,
+            layout_key=layout_key,
+            geometry=geometry,
+            layout_dimension=layout_dimension,
+        )
+
+
+@dataclass(frozen=True, init=False)
+class Samples(Panel):
+    """A built-in samples panel instance.
+
+    The documented props have keyword parameters. ``mode`` chooses how the
+    panel reads its rows: ``auto`` follows runtime state, ``results`` shows a
+    prepared collection in its authored order, ``ranked`` shows nearest
+    neighbours of ``rank["anchor_sample_id"]``, and ``browse`` stays on the
+    dataset. Anything not covered here can still be passed through ``props``.
+    """
+
+    def __init__(
+        self,
+        id: str = "samples",
+        title: str = "Samples",
+        position: PanelPosition = "right",
+        reference_panel_id: str | None = None,
+        direction: PanelDirection | None = None,
+        layout: PanelLayout | None = None,
+        props: dict[str, Any] | None = None,
+        *,
+        state: dict[str, Any] | None = None,
+        mode: Literal["auto", "browse", "ranked", "results"] | None = None,
+        collection_id: str | None = None,
+        anchor_sample_id: str | None = None,
+        label_field: str | None = None,
+        show_text_search: bool | None = None,
+        rank: dict[str, Any] | None = None,
+    ) -> None:
+        Panel.__init__(
+            self,
+            SAMPLES_PANEL_TYPE,
+            id=id,
+            title=title,
+            props=_clean_props(
+                props,
+                {
+                    "mode": mode,
+                    "collectionId": collection_id,
+                    "anchorSampleId": anchor_sample_id,
+                    "labelField": label_field,
+                    "showTextSearch": show_text_search,
+                    "rank": _samples_rank_props(rank),
+                },
+            ),
+            state=state,
+            position=position,
+            layout=layout,
+            reference_panel_id=reference_panel_id,
+            direction=direction,
+        )
+
+
+@dataclass(frozen=True, init=False)
+class Explorer(Panel):
+    """A built-in explorer panel instance: labels and dataset facets."""
+
+    def __init__(
+        self,
+        id: str = "explorer",
+        title: str = "Labels",
+        position: PanelPosition = "right",
+        reference_panel_id: str | None = None,
+        direction: PanelDirection | None = None,
+        layout: PanelLayout | None = None,
+        props: dict[str, Any] | None = None,
+        *,
+        state: dict[str, Any] | None = None,
+    ) -> None:
+        Panel.__init__(
+            self,
+            EXPLORER_PANEL_TYPE,
+            id=id,
+            title=title,
+            props=props,
+            state=state,
+            position=position,
+            layout=layout,
+            reference_panel_id=reference_panel_id,
+            direction=direction,
+        )
+
+
+_SAMPLES_RANK_PROP_NAMES = {
+    "anchor_sample_id": "anchorSampleId",
+    "layout_key": "layoutKey",
+    "space_key": "spaceKey",
+    "show_distance": "showDistance",
+}
+
+
+def _samples_rank_props(rank: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Accept snake_case rank keys and hand the panel the camelCase it reads."""
+
+    if rank is None:
+        return None
+    return {_SAMPLES_RANK_PROP_NAMES.get(key, key): value for key, value in rank.items()}
 
 
 @dataclass(frozen=True)
@@ -97,7 +329,7 @@ class Container:
     """A container that composes panel instances."""
 
     kind: ContainerKind
-    contents: tuple[ExtensionPanel | Scatter | Samples | Container, ...]
+    contents: tuple[Panel | Container, ...]
     shares: tuple[float, ...] | None = None
     active_tab: int | str | None = None
 
@@ -106,13 +338,13 @@ class Container:
 class View:
     """A concrete workspace view made of panel instances and containers."""
 
-    contents: tuple[ExtensionPanel | Scatter | Samples | Container, ...]
+    contents: tuple[Panel | Container, ...]
     clear_existing: bool = True
     active_panel: str | None = None
 
     def __init__(
         self,
-        *contents: ExtensionPanel | Scatter | Samples | Container,
+        *contents: Panel | Container,
         clear_existing: bool = True,
         active_panel: str | None = None,
     ) -> None:
@@ -124,6 +356,7 @@ class View:
         """Apply this view to a runtime workspace."""
 
         panels = compile_view(self, runtime=runtime, workspace_id=workspace_id)
+        initial_states = collect_initial_panel_states(self)
         if self.clear_existing:
             runtime.replace_custom_panels(
                 workspace_id,
@@ -131,15 +364,20 @@ class View:
                 bump_view_revision=True,
                 has_explicit_view=True,
                 active_panel_id=self.active_panel,
+                initial_panel_states=initial_states,
             )
             return
 
         for panel in panels:
-            runtime.add_custom_panel(workspace_id, panel)
+            runtime.add_custom_panel(
+                workspace_id,
+                panel,
+                initial_state=initial_states.get(panel.id),
+            )
 
 
 def Horizontal(  # noqa: N802 - public UI helper mirrors component naming.
-    *contents: ExtensionPanel | Scatter | Samples | Container,
+    *contents: Panel | Container,
     shares: list[float] | tuple[float, ...] | None = None,
 ) -> Container:
     return Container(
@@ -148,7 +386,7 @@ def Horizontal(  # noqa: N802 - public UI helper mirrors component naming.
 
 
 def Vertical(  # noqa: N802 - public UI helper mirrors component naming.
-    *contents: ExtensionPanel | Scatter | Samples | Container,
+    *contents: Panel | Container,
     shares: list[float] | tuple[float, ...] | None = None,
 ) -> Container:
     return Container(
@@ -157,19 +395,77 @@ def Vertical(  # noqa: N802 - public UI helper mirrors component naming.
 
 
 def Tabs(  # noqa: N802 - public UI helper mirrors component naming.
-    *contents: ExtensionPanel | Scatter | Samples | Container,
+    *contents: Panel | Container,
     active_tab: int | str | None = None,
 ) -> Container:
     return Container(kind="tabs", contents=tuple(contents), active_tab=active_tab)
 
 
 def Grid(  # noqa: N802 - public UI helper mirrors component naming.
-    *contents: ExtensionPanel | Scatter | Samples | Container,
+    *contents: Panel | Container,
     shares: list[float] | tuple[float, ...] | None = None,
 ) -> Container:
     return Container(
         kind="grid", contents=tuple(contents), shares=tuple(shares) if shares else None
     )
+
+
+def iter_view_panels(item: View | Container | Panel) -> list[Panel]:
+    """Return every panel instance in a view, container, or panel, in order."""
+
+    if isinstance(item, Panel):
+        return [item]
+    contents = item.contents
+    panels: list[Panel] = []
+    for child in contents:
+        panels.extend(iter_view_panels(child))
+    return panels
+
+
+def collect_initial_panel_states(view: View) -> dict[str, dict[str, Any]]:
+    """Return the opening state each panel in the view declares."""
+
+    return {
+        panel.id: dict(panel.state)
+        for panel in iter_view_panels(view)
+        if panel.state is not None
+    }
+
+
+def _resolve_panel(panel: Panel, runtime: HyperViewRuntime):
+    """Resolve one view panel against the runtime's registered panel definitions.
+
+    ``ExtensionPanel`` names its panel by extension and manifest id, which stays
+    correct even when the manifest overrides ``panel_type``. Everything else
+    resolves by panel type.
+    """
+
+    if isinstance(panel, ExtensionPanel):
+        return runtime.find_extension_panel(panel.extension, panel.panel)
+    return runtime.find_panel_type(panel.panel_type)
+
+
+def _unknown_panel_type_error(panel: Panel, runtime: HyperViewRuntime) -> ValueError:
+    registered = ", ".join(runtime.list_panel_types()) or "(none)"
+    if isinstance(panel, ExtensionPanel):
+        requested = f"extension {panel.extension!r} panel {panel.panel!r}"
+    else:
+        requested = f"panel type {panel.panel_type!r}"
+    return ValueError(
+        f"Unknown {requested} for view panel {panel.id!r}. "
+        f"Registered panel types: {registered}. "
+        "Extension panel types only exist once the extension is registered, so "
+        "register it before applying the view — hv.launch(..., extensions=[...]) "
+        "or session.ui.apply_view(view, extensions=[...])."
+    )
+
+
+def validate_panel_types(view: View, runtime: HyperViewRuntime) -> None:
+    """Fail with a readable error when a view names a panel type nothing registers."""
+
+    for panel in iter_view_panels(view):
+        if _resolve_panel(panel, runtime) is None:
+            raise _unknown_panel_type_error(panel, runtime)
 
 
 def compile_view(
@@ -179,6 +475,9 @@ def compile_view(
     workspace_id: str | None = None,
 ) -> list[CustomPanelSpec]:
     """Compile a public view object into runtime panel specs."""
+
+    if runtime is not None:
+        validate_panel_types(view, runtime)
 
     specs: list[CustomPanelSpec] = []
     for item in view.contents:
@@ -212,7 +511,7 @@ def _validate_unique_panel_ids(panels: list[CustomPanelSpec]) -> None:
 
 
 def _compile_item(
-    item: ExtensionPanel | Scatter | Samples | Container,
+    item: Panel | Container,
     *,
     default_position: PanelPosition | None,
     reference_panel_id: str | None,
@@ -305,19 +604,39 @@ def _container_direction(kind: ContainerKind) -> PanelDirection:
 
 
 def _panel_to_spec(
-    panel: ExtensionPanel | Scatter | Samples,
+    panel: Panel,
     *,
     position: PanelPosition | None,
     runtime: HyperViewRuntime | None,
     workspace_id: str | None,
 ) -> CustomPanelSpec:
+    layout_kwargs = panel.layout.to_runtime_kwargs() if panel.layout is not None else {}
+
     if runtime is not None:
-        resolved_workspace_id = workspace_id or ""
-        if isinstance(panel, Scatter):
+        match = _resolve_panel(panel, runtime)
+        if match is None:
+            raise _unknown_panel_type_error(panel, runtime)
+
+        if match.extension is not None:
             return runtime.build_custom_panel(
-                resolved_workspace_id,
+                workspace_id or "",
                 panel_id=panel.id,
                 title=panel.title,
+                kind="extension",
+                extension=match.extension,
+                extension_panel=match.extension_panel,
+                position=position,
+                reference_panel_id=panel.reference_panel_id,
+                direction=panel.direction,
+                props=panel.props,
+                **layout_kwargs,
+            )
+
+        if panel.panel_type == SCATTER_PANEL_TYPE and panel.layout_key:
+            return runtime.build_custom_panel(
+                workspace_id or "",
+                panel_id=panel.id,
+                title=panel.title or match.definition.title or match.definition.label,
                 kind="scatter",
                 layout_key=panel.layout_key,
                 position=position,
@@ -327,111 +646,60 @@ def _panel_to_spec(
                 geometry=panel.geometry,
                 layout_dimension=panel.layout_dimension,
                 require_resolved_layout=False,
-                **(panel.layout.to_runtime_kwargs() if panel.layout is not None else {}),
+                **layout_kwargs,
             )
 
-        if isinstance(panel, Samples):
-            return runtime.build_custom_panel(
-                resolved_workspace_id,
-                panel_id=panel.id,
-                title=panel.title,
-                kind="builtin",
-                builtin_panel="samples",
-                position=position,
-                reference_panel_id=panel.reference_panel_id,
-                direction=panel.direction,
-                props=panel.props,
-                **(panel.layout.to_runtime_kwargs() if panel.layout is not None else {}),
-            )
-
-        if isinstance(panel, ExtensionPanel):
-            return runtime.build_custom_panel(
-                resolved_workspace_id,
-                panel_id=panel.id,
-                title=panel.title,
-                kind="extension",
-                extension=panel.extension,
-                extension_panel=panel.panel,
-                position=position,
-                reference_panel_id=panel.reference_panel_id,
-                direction=panel.direction,
-                props=panel.props,
-                **(panel.layout.to_runtime_kwargs() if panel.layout is not None else {}),
-            )
-
-    if isinstance(panel, Scatter):
-        return CustomPanelSpec(
-            id=panel.id,
-            title=panel.title,
-            kind="scatter",
-            position=position,
-            layout_key=panel.layout_key,
-            geometry=panel.geometry,
-            layout_dimension=panel.layout_dimension,
-            reference_panel_id=panel.reference_panel_id,
-            direction=panel.direction,
-            props=dict(panel.props),
-            **(panel.layout.to_runtime_kwargs() if panel.layout is not None else {}),
-        )
-
-    if isinstance(panel, Samples):
-        return CustomPanelSpec(
-            id=panel.id,
+        return runtime.build_custom_panel(
+            workspace_id or "",
+            panel_id=panel.id,
             title=panel.title,
             kind="builtin",
-            builtin_panel="samples",
+            builtin_panel=panel.panel_type,
             position=position,
             reference_panel_id=panel.reference_panel_id,
             direction=panel.direction,
-            props=dict(panel.props),
-            **(panel.layout.to_runtime_kwargs() if panel.layout is not None else {}),
+            props=panel.props,
+            **layout_kwargs,
         )
 
-    if isinstance(panel, ExtensionPanel):
-        if runtime is None:
-            raise ValueError("ExtensionPanel requires a runtime to resolve its module file")
-        installation = runtime.get_extension(panel.extension)
-        if installation is None:
-            raise ValueError(f"Unknown extension: {panel.extension}")
-
-        manifest_panel = next(
-            (entry for entry in installation.manifest.panels if entry.id == panel.panel),
-            None,
-        )
-        if manifest_panel is None:
-            raise ValueError(f"Extension '{panel.extension}' has no panel '{panel.panel}'")
-
-        module_file = resolve_panel_source(
-            installation.manifest.folder,
-            manifest_panel.file,
-        )
-        return CustomPanelSpec(
-            id=panel.id,
-            title=panel.title or manifest_panel.title,
-            kind="module",
-            extension=panel.extension,
-            extension_panel=panel.panel,
-            module_file=str(module_file),
-            position=position,
-            reference_panel_id=panel.reference_panel_id,
-            direction=panel.direction,
-            props=dict(panel.props),
-            **(panel.layout.to_runtime_kwargs() if panel.layout is not None else {}),
+    # Without a runtime we can only describe built-in panels: an extension
+    # panel's module file lives in the installed extension.
+    if panel.panel_type not in {SCATTER_PANEL_TYPE, SAMPLES_PANEL_TYPE, EXPLORER_PANEL_TYPE}:
+        raise ValueError(
+            f"Panel type {panel.panel_type!r} requires a runtime to resolve its panel definition"
         )
 
-    raise TypeError(f"Unsupported panel type: {type(panel).__name__}")
+    return CustomPanelSpec(
+        id=panel.id,
+        title=panel.title or panel.panel_type.title(),
+        kind="scatter" if panel.panel_type == SCATTER_PANEL_TYPE else "builtin",
+        builtin_panel=panel.panel_type,
+        position=position or "right",
+        layout_key=panel.layout_key,
+        geometry=panel.geometry,
+        layout_dimension=panel.layout_dimension,
+        reference_panel_id=panel.reference_panel_id,
+        direction=panel.direction,
+        props=dict(panel.props),
+        **layout_kwargs,
+    )
 
 
 __all__ = [
     "Container",
+    "Explorer",
     "ExtensionPanel",
     "Grid",
     "Horizontal",
+    "Panel",
     "PanelLayout",
     "Samples",
     "Scatter",
     "Tabs",
     "Vertical",
     "View",
+    "collect_initial_panel_states",
     "compile_view",
+    "iter_view_panels",
+    "validate_panel_types",
 ]

@@ -3,7 +3,8 @@ if (!sdk || sdk.version !== "2") {
   throw new Error("HyperViewPanelSDK v2 is not available on window.");
 }
 
-const { React, hooks } = sdk;
+const { React, components, hooks } = sdk;
+const { Panel, PanelHeader, PanelToolbar, PanelToolbarButton } = components;
 const { useCollection, usePanelState, useSelection, useSupportsTools, useTool } = hooks;
 
 export default function ReferencePanel({ panelId, props }) {
@@ -32,23 +33,37 @@ export default function ReferencePanel({ panelId, props }) {
     }
   }, [runTool]);
 
+  const toolbarItems = [
+    { id: "selection", label: "Selected", value: String(selectedIds.length) },
+    {
+      id: "collection",
+      label: "Collection",
+      value: collection ? collection.id : "none",
+    },
+  ];
+
   return React.createElement(
-    "main",
-    { style: { display: "grid", gap: 10, height: "100%", overflow: "auto", padding: 12 } },
-    React.createElement("strong", null, props.heading || "Extension contract"),
-    React.createElement("span", null, `${selectedIds.length} selected`),
-    React.createElement("span", null, collection ? `Collection: ${collection.id}` : "No collection bound"),
-    React.createElement("textarea", {
-      "aria-label": "Reference panel notes",
-      value: panelState.state.notes || "",
-      onChange: updateNotes,
+    Panel,
+    null,
+    React.createElement(PanelHeader, { title: props.heading || "Extension contract" }),
+    React.createElement(PanelToolbar, {
+      items: toolbarItems,
+      actions: React.createElement(
+        PanelToolbarButton,
+        { type: "button", onClick: inspectWorkspace, disabled: !supportsTools },
+        supportsTools ? "Inspect workspace" : "Tools unavailable"
+      ),
     }),
     React.createElement(
-      "button",
-      { type: "button", onClick: inspectWorkspace, disabled: !supportsTools },
-      supportsTools ? "Inspect workspace" : "Live tools unavailable"
-    ),
-    error ? React.createElement("p", { role: "alert" }, error) : null,
-    description ? React.createElement("pre", null, JSON.stringify(description, null, 2)) : null
+      "div",
+      { style: { display: "grid", gap: 10, minHeight: 0, overflow: "auto", padding: 12 } },
+      React.createElement("textarea", {
+        "aria-label": "Reference panel notes",
+        value: panelState.state.notes || "",
+        onChange: updateNotes,
+      }),
+      error ? React.createElement("p", { role: "alert" }, error) : null,
+      description ? React.createElement("pre", null, JSON.stringify(description, null, 2)) : null
+    )
   );
 }

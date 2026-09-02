@@ -1175,6 +1175,15 @@ class _JobCancelledError(Exception):
     """Internal cooperative-cancellation signal for a running job."""
 
 
+@dataclass(frozen=True)
+class PanelTypeMatch:
+    """A registered panel type, and the extension that contributed it."""
+
+    definition: PanelDefinition
+    extension: str | None = None
+    extension_panel: str | None = None
+
+
 @dataclass
 class ExtensionInstallation:
     """Bookkeeping for an installed extension (in-memory, per-process)."""
@@ -1483,15 +1492,71 @@ class HyperViewRuntime:
         self,
         workspace: WorkspaceState,
         panel: CustomPanelSpec,
+        initial_state: dict[str, Any] | None = None,
     ) -> None:
+        """Seed a panel's runtime state when it enters the workspace.
+
+        Without ``initial_state`` this only fills in the panel definition's
+        defaults, and only for a panel the workspace has never seen. With
+        ``initial_state`` the caller is authoring the panel's opening state, so
+        it wins over whatever a previous run of the same workspace left behind:
+        the result is the definition defaults with the authored state merged on
+        top.
+        """
+
         definition = self._definition_for_panel_spec_locked(panel)
-        if definition is None or panel.id in workspace.ui.panels:
+        if initial_state is None and (definition is None or panel.id in workspace.ui.panels):
             return
-        state = _json_object_copy(definition.default_state)
-        if definition.panel_type == "samples" and workspace.dataset_name:
+
+        state = _json_object_copy(definition.default_state) if definition is not None else {}
+        if (
+            definition is not None
+            and definition.panel_type == "samples"
+            and workspace.dataset_name
+        ):
             state.update(_samples_collection_state(self._build_all_collection_locked(workspace)))
-        if state:
-            workspace.ui.panels[panel.id] = PanelStateEntry(state=state)
+
+        if initial_state is None:
+            if state:
+                workspace.ui.panels[panel.id] = PanelStateEntry(state=state)
+            return
+
+        state = _json_merge_patch(state, _json_object_copy(dict(initial_state)))
+        validate_json_contract(
+            state,
+            definition.state_schema if definition is not None else None,
+            label=f"panel {panel.id!r} state",
+        )
+        existing = workspace.ui.panels.get(panel.id)
+        workspace.ui.panels[panel.id] = PanelStateEntry(
+            state=state,
+            state_revision=existing.state_revision + 1 if existing is not None else 0,
+        )
+
+    def _apply_initial_panel_states_locked(
+        self,
+        workspace: WorkspaceState,
+        panels: list[CustomPanelSpec],
+        initial_panel_states: dict[str, Any] | None,
+    ) -> bool:
+        """Apply authored opening state to panels, reporting whether it changed anything."""
+
+        if not initial_panel_states:
+            return False
+        changed = False
+        for panel in panels:
+            initial_state = initial_panel_states.get(panel.id)
+            if initial_state is None:
+                continue
+            before = workspace.ui.panels.get(panel.id)
+            self._seed_default_panel_state_locked(workspace, panel, initial_state)
+            after = workspace.ui.panels.get(panel.id)
+            if before is not None and after is not None and before.state == after.state:
+                # Re-applying identical state should not look like an edit.
+                workspace.ui.panels[panel.id] = before
+                continue
+            changed = True
+        return changed
 
     def get_panel_state(
         self,
@@ -1825,6 +1890,52 @@ class HyperViewRuntime:
             self.workspace_registry.update_workspace(workspace)
             self._bump_version()
             return workspace
+
+    def create_collection(
+        self,
+        workspace_id: str,
+        sample_ids: list[str],
+        *,
+        name: str | None = None,
+    ) -> CollectionState:
+        """Persist an explicit, ordered list of samples as a workspace collection.
+
+        The returned collection is durable workspace state: panels can bind to
+        its id through props, and a static export materializes it because the
+        view references it.
+        """
+
+        unique_ids = list(
+            dict.fromkeys(str(item).strip() for item in sample_ids if str(item).strip())
+        )
+        if not unique_ids:
+            raise ValueError("create_collection requires at least one sample id")
+
+        dataset = self.get_dataset(workspace_id=workspace_id)
+        existing_ids = {sample.id for sample in dataset.get_samples_by_ids(unique_ids)}
+        missing_ids = [sample_id for sample_id in unique_ids if sample_id not in existing_ids]
+        if missing_ids:
+            preview = ", ".join(missing_ids[:5])
+            suffix = "" if len(missing_ids) <= 5 else f", and {len(missing_ids) - 5} more"
+            raise KeyError(f"Samples not found: {preview}{suffix}")
+
+        with self._lock:
+            workspace = self.get_workspace(workspace_id)
+            collection = self._build_selection_collection_locked(
+                workspace,
+                sample_ids=unique_ids,
+                source=name,
+            )
+            self.workspace_registry.update_workspace(workspace)
+            self._bump_version()
+            return collection
+
+    def list_collections(self, workspace_id: str) -> list[CollectionState]:
+        """Return the workspace's stored collections, ordered by id."""
+
+        with self._lock:
+            workspace = self.get_workspace(workspace_id)
+            return [workspace.collections[key] for key in sorted(workspace.collections)]
 
     def set_active_layout(self, workspace_id: str, layout_key: str | None) -> WorkspaceState:
         with self._lock:
@@ -2405,7 +2516,13 @@ class HyperViewRuntime:
         )
         return self.add_custom_panel(workspace_id, panel)
 
-    def add_custom_panel(self, workspace_id: str, panel: CustomPanelSpec) -> WorkspaceState:
+    def add_custom_panel(
+        self,
+        workspace_id: str,
+        panel: CustomPanelSpec,
+        *,
+        initial_state: dict[str, Any] | None = None,
+    ) -> WorkspaceState:
         with self._lock:
             workspace = self.get_workspace(workspace_id)
             panels = [
@@ -2413,7 +2530,7 @@ class HyperViewRuntime:
             ]
             panels.append(panel)
             workspace.ui.custom_panels = panels
-            self._seed_default_panel_state_locked(workspace, panel)
+            self._seed_default_panel_state_locked(workspace, panel, initial_state)
             workspace.ui.view_revision += 1
             self.workspace_registry.update_workspace(workspace)
             self._bump_version()
@@ -2540,6 +2657,7 @@ class HyperViewRuntime:
         bump_view_revision: bool = True,
         has_explicit_view: bool | None = None,
         active_panel_id: str | None = None,
+        initial_panel_states: dict[str, dict[str, Any]] | None = None,
     ) -> WorkspaceState:
         with self._lock:
             workspace = self.get_workspace(workspace_id)
@@ -2565,6 +2683,13 @@ class HyperViewRuntime:
                 and not persisted_layout_changed
                 and workspace.ui.active_panel_id == next_active_panel_id
             ):
+                if self._apply_initial_panel_states_locked(
+                    workspace,
+                    next_panels,
+                    initial_panel_states,
+                ):
+                    self.workspace_registry.update_workspace(workspace)
+                    self._bump_version()
                 return workspace
 
             workspace.ui.custom_panels = next_panels
@@ -2576,6 +2701,11 @@ class HyperViewRuntime:
             self._prune_panel_states_locked(workspace)
             for panel in next_panels:
                 self._seed_default_panel_state_locked(workspace, panel)
+            self._apply_initial_panel_states_locked(
+                workspace,
+                next_panels,
+                initial_panel_states,
+            )
             if bump_view_revision:
                 workspace.ui.view_revision += 1
             self.workspace_registry.update_workspace(workspace)
@@ -2913,6 +3043,60 @@ class HyperViewRuntime:
                 continue
             return definition
         return None
+
+    def list_panel_types(self) -> list[str]:
+        """Return every registered panel type, built-in and extension."""
+
+        return sorted({definition.panel_type for definition in self.list_panel_definitions()})
+
+    def find_panel_type(self, panel_type: str) -> PanelTypeMatch | None:
+        """Resolve a panel type to its definition and, if any, its extension.
+
+        Panel types are the one name a view needs: ``"samples"`` for a built-in,
+        or whatever an installed extension declares (``"<extension>.<panel>"``
+        unless the manifest overrides ``panel_type``).
+        """
+
+        with self._lock:
+            for definition in self._core_panel_definitions:
+                if definition.panel_type == panel_type:
+                    return PanelTypeMatch(definition=definition)
+            for installation in self._extensions.values():
+                extension_name = installation.manifest.name
+                for entry in installation.manifest.panels:
+                    if entry.resolved_panel_type(extension_name) != panel_type:
+                        continue
+                    return PanelTypeMatch(
+                        definition=entry.to_definition(
+                            extension_name,
+                            source=installation.source,
+                        ),
+                        extension=extension_name,
+                        extension_panel=entry.id,
+                    )
+        return None
+
+    def find_extension_panel(self, extension: str, panel_id: str) -> PanelTypeMatch | None:
+        """Resolve an installed extension's panel by manifest id."""
+
+        with self._lock:
+            installation = self._extensions.get(extension)
+            if installation is None:
+                return None
+            entry = next(
+                (item for item in installation.manifest.panels if item.id == panel_id),
+                None,
+            )
+            if entry is None:
+                return None
+            return PanelTypeMatch(
+                definition=entry.to_definition(
+                    installation.manifest.name,
+                    source=installation.source,
+                ),
+                extension=installation.manifest.name,
+                extension_panel=entry.id,
+            )
 
     def _definition_for_panel_spec_locked(
         self,

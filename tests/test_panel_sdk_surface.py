@@ -31,7 +31,14 @@ def test_packaged_surface_matches_the_installed_sdk_global() -> None:
 
 def test_surface_lists_every_hook_the_sdk_global_installs() -> None:
     source = SDK_SOURCE.read_text(encoding="utf-8")
-    declared = set(re.findall(r"^\s{4}(\w+): typeof \w+;", source, re.MULTILINE))
+    hooks_block = re.search(r"\n  hooks: \{(.*?)\n  \};", source, re.DOTALL)
+    assert hooks_block is not None, "the SDK global's hook type declarations moved"
+    declared = set(re.findall(r"^\s{4}(\w+): typeof \w+;", hooks_block.group(1), re.MULTILINE))
+    components_block = re.search(r"\n  components: \{(.*?)\n  \};", source, re.DOTALL)
+    assert components_block is not None, "the SDK global's component declarations moved"
+    declared_components = set(
+        re.findall(r"^\s{4}(\w+): typeof \w+;", components_block.group(1), re.MULTILINE)
+    )
 
     surface = hyperview.panel_sdk_surface()
 
@@ -39,4 +46,6 @@ def test_surface_lists_every_hook_the_sdk_global_installs() -> None:
     assert declared, "the SDK global's hook type declarations moved"
     assert declared <= set(surface["hooks"])
     assert "useSupportsSampleSimilarity" in surface["hooks"]
-    assert set(surface["keys"]) == {"React", "createClient", "hooks", "version"}
+    assert declared_components == set(surface["components"])
+    assert "Panel" in surface["components"]
+    assert set(surface["keys"]) == {"React", "components", "createClient", "hooks", "version"}

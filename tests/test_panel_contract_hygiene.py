@@ -94,7 +94,6 @@ def test_shipped_reference_panel_uses_only_hooks_exported_by_v2_sdk() -> None:
     sdk_source = PANEL_SDK_SOURCE.read_text(encoding="utf-8")
 
     assert 'sdk.version !== "2"' in panel_source
-    assert "components" not in panel_source
     assert "usePanelSelection" not in panel_source
     assert "usePanelRuntimeState" not in panel_source
 
@@ -103,3 +102,36 @@ def test_shipped_reference_panel_uses_only_hooks_exported_by_v2_sdk() -> None:
     used_hooks = {hook.strip() for hook in hook_match.group(1).split(",")}
     for hook in used_hooks:
         assert f"export function {hook}(" in sdk_source
+
+
+def test_v2_sdk_publishes_the_panel_chrome_the_builtins_use() -> None:
+    sdk_source = PANEL_SDK_SOURCE.read_text(encoding="utf-8")
+
+    shared_components = (
+        "Panel",
+        "PanelHeader",
+        "PanelToolbar",
+        "PanelToolbarButton",
+        "PanelToolbarIconButton",
+    )
+    declaration = re.search(r"components:\s*\{([\s\S]*?)\};", sdk_source)
+    installed = re.search(r"components:\s*\{([\s\S]*?)\},\n    hooks:", sdk_source)
+
+    assert declaration is not None, "HyperViewPanelSdkGlobal must declare components"
+    assert installed is not None, "installHyperViewPanelSdkGlobal must install components"
+    for component in shared_components:
+        assert f"{component}: typeof {component};" in declaration.group(1)
+        assert re.search(rf"(?m)^\s*{component},\s*$", installed.group(1))
+
+
+def test_shipped_reference_panel_uses_only_components_exported_by_v2_sdk() -> None:
+    panel_source = REFERENCE_PANEL_SOURCE.read_text(encoding="utf-8")
+    sdk_source = PANEL_SDK_SOURCE.read_text(encoding="utf-8")
+
+    component_match = re.search(r"const \{ ([^}]+) \} = components;", panel_source)
+    assert component_match is not None, "the reference panel should demonstrate the component kit"
+
+    declaration = re.search(r"components:\s*\{([\s\S]*?)\};", sdk_source)
+    assert declaration is not None
+    for component in (name.strip() for name in component_match.group(1).split(",")):
+        assert f"{component}: typeof {component};" in declaration.group(1)

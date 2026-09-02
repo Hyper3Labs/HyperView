@@ -3,7 +3,14 @@
 import React, { useCallback, useMemo } from "react";
 
 import { useDockviewContext } from "@/components/DockviewContext";
+import { Panel } from "@/components/Panel";
+import { PanelHeader } from "@/components/PanelHeader";
 import { usePanelInstance } from "@/components/PanelHostContext";
+import {
+  PanelToolbar,
+  PanelToolbarButton,
+  PanelToolbarIconButton,
+} from "@/components/PanelToolbar";
 import {
   apiRequest,
   apiUrl,
@@ -1144,6 +1151,19 @@ export function useHostAdapter() {
 export interface HyperViewPanelSdkGlobal {
   version: "2";
   React: typeof React;
+  /**
+   * The panel chrome the built-in panels are made of. An extension panel is
+   * free to render anything, but a panel that only wants to look like the rest
+   * of the workspace should not have to hand-roll a header and a toolbar out of
+   * inline CSS.
+   */
+  components: {
+    Panel: typeof Panel;
+    PanelHeader: typeof PanelHeader;
+    PanelToolbar: typeof PanelToolbar;
+    PanelToolbarButton: typeof PanelToolbarButton;
+    PanelToolbarIconButton: typeof PanelToolbarIconButton;
+  };
   hooks: {
     useCommandClient: typeof useCommandClient;
     useQuery: typeof useQuery;
@@ -1181,6 +1201,13 @@ export function installHyperViewPanelSdkGlobal() {
   window.HyperViewPanelSDK = {
     version: "2",
     React,
+    components: {
+      Panel,
+      PanelHeader,
+      PanelToolbar,
+      PanelToolbarButton,
+      PanelToolbarIconButton,
+    },
     hooks: {
       useCommandClient,
       useQuery,

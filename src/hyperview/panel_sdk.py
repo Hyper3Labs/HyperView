@@ -25,9 +25,10 @@ def _surface() -> dict[str, Any]:
 def panel_sdk_surface() -> dict[str, Any]:
     """What `window.HyperViewPanelSDK` offers a panel module in this release.
 
-    Returns ``{"version": str, "keys": [str], "hooks": [str]}``: the SDK major
-    version a panel must assert, the top-level keys of the global, and the hook
-    names available under ``sdk.hooks``. Panel linters should read this rather
+    Returns ``{"version": str, "keys": [str], "hooks": [str], "components": [str]}``:
+    the SDK major version a panel must assert, the top-level keys of the global,
+    the hook names available under ``sdk.hooks``, and the React components
+    available under ``sdk.components``. Panel linters should read this rather
     than keep their own copy, which is how a checker ends up rejecting a hook
     the shell has shipped for two releases.
     """
@@ -37,4 +38,5 @@ def panel_sdk_surface() -> dict[str, Any]:
         "version": str(surface["version"]),
         "keys": list(surface["keys"]),
         "hooks": list(surface["hooks"]),
+        "components": list(surface.get("components", [])),
     }
