@@ -187,6 +187,19 @@ def parse_visualization_layout(layout: str) -> tuple[str, int]:
     return geometry, layout_dimension
 
 
+class _SpaceIndex:
+    """Lazily read the space registry, at most once per ``list_layouts()`` call."""
+
+    def __init__(self, storage: StorageBackend) -> None:
+        self._storage = storage
+        self._spaces: dict[str, SpaceInfo] | None = None
+
+    def get(self, space_key: str) -> SpaceInfo | None:
+        if self._spaces is None:
+            self._spaces = {space.space_key: space for space in self._storage.list_spaces()}
+        return self._spaces.get(space_key)
+
+
 class LayoutRecord(LayoutInfo):
     """One visualization layout, described by what produced it.
 
@@ -195,9 +208,12 @@ class LayoutRecord(LayoutInfo):
     reasons about — which model and provider produced the embedding space, and
     which geometry, dimension, and projection method produced the layout — so
     scripts can look a layout up instead of pinning its key as a constant.
+
+    The embedding space behind a layout lives in a separate registry, so it is
+    read only when something asks for the model or provider.
     """
 
-    def __init__(self, layout: LayoutInfo, space: SpaceInfo | None) -> None:
+    def __init__(self, layout: LayoutInfo, spaces: _SpaceIndex) -> None:
         super().__init__(
             layout_key=layout.layout_key,
             space_key=layout.space_key,
@@ -207,8 +223,21 @@ class LayoutRecord(LayoutInfo):
             created_at=layout.created_at,
             params=layout.params,
         )
-        self.model_id = space.model_id if space is not None else None
-        self.provider = space.provider if space is not None else None
+        self._spaces = spaces
+
+    @property
+    def model_id(self) -> str | None:
+        """Model the embedding space was computed with."""
+
+        space = self._spaces.get(self.space_key)
+        return space.model_id if space is not None else None
+
+    @property
+    def provider(self) -> str | None:
+        """Embedding provider alias, e.g. ``hyper-models``."""
+
+        space = self._spaces.get(self.space_key)
+        return space.provider if space is not None else None
 
     @property
     def key(self) -> str:
@@ -946,11 +975,8 @@ class Dataset:
         geometry, dimension, method, params, and sample count behind it.
         """
 
-        spaces = {space.space_key: space for space in self._storage.list_spaces()}
-        return [
-            LayoutRecord(layout, spaces.get(layout.space_key))
-            for layout in self._storage.list_layouts()
-        ]
+        spaces = _SpaceIndex(self._storage)
+        return [LayoutRecord(layout, spaces) for layout in self._storage.list_layouts()]
 
     def find_layout(
         self,
