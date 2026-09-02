@@ -1,6 +1,14 @@
 name = "core"
 description = "HyperView native panel definitions"
 
+# The props schemas below type the props each native renderer actually reads.
+# They deliberately do not set additionalProperties = false: a panel may accept
+# anything its renderer understands, so an unrecognized prop passes through
+# untouched. What the schema buys is that a documented prop with the wrong type
+# or a misspelled enum value fails at apply_view instead of silently rendering
+# the wrong thing. Both spellings of each prop are typed because the renderers
+# accept camelCase and snake_case alike.
+
 [[panels]]
 id = "samples"
 panel_type = "samples"
@@ -20,9 +28,37 @@ commands = [
 ]
 queries = ["samples.query", "samples.similar"]
 data_capabilities = ["collection:samples", "selection", "text-query", "neighbors"]
-props_schema = { type = "object" }
 state_schema = { type = "object" }
 default_layout = { id = "samples", position = "center", order = 10 }
+
+[panels.props_schema]
+type = "object"
+
+[panels.props_schema.properties]
+mode = { type = "string", enum = ["auto", "browse", "ranked", "results"] }
+collectionId = { type = "string" }
+collection_id = { type = "string" }
+anchorSampleId = { type = "string" }
+anchor_sample_id = { type = "string" }
+labelField = { type = "string" }
+label_field = { type = "string" }
+showTextSearch = { type = "boolean" }
+show_text_search = { type = "boolean" }
+
+[panels.props_schema.properties.rank]
+type = "object"
+
+[panels.props_schema.properties.rank.properties]
+anchorSampleId = { type = "string" }
+anchor_sample_id = { type = "string" }
+layoutKey = { type = "string" }
+layout_key = { type = "string" }
+spaceKey = { type = "string" }
+space_key = { type = "string" }
+k = { type = "integer" }
+source = { type = "string" }
+showDistance = { type = "boolean" }
+show_distance = { type = "boolean" }
 
 [[panels]]
 id = "scatter"
@@ -36,10 +72,23 @@ icon = "scatter"
 commands = ["workspace.panel.state.get", "workspace.panel.state.patch"]
 queries = ["embeddings", "layouts"]
 data_capabilities = ["layout:2d", "layout:3d", "selection", "labels"]
-props_schema = { type = "object" }
 state_schema = { type = "object" }
 default_props = { preset = "euclidean-2d", presets = { euclidean-2d = { label = "Euclidean", geometry = "euclidean", layout_dimension = 2 }, poincare-2d = { label = "Hyperbolic", geometry = "poincare", layout_dimension = 2 }, spherical-2d = { label = "Spherical", geometry = "spherical", layout_dimension = 2 }, euclidean-3d = { label = "Euclidean 3D", geometry = "euclidean", layout_dimension = 3 }, spherical-3d = { label = "Sphere 3D", geometry = "spherical", layout_dimension = 3 } } }
 default_layout = { id = "scatter", position = "center", reference_panel_id = "samples", direction = "right", order = 20, preset = "euclidean-2d" }
+
+[panels.props_schema]
+type = "object"
+
+[panels.props_schema.properties]
+preset = { type = "string" }
+presets = { type = "object" }
+layoutKey = { type = "string" }
+layout_key = { type = "string" }
+geometry = { type = "string", enum = ["euclidean", "poincare", "spherical"] }
+layoutDimension = { type = "integer", enum = [2, 3] }
+layout_dimension = { type = "integer", enum = [2, 3] }
+pinnedLayout = { type = "boolean" }
+pinned_layout = { type = "boolean" }
 
 [[panels]]
 id = "explorer"
