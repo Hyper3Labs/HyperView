@@ -1,6 +1,6 @@
 ---
 name: hyperview-cli
-description: Use HyperView's control-plane CLI for hyperview serve, static workspace export, dataset create, workspace create, embeddings compute, layouts compute, browserless paper figure export, runtime jobs, ui layout set, ui selection set, ui panel add/update, extension add, tools run, panel modules, Python tools, and local HyperView extension workflows.
+description: Use HyperView's control-plane CLI for hyperview serve, static workspace export, publishing a bundle to a Hugging Face Space or Cloudflare, dataset create, workspace create, embeddings compute, layouts compute, browserless paper figure export, runtime jobs, ui layout set, ui selection set, ui panel add/update, extension add, tools run, panel modules, Python tools, and local HyperView extension workflows.
 license: MIT
 compatibility: Requires Python 3.10-3.13 and the hyperview CLI (`uv tool install --python 3.12 hyperview`). Runtime-control commands require a running HyperView server.
 metadata:
@@ -31,6 +31,7 @@ HyperView currently supports Python 3.10 through 3.13; `--python 3.12` keeps the
 - Compute embeddings or layouts without restarting the UI.
 - Export paper-ready static 3D embedding figures without opening the UI.
 - Export read-only static demo bundles with `hyperview export`.
+- Publish an exported bundle to a Hugging Face Space, Cloudflare, or a static site directory with `hyperview publish`.
 - Switch the active workspace, layout, or selection in a running session.
 - Add, remove, or compose extension-backed panel instances.
 - Create, install, reload, or use a local extension with Python tools and browser panels.
@@ -45,7 +46,8 @@ HyperView currently supports Python 3.10 through 3.13; `--python 3.12` keeps the
 6. Use `hyperview ui ...` commands to switch what the live UI shows.
 7. Export paper figures with `hyperview figure export` when the user needs screenshots or publication diagrams.
 8. Export read-only static demos with `hyperview export <workspace-id> --out bundle/`.
-9. For extensions, create an extension folder and install it into the running workspace.
+9. Publish that bundle with `hyperview publish bundle/ --to hf:<owner>/<name>`.
+10. For extensions, create an extension folder and install it into the running workspace.
 
 ## Current model
 
@@ -67,6 +69,11 @@ HyperView currently supports Python 3.10 through 3.13; `--python 3.12` keeps the
 - Paper figure defaults are square, white-background, opaque PNGs with a faint sphere guide and direct labels for small label sets.
 - `hyperview export <workspace-id> --out bundle/` writes a self-contained **Shared Space**: a static frontend + JSON/API/media bundle. It is intentionally read-only with respect to durable workspace and backend/model operations, while keeping normal local exploration available: visitors can browse, select, pan/zoom, switch prepared cases, inspect panels, and use exported precomputed data. Backend-only affordances such as arbitrary text inference are hidden when unavailable. The host identifies this mode with the concise `Shared Space` label.
 
+- `hyperview publish <bundle-dir> --to <target>` takes an exported bundle to a host. The bundle directory is the unit of delivery; publishing never re-reads the workspace. Two hosting modes:
+  - **Static Space** (`--mode static`, the default): the bundle's files on a static host. `--to hf:<owner>/<name>` creates a Hugging Face Space with `sdk: static`; `--to cloudflare` runs the Wrangler command the manifest records; `--to dir:<path>` copies the bundle into a containing static site.
+  - **Live Space** (`--mode live`, Hugging Face only): a generated Docker Space that runs `hyperview serve --from <bundle> --public`, so visitors also get text queries, model jobs, and computed layouts.
+- `--dry-run` prints the plan and the generated `README.md`/`Dockerfile` and touches nothing. Use it before every first publish.
+
 ## Session authentication
 
 A running server mints a session token. Reads are open; runtime commands that
@@ -84,7 +91,7 @@ it. This bites agents that talk to `/api/control/commands/run` directly.
   and get 403 on provider registration, extension install, `tools run`, and
   embedding/layout compute. Drive those with a token, not by widening the flag.
 
-Read [references/commands.md](references/commands.md) for command recipes covering datasets, workspaces, providers, embeddings, layouts, paper figures, runtime UI state, selections, and jobs.
+Read [references/commands.md](references/commands.md) for command recipes covering datasets, workspaces, providers, embeddings, layouts, paper figures, publishing, runtime UI state, selections, and jobs.
 Read [references/panel-modules.md](references/panel-modules.md) when the task involves authoring a browser panel module.
 Read [references/extensions.md](references/extensions.md) when the task involves packaging or registering custom panel code or Python tools.
 
@@ -129,7 +136,7 @@ Read [references/extensions.md](references/extensions.md) when the task involves
 - Author custom panels as `panel.jsx` using `window.HyperViewPanelSDK` public hooks only. HyperView standardizes the data and interaction contract (props, selection, collections, sample results, sibling `updateProps`, panel state), not the panel's visual design. A panel is free to render any JSX, CSS, SVG, Canvas, or WebGL experience that fits its purpose.
 - Do not reach for private runtime/frontend APIs from extension panels. If a behavior is not on the public SDK or CLI/API surface, do not invent a side channel.
 - For paper diagrams, prefer `hyperview figure export` over browser screenshots unless the user explicitly needs exact UI chrome.
-- For public, read-only examples-gallery demos, create a Shared Space with `hyperview export <workspace-id> --out bundle/` instead of keeping a Python server awake. A bundle is location-independent: copy it to any path inside a containing static site and it resolves its own assets, API, and media from the document URL. Use **Live Space** for the runtime-connected deployment that can run new queries, providers, and workspace mutations.
+- For public, read-only examples-gallery demos, create a Shared Space with `hyperview export <workspace-id> --out bundle/` instead of keeping a Python server awake, then ship it with `hyperview publish bundle/ --to hf:<owner>/<name>`. A bundle is location-independent: copy it to any path inside a containing static site and it resolves its own assets, API, and media from the document URL. Use **Live Space** for the runtime-connected deployment that can run new queries, providers, and workspace mutations.
 - For publication figures, keep the defaults first: `--theme light`, `--guide-style paper`, and `--legend auto`. Use `--show-selection` only when selected samples are meaningful and will be explained in the caption.
 - The first `uv run hyperview ...` invocation in a session can take 30+ seconds (torch/datasets imports). Allow generous timeouts and avoid sending SIGINT.
 

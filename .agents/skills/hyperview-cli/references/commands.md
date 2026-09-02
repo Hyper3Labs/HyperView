@@ -272,6 +272,71 @@ import hyperview as hv
 hv.export_workspace("research", "dist/research-demo")
 ```
 
+## Publishing
+
+`hyperview export` writes a bundle directory; `hyperview publish` takes that
+directory to a host. Publishing never re-reads the workspace, so the bundle you
+reviewed is exactly the bundle that goes out.
+
+Print the plan first. A dry run touches no network and writes nothing outside a
+temporary staging directory:
+
+```bash
+hyperview publish dist/research-demo --to hf:hyper3labs/research-demo --dry-run
+```
+
+Publish the files as a **Static Space** on Hugging Face. HyperView creates the
+Space with `sdk: static` when it does not exist, writes a `README.md` whose
+frontmatter configures the Space, and replaces the previous upload so stale
+files disappear:
+
+```bash
+hyperview publish dist/research-demo --to hf:hyper3labs/research-demo
+hyperview publish dist/research-demo --to hf:hyper3labs/research-demo --private
+hyperview publish dist/research-demo --to hf:hyper3labs/research-demo --title "Research Demo" --emoji "🔭"
+```
+
+Publish a **Live Space**: a generated Docker Space that runs
+`hyperview serve --from <bundle> --public`, for demos that need text queries,
+model jobs, or computed layouts. The image pins the versions the manifest
+records; add anything else the demo imports:
+
+```bash
+hyperview publish dist/research-demo \
+  --to hf:hyper3labs/research-live \
+  --mode live \
+  --extra-pip "hyper-models[ml]==0.3.1" \
+  --extra-pip "torch==2.9.1" \
+  --hardware cpu-upgrade
+```
+
+Deploy the same bundle to Cloudflare. This runs the Wrangler command the
+manifest records, from the bundle directory. `--project` renames the Worker in
+`wrangler.jsonc` first:
+
+```bash
+hyperview publish dist/research-demo --to cloudflare
+hyperview publish dist/research-demo --to cloudflare --project gallery-research
+```
+
+Copy the bundle into a containing static site:
+
+```bash
+hyperview publish dist/research-demo --to dir:site/spaces/research
+```
+
+Authentication for Hugging Face targets comes from `HF_TOKEN` or a prior
+`hf auth login`; HyperView does not prompt for one.
+
+From Python:
+
+```python
+import hyperview as hv
+
+hv.publish("dist/research-demo", to="hf:hyper3labs/research-demo", mode="static")
+hv.publish("dist/research-demo", to="hf:hyper3labs/research-live", mode="live", dry_run=True)
+```
+
 ## Runtime UI
 
 Discover an existing layout key and sample IDs before mutating runtime state:
