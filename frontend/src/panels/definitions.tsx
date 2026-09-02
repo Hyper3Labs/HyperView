@@ -3,42 +3,11 @@
 import React from "react";
 import type { ComponentType } from "react";
 import { X } from "lucide-react";
-import type {
-  DockviewApi,
-  DockviewPanelApi,
-  IDockviewPanelHeaderProps,
-  IDockviewPanelProps,
-} from "dockview-react";
+import type { DockviewPanelApi, IDockviewPanelHeaderProps } from "dockview-react";
 
 import { isDockviewUserClosablePanelId } from "@/lib/dockviewPanelPolicy";
-import type { DatasetInfo } from "@/types";
 
-export type DockviewAddPanelOptions = Parameters<DockviewApi["addPanel"]>[0];
-export type DockviewPanelPosition = DockviewAddPanelOptions["position"];
 export type HyperViewPanelIcon = ComponentType<{ className?: string }>;
-export type HyperViewDockviewPanelComponent<
-  TParams extends Record<string, any> = Record<string, unknown>,
-> = ComponentType<IDockviewPanelProps<TParams>>;
-
-export interface BuiltInCenterPanelDefinition<
-  TParams extends Record<string, any> = Record<string, unknown>,
-> {
-  id: string;
-  panelType: string;
-  component: string;
-  title: string;
-  label: string;
-  icon: HyperViewPanelIcon;
-  tabComponent: string;
-  Component: HyperViewDockviewPanelComponent<TParams>;
-  TabComponent: ComponentType<IDockviewPanelHeaderProps>;
-  visibleInViewMenu?: boolean;
-  buildAddPanelOptions: (args: {
-    api: DockviewApi;
-    datasetInfo: DatasetInfo | null;
-    position?: DockviewPanelPosition;
-  }) => DockviewAddPanelOptions;
-}
 
 function useDockviewTabTitle(api: DockviewPanelApi) {
   const [title, setTitle] = React.useState(api.title);
@@ -95,18 +64,4 @@ export function createIconTabComponent(icon: HyperViewPanelIcon) {
   IconTab.displayName = `IconTab(${icon.displayName ?? icon.name ?? "Panel"})`;
 
   return IconTab;
-}
-
-export function defineBuiltInCenterPanel<
-  TParams extends Record<string, any> = Record<string, unknown>,
->(
-  definition: Omit<BuiltInCenterPanelDefinition<TParams>, "TabComponent"> & {
-    TabComponent?: ComponentType<IDockviewPanelHeaderProps>;
-  }
-): BuiltInCenterPanelDefinition<TParams> {
-  return {
-    ...definition,
-    TabComponent:
-      definition.TabComponent ?? createIconTabComponent(definition.icon),
-  };
 }

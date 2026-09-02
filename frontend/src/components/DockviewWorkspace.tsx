@@ -65,6 +65,8 @@ const COMPACT_WORKSPACE_BREAKPOINT = 720;
 const MIN_SIDE_PANEL_WIDTH = 120;
 const MIN_BOTTOM_PANEL_HEIGHT = 150;
 const OPEN_COPY_TITLE = "Open copy to the right";
+// Every panel Dockview hosts renders through PanelHost.
+const RUNTIME_PANEL_COMPONENT = "panelHost";
 const HYPERVIEW_DOCKVIEW_THEME = {
   ...themeAbyss,
   name: "hyperview",
@@ -416,10 +418,6 @@ function isClosableDockPanel(panelId: string) {
     isDockviewUserClosablePanelId(panelId) ||
     (!NON_ANCHOR_PANEL_IDS.has(panelId) && !CENTER_ANCHOR_PANEL_ID_SET.has(panelId))
   );
-}
-
-function getExpectedRuntimePanelComponent(panel: RuntimePanel) {
-  return "panelHost";
 }
 
 function getDockPanelId(panel: RuntimePanel) {
@@ -866,7 +864,7 @@ export function DockviewWorkspace() {
             : undefined;
         const panel = api.addPanel({
           id,
-          component: "panelHost",
+          component: RUNTIME_PANEL_COMPONENT,
           title: definition.title,
           tabComponent: getPanelTabComponent(definition.panel_type),
           params: {
@@ -1225,14 +1223,13 @@ export function DockviewWorkspace() {
       if (existingPanel) {
         const state = existingPanel.toJSON();
         const currentComponent = state.contentComponent ?? existingPanel.api.component;
-        const expectedComponent = getExpectedRuntimePanelComponent(panel);
         const placementKey = getRuntimePanelPlacementKey(panel, isCompactWorkspace);
         const existingPlacementKey = (existingPanel.api.getParameters() as {
           runtimePlacementKey?: string;
         }).runtimePlacementKey;
         const placementChanged =
           existingPlacementKey !== undefined && existingPlacementKey !== placementKey;
-        if (!expectedComponent || currentComponent !== expectedComponent || placementChanged) {
+        if (currentComponent !== RUNTIME_PANEL_COMPONENT || placementChanged) {
           runtimeSyncClosedPanels.current.add(panel.id);
           existingPanel.api.close();
           existingPanel = undefined;
@@ -1253,7 +1250,7 @@ export function DockviewWorkspace() {
       const layout = getRuntimePanelAddLayout(panel, isCompactWorkspace);
       api.addPanel({
         id: runtimePanelId,
-        component: "panelHost",
+        component: RUNTIME_PANEL_COMPONENT,
         title: panel.title,
         tabComponent:
           panel.kind === "module" ? undefined : getPanelTabComponent(builtInPanelType),
