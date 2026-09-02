@@ -28,6 +28,7 @@ from fastapi import HTTPException
 
 from hyperview._version import __version__
 from hyperview.core.dataset import Dataset
+from hyperview.extensions import EXTENSION_MANIFEST_NAME, ExtensionManifest
 from hyperview.runtime import CollectionState, CustomPanelSpec, HyperViewRuntime
 from hyperview.server.app import (
     DEFAULT_THUMBNAIL_SIZE,
@@ -566,46 +567,107 @@ def _restore_layout_payload(dataset: Dataset) -> list[dict[str, Any]]:
     ]
 
 
-def _copy_extension_folders(out_dir: Path, runtime: HyperViewRuntime) -> list[dict[str, Any]]:
-    """Copy every installed extension's full folder into the bundle.
+def _extension_folders_to_copy(
+    runtime: HyperViewRuntime,
+    workspace_id: str,
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """Resolve every extension folder the bundle should carry.
+
+    Two sources, because the exporting process may not be the one that
+    installed anything. ``hyperview export`` builds a bare runtime and reads
+    the persisted workspace, so ``list_extensions()`` is empty there while the
+    view still renders extension panels. Those panels persist the path to their
+    module source, whose parent directory is the extension folder.
+
+    Every installed extension is copied, not only the ones the view renders:
+    the runtime snapshot lists all of their tools and panel definitions, so
+    restoring fewer would not reproduce the snapshot.
+    """
+
+    folders: dict[str, dict[str, Any]] = {}
+    for installation in runtime.list_extensions():
+        folder = installation.manifest.folder
+        if not folder.is_dir():
+            continue
+        folders[installation.manifest.name] = {
+            "folder": folder,
+            "source": installation.source,
+            "workspace_id": installation.workspace_id,
+            "add_panels": installation.add_panels,
+            "panels": list(installation.panel_ids),
+        }
+
+    warnings: list[str] = []
+    for panel in runtime.get_workspace(workspace_id).ui.custom_panels:
+        if not panel.extension or panel.extension in folders:
+            continue
+        module_file = panel.resolved_module_file()
+        folder = module_file.parent if module_file is not None else None
+        manifest = None
+        if folder is not None and (folder / EXTENSION_MANIFEST_NAME).is_file():
+            try:
+                manifest = ExtensionManifest.load(folder)
+            except (OSError, ValueError) as exc:
+                warnings.append(
+                    f"Extension '{panel.extension}' has an unreadable manifest at {folder}: "
+                    f"{exc}. Panel '{panel.id}' will be missing when the bundle runs as a "
+                    "Live Space."
+                )
+                continue
+        if manifest is None or manifest.name != panel.extension:
+            warnings.append(
+                f"Extension '{panel.extension}' was not found on this host, so its folder "
+                f"is not in the bundle. Panel '{panel.id}' will be missing when the bundle "
+                "runs as a Live Space."
+            )
+            continue
+        folders[manifest.name] = {
+            "folder": manifest.folder,
+            "source": panel.resolved_source(),
+            "workspace_id": workspace_id,
+            "add_panels": False,
+            "panels": [],
+        }
+    return folders, warnings
+
+
+def _copy_extension_folders(
+    out_dir: Path,
+    runtime: HyperViewRuntime,
+    workspace_id: str,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Copy each referenced extension's full folder into the bundle.
 
     ``_copy_panel_modules`` publishes only the browser-loadable panel source a
     Static Space can execute, and deliberately drops ``.py`` and ``.toml``. A
     Live Space runs the extension for real, so it needs the manifest, the
     Python tools, and any assets -- the whole folder, installed through the
     normal ``install_extension`` path on restore.
-
-    Every installed extension is copied, not only the ones the view renders:
-    the runtime snapshot lists all of their tools and panel definitions, so
-    restoring less than all of them would not reproduce the snapshot.
     """
 
+    folders, warnings = _extension_folders_to_copy(runtime, workspace_id)
     entries: list[dict[str, Any]] = []
-    for installation in runtime.list_extensions():
-        name = installation.manifest.name
-        source = installation.manifest.folder
-        if not source.is_dir():
-            continue
+    for name, info in sorted(folders.items()):
         relative = f"{BUNDLE_EXTENSIONS_DIR}/{name}"
         target = out_dir / relative
         if target.exists():
             shutil.rmtree(target)
         shutil.copytree(
-            source,
+            info["folder"],
             target,
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".git"),
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".git", "artifacts"),
         )
         entries.append(
             {
                 "name": name,
                 "path": relative,
-                "source": installation.source,
-                "workspace_id": installation.workspace_id,
-                "add_panels": installation.add_panels,
-                "panels": list(installation.panel_ids),
+                "source": info["source"],
+                "workspace_id": info["workspace_id"],
+                "add_panels": info["add_panels"],
+                "panels": info["panels"],
             }
         )
-    return entries
+    return entries, warnings
 
 
 def _write_similarity(out_dir: Path, dataset: Dataset, *, k: int) -> int:
@@ -987,7 +1049,10 @@ def export_runtime_workspace(
     _copy_panel_modules(out_dir, runtime, workspace_id, compatible_panel_ids)
 
     restore_spaces = _write_restore_embeddings(out_dir, dataset)
-    restore_extensions = _copy_extension_folders(out_dir, runtime)
+    restore_extensions, extension_warnings = _copy_extension_folders(
+        out_dir, runtime, workspace_id
+    )
+    warnings = warnings + extension_warnings
 
     manifest = {
         "schema_version": STATIC_BUNDLE_SCHEMA_VERSION,

@@ -23,7 +23,12 @@ from hyperview.bundle_restore import restore_bundle
 from hyperview.core.dataset import Dataset
 from hyperview.core.sample import Sample
 from hyperview.extensions import resolve_shipped_extension
-from hyperview.runtime import HyperViewRuntime, ProviderRegistry, WorkspaceRegistry
+from hyperview.runtime import (
+    CustomPanelSpec,
+    HyperViewRuntime,
+    ProviderRegistry,
+    WorkspaceRegistry,
+)
 from hyperview.server.app import create_app
 from hyperview.static_export import export_runtime_workspace
 
@@ -44,9 +49,9 @@ _COORDS = np.asarray(
 )
 
 
-def _source_dataset(media_dir: Path) -> tuple[Dataset, list[str], str]:
+def _source_dataset(media_dir: Path, *, persist: bool = False) -> tuple[Dataset, list[str], str]:
     media_dir.mkdir(parents=True, exist_ok=True)
-    dataset = Dataset(DATASET_NAME, persist=False)
+    dataset = Dataset(DATASET_NAME, persist=persist)
     sample_ids: list[str] = []
     for index, label in enumerate(["cat", "cat", "dog", "dog"]):
         image_path = media_dir / f"sample-{index}.png"
@@ -82,10 +87,14 @@ def _source_dataset(media_dir: Path) -> tuple[Dataset, list[str], str]:
     return dataset, sample_ids, layout_key
 
 
-def _source_runtime(tmp_path: Path) -> tuple[HyperViewRuntime, list[str], str]:
+def _source_runtime(
+    tmp_path: Path, *, persist: bool = False
+) -> tuple[HyperViewRuntime, list[str], str]:
     """A workspace with samples, a space, a layout, a collection, and a panel."""
 
-    dataset, sample_ids, layout_key = _source_dataset(tmp_path / "source-media")
+    dataset, sample_ids, layout_key = _source_dataset(
+        tmp_path / "source-media", persist=persist
+    )
     runtime = HyperViewRuntime(
         provider_registry=ProviderRegistry(tmp_path / "source-providers.json"),
         workspace_registry=WorkspaceRegistry(tmp_path / "source-workspaces.json"),
@@ -351,6 +360,91 @@ def test_serve_from_flag_reaches_restore(monkeypatch: pytest.MonkeyPatch) -> Non
     assert args.port == 6363
     assert args.workspace_id is None
     assert os.environ.get("HYPERVIEW_NO_AUTH") != "1"
+
+
+def test_export_from_a_runtime_that_installed_nothing_still_carries_extensions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`hyperview export` builds a bare runtime and reads the persisted workspace.
+
+    Nothing is installed in that process, so the extension folders have to be
+    found through the panels' persisted module paths instead. This walks the
+    real CLI shape: a persisted dataset, an export by a runtime that installed
+    nothing, and a restore into a different datasets directory.
+    """
+
+    source_datasets = tmp_path / "source-home" / "datasets"
+    source_datasets.mkdir(parents=True)
+    monkeypatch.setenv("HYPERVIEW_DATASETS_DIR", str(source_datasets))
+    monkeypatch.setenv("HYPERVIEW_MEDIA_DIR", str(tmp_path / "source-home" / "media"))
+
+    _runtime, sample_ids, layout_key = _source_runtime(tmp_path, persist=True)
+
+    # A second runtime over the same persisted registry, with no installs.
+    bare = HyperViewRuntime(
+        provider_registry=ProviderRegistry(tmp_path / "bare-providers.json"),
+        workspace_registry=WorkspaceRegistry(tmp_path / "source-workspaces.json"),
+    )
+    assert bare.list_extensions() == []
+
+    out_dir = tmp_path / "bare-bundle"
+    result = export_runtime_workspace(bare, WORKSPACE_ID, out_dir)
+    assert result.warnings == ()
+    assert result.num_samples == len(sample_ids)
+
+    manifest = json.loads((out_dir / "hyperview-static.json").read_text(encoding="utf-8"))
+    assert [item["name"] for item in manifest["restore"]["extensions"]] == ["reference"]
+    assert (out_dir / "extensions" / "reference" / "extension.toml").is_file()
+
+    restored_datasets = tmp_path / "restored-home" / "datasets"
+    restored_datasets.mkdir(parents=True)
+    monkeypatch.setenv("HYPERVIEW_DATASETS_DIR", str(restored_datasets))
+    monkeypatch.setenv("HYPERVIEW_MEDIA_DIR", str(tmp_path / "restored-home" / "media"))
+
+    restored_runtime, restored = restore_bundle(out_dir)
+
+    assert restored.warnings == ()
+    workspace = restored_runtime.get_workspace(WORKSPACE_ID)
+    assert [panel.id for panel in workspace.ui.custom_panels] == [PANEL_ID]
+    assert workspace.ui.active_layout_key == layout_key
+    dataset = restored_runtime.get_dataset(WORKSPACE_ID)
+    assert sorted(sample.id for sample in dataset.samples) == sorted(sample_ids)
+    assert restored_runtime.get_panel_state(WORKSPACE_ID, PANEL_ID)["state"]["notes"] == (
+        PANEL_NOTES
+    )
+
+
+def test_export_warns_when_a_panel_extension_is_not_on_this_host(tmp_path: Path) -> None:
+    dataset, sample_ids, layout_key = _source_dataset(tmp_path / "source-media")
+    runtime = HyperViewRuntime(
+        provider_registry=ProviderRegistry(tmp_path / "orphan-providers.json"),
+        workspace_registry=WorkspaceRegistry(tmp_path / "orphan-workspaces.json"),
+    )
+    runtime.attach_dataset_instance(WORKSPACE_ID, dataset, activate_workspace=True)
+    runtime.set_active_layout(WORKSPACE_ID, layout_key)
+    # A workspace persisted on another machine: the panel names an extension
+    # whose folder does not exist here. The export has to say so, because the
+    # Live Space will open without that panel.
+    runtime.add_custom_panel(
+        WORKSPACE_ID,
+        CustomPanelSpec(
+            id="orphan",
+            title="Orphan",
+            panel_type="elsewhere.orphan",
+            extension="elsewhere",
+            extension_panel="orphan",
+            module_file=str(tmp_path / "not-here" / "panel.jsx"),
+        ),
+    )
+
+    result = export_runtime_workspace(runtime, WORKSPACE_ID, tmp_path / "orphan-bundle")
+
+    assert any(
+        "will be missing when the bundle runs as a Live Space" in item
+        for item in result.warnings
+    )
+    assert not (tmp_path / "orphan-bundle" / "extensions").exists()
+    assert len(sample_ids) == 4
 
 
 def test_restore_rejects_a_bundle_without_restore_data(tmp_path: Path) -> None:
