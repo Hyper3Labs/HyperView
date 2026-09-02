@@ -258,7 +258,7 @@ panel prop changes, panel state, filtering, and result presentation remain
 ephemeral client-side interactions. Durable workspace writes, Python tools,
 model execution, and arbitrary inference/search are unavailable; controls for
 those capabilities are hidden. The host shows a read-only notice, currently labelled
-`Shared Space`.
+`Static Space`.
 
 Python launch/session code can export the same bundle:
 

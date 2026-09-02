@@ -28,7 +28,7 @@ layout, and shared selection remain. The static boundary removes only actions
 that need a backend. Prepared text-query cases remain visible and interactive;
 arbitrary text inference is absent.
 
-| Demo | Current panel composition | Export evidence | Shared Space URL |
+| Demo | Current panel composition | Export evidence | Static Space URL |
 | --- | --- | --- | --- |
 | ABO Catalog | Two native image-neighbour Samples panels, two native model maps, tabbed prepared-results/catalog browse, and a right-side retrieval walkthrough | 531 samples, 5 layouts, similarity k=10, zero warnings | `http://127.0.0.1:3001/spaces/abo-catalog/` |
 | Precision Regions | Two native prepared Top-5 Samples panels and a right-side source/ground-truth/query walkthrough; no misleading rank map | 36 samples, 7 prepared collections, zero warnings | `http://127.0.0.1:3001/spaces/precision-regions/` |
@@ -585,7 +585,7 @@ counts and examples without any policy-decision or backend-only affordance.
   default-case reset on reload, image loading, and exact 1280/760/390 widths.
   There are no inputs, page errors, console errors, or failed local media.
   Live/static 1280 screenshots are visually equivalent except for the concise
-  `Shared Space` host label.
+  `Static Space` host label.
 - The panel owns its bounded Dockview height and scrolls to the exact bottom at
   narrow widths. Evidence cards prefer full media over thumbnails, and the
   visible break-even conclusion says to choose Hyper3 only if the additional

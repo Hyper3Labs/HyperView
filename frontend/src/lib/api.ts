@@ -13,7 +13,7 @@ import type {
 const API_BASE =
   process.env.NEXT_PUBLIC_HYPERVIEW_API_BASE ?? "";
 const MISSING_LABEL_SENTINEL = "undefined";
-const READ_ONLY_DEMO_NOTICE = "Shared Space";
+const READ_ONLY_DEMO_NOTICE = "Static Space";
 const RUNTIME_CLIENT_ID = `hv-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`;
 const SAMPLE_BATCH_SIZE = 1000;
 // Keep in sync with SAMPLES_PANEL_STATE_ID / SAMPLES_PANEL_STATE_ALIASES in
@@ -125,7 +125,7 @@ function resolveStaticSampleUrls(sample: Sample): Sample {
 
 async function fetchStaticJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   // Exported workspace state keeps stable filenames across deployments. Ask
-  // browsers/CDNs to revalidate JSON so a newly published Shared Space cannot
+  // browsers/CDNs to revalidate JSON so a newly published Static Space cannot
   // combine a fresh hashed frontend with stale runtime or collection state.
   const res = await fetch(staticAssetUrl(path), {
     cache: "no-cache",
@@ -233,7 +233,7 @@ export interface StaticBundleManifest {
 
 let staticBundleManifestPromise: Promise<StaticBundleManifest> | null = null;
 
-/** Read deployment capabilities declared by a Shared Space export. */
+/** Read deployment capabilities declared by a Static Space export. */
 export function fetchStaticBundleManifest(): Promise<StaticBundleManifest | null> {
   if (!isStaticBundle()) return Promise.resolve(null);
   staticBundleManifestPromise ??= fetchStaticJson<StaticBundleManifest>(
@@ -702,7 +702,7 @@ export async function fetchTextSimilarSamples(
   } = {}
 ): Promise<SimilaritySearchResponse> {
   if (isStaticBundle()) {
-    throw new ApiError("Text search is not available in read-only static demos", 400, null);
+    throw new ApiError("Text search is not available in a Static Space", 400, null);
   }
   const res = await apiRequest(apiUrl("/search/text"), {
     method: "POST",

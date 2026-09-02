@@ -70,7 +70,7 @@ hyperview extension add .hyperview/extensions/selection-profile --workspace imag
 hyperview tools run selection_profile.summarize --workspace imagenette-demo
 ```
 
-Export a prepared workspace as a read-only static demo that can be served by
+Export a prepared workspace as a Static Space, a read-only bundle that can be served by
 Cloudflare Workers Static Assets without Python or a container:
 
 ```bash

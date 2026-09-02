@@ -100,7 +100,7 @@ export function Header() {
   const [datasetPickerOpen, setDatasetPickerOpen] = useState(false);
   // `window.__HYPERVIEW_STATIC__` is injected by an exported bundle after the
   // server-rendered shell is produced. Keep the first client render identical
-  // to SSR, then switch the header to its Shared Space identity after mount.
+  // to SSR, then switch the header to its Static Space identity after mount.
   const [staticBundle, setStaticBundle] = useState(false);
   const [readOnlyNotice, setReadOnlyNotice] = useState<string | null>(null);
   const staticEdgeZones = useMemo(
@@ -134,13 +134,13 @@ export function Header() {
   useEffect(() => {
     if (isStaticBundle()) {
       setStaticBundle(true);
-      setReadOnlyNotice("Shared Space");
+      setReadOnlyNotice("Static Space");
     }
     const handleNotice = (event: Event) => {
       const message =
         event instanceof CustomEvent && typeof event.detail?.message === "string"
           ? event.detail.message
-          : "Shared Space";
+          : "Static Space";
       setReadOnlyNotice(message);
     };
     window.addEventListener("hyperview-readonly-notice", handleNotice);
@@ -210,10 +210,10 @@ export function Header() {
           {staticBundle ? (
             <div
               className="flex h-6 min-w-0 w-full max-w-[600px] items-center justify-center rounded-md border border-border/50 bg-muted/40 px-3 text-[12px] leading-[16px] tracking-[-0.15px] text-foreground/70"
-              title={datasetInfo?.name ?? activeWorkspace?.dataset_name ?? activeWorkspaceId ?? "Shared Space"}
+              title={datasetInfo?.name ?? activeWorkspace?.dataset_name ?? activeWorkspaceId ?? "Static Space"}
             >
               <span className="truncate">
-                {datasetInfo?.name ?? activeWorkspace?.dataset_name ?? activeWorkspaceId ?? "Shared Space"}
+                {datasetInfo?.name ?? activeWorkspace?.dataset_name ?? activeWorkspaceId ?? "Static Space"}
               </span>
             </div>
           ) : (
@@ -277,7 +277,7 @@ export function Header() {
           {readOnlyNotice && (
             <span
               className="hidden h-5 items-center px-1.5 text-[10px] font-medium leading-none text-muted-foreground/70 lg:flex"
-              title="This Shared Space is an interactive, read-only snapshot"
+              title="This Static Space is an interactive, read-only export"
             >
               {readOnlyNotice}
             </span>

@@ -46,7 +46,7 @@ browsable so it can be inspected, but affected images or panels are unavailable.
 A bundle is location-independent. It references its assets relatively and
 resolves its API, media, and panel modules from the document URL, so the same
 export works at an origin root and inside `spaces/research/` of a containing
-site, with no re-export and nothing to declare. Several Shared Spaces can sit on
+site, with no re-export and nothing to declare. Several Static Spaces can sit on
 one origin without cookies, referrer routing, or per-Space servers.
 
 A bundle whose manifest records a `mount_path` was produced by an older
