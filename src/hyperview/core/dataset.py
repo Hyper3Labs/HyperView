@@ -22,6 +22,8 @@ from hyperview.core.sample import Sample
 from hyperview.storage.backend import StorageBackend
 from hyperview.storage.fields import FieldCatalog, FieldDefinition
 from hyperview.storage.schema import (
+    LayoutInfo,
+    SpaceInfo,
     make_layout_key,
     normalize_layout_dimension,
     parse_layout_dimension,
@@ -183,6 +185,71 @@ def parse_visualization_layout(layout: str) -> tuple[str, int]:
         raise ValueError("Poincare layouts currently require 2D output.")
 
     return geometry, layout_dimension
+
+
+class LayoutRecord(LayoutInfo):
+    """One visualization layout, described by what produced it.
+
+    Layout keys carry a content hash, so they are only knowable after the
+    layout is computed. This record exposes the properties a caller actually
+    reasons about — which model and provider produced the embedding space, and
+    which geometry, dimension, and projection method produced the layout — so
+    scripts can look a layout up instead of pinning its key as a constant.
+    """
+
+    def __init__(self, layout: LayoutInfo, space: SpaceInfo | None) -> None:
+        super().__init__(
+            layout_key=layout.layout_key,
+            space_key=layout.space_key,
+            method=layout.method,
+            geometry=layout.geometry,
+            count=layout.count,
+            created_at=layout.created_at,
+            params=layout.params,
+        )
+        self.model_id = space.model_id if space is not None else None
+        self.provider = space.provider if space is not None else None
+
+    @property
+    def key(self) -> str:
+        """The layout key, as passed to ``hv.ui.Scatter(layout_key=...)``."""
+
+        return self.layout_key
+
+    @property
+    def space_id(self) -> str:
+        """The embedding space this layout projects."""
+
+        return self.space_key
+
+    @property
+    def dimension(self) -> int:
+        """2 or 3, parsed from the layout key."""
+
+        return self.layout_dimension
+
+    @property
+    def sample_count(self) -> int:
+        """How many samples have coordinates in this layout."""
+
+        return self.count
+
+    def to_api_dict(self) -> dict[str, Any]:
+        return {
+            **super().to_api_dict(),
+            "model_id": self.model_id,
+            "provider": self.provider,
+            "layout_dimension": self.layout_dimension,
+        }
+
+    def describe(self) -> str:
+        """One line naming this layout, for error messages and logs."""
+
+        return (
+            f"{self.layout_key} (model={self.model_id}, provider={self.provider}, "
+            f"geometry={self.geometry}, dimension={self.dimension}, "
+            f"method={self.method}, samples={self.sample_count})"
+        )
 
 
 class Dataset:
@@ -872,9 +939,81 @@ class Dataset:
         """Typed catalog of fields available on this dataset."""
         return self._storage.get_fields()
 
-    def list_layouts(self) -> list[Any]:
-        """List all layouts in this dataset (returns LayoutInfo objects)."""
-        return self._storage.list_layouts()
+    def list_layouts(self) -> list[LayoutRecord]:
+        """List every layout in this dataset as a structured record.
+
+        Each record carries the layout key plus the space, model, provider,
+        geometry, dimension, method, params, and sample count behind it.
+        """
+
+        spaces = {space.space_key: space for space in self._storage.list_spaces()}
+        return [
+            LayoutRecord(layout, spaces.get(layout.space_key))
+            for layout in self._storage.list_layouts()
+        ]
+
+    def find_layout(
+        self,
+        *,
+        model: str | None = None,
+        provider: str | None = None,
+        geometry: str | None = None,
+        dimension: int | None = None,
+        method: str | None = None,
+    ) -> str | None:
+        """Return the layout key matching every criterion given, or None.
+
+        Layout keys carry a content hash of the embedding and projection
+        parameters, so they cannot be written down ahead of time. Describe the
+        layout you want instead::
+
+            layout_key = dataset.find_layout(model="hycoclip-vit-s", geometry="poincare")
+
+        Args:
+            model: Model id the embedding space was computed with.
+            provider: Embedding provider alias, e.g. ``"hyper-models"``.
+            geometry: Layout geometry: ``euclidean``, ``poincare``, or ``spherical``.
+            dimension: Layout dimension, 2 or 3.
+            method: Projection method, e.g. ``"umap"`` or ``"pca"``.
+
+        Returns:
+            The single matching layout key, or None when nothing matches.
+
+        Raises:
+            ValueError: When more than one layout matches. The message lists
+                the candidates so the caller can narrow the query.
+        """
+
+        criteria: dict[str, Any] = {
+            "model": model,
+            "provider": provider,
+            "geometry": geometry,
+            "dimension": dimension,
+            "method": method,
+        }
+        matches = [
+            record
+            for record in self.list_layouts()
+            if (model is None or record.model_id == model)
+            and (provider is None or record.provider == provider)
+            and (geometry is None or record.geometry == geometry)
+            and (dimension is None or record.dimension == dimension)
+            and (method is None or record.method == method)
+        ]
+
+        if not matches:
+            return None
+        if len(matches) == 1:
+            return matches[0].key
+
+        query = ", ".join(
+            f"{name}={value!r}" for name, value in criteria.items() if value is not None
+        )
+        candidates = "\n  ".join(record.describe() for record in matches)
+        raise ValueError(
+            f"find_layout({query or 'no criteria'}) matched {len(matches)} layouts. "
+            "Add criteria until one layout is left. Candidates:\n  " + candidates
+        )
 
     def _resolve_similarity_space_key(
         self,
