@@ -265,6 +265,33 @@ def _build_control_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=6262)
     serve_parser.add_argument("--no-browser", action="store_true")
+    serve_parser.add_argument(
+        "--from",
+        dest="from_bundle",
+        default=None,
+        metavar="DIR",
+        help=(
+            "Restore a bundle written by 'hyperview export' and serve it as a "
+            "Live Space instead of opening a dataset from local storage."
+        ),
+    )
+    serve_parser.add_argument(
+        "--workspace-id",
+        dest="workspace_id",
+        default=None,
+        help=(
+            "Workspace id to restore a --from bundle under. "
+            "Defaults to the id the bundle was exported from."
+        ),
+    )
+    serve_parser.add_argument(
+        "--public",
+        action="store_true",
+        help=(
+            "Serve without a session token, the same as HYPERVIEW_NO_AUTH=1. "
+            "Viewer commands stay open; privileged commands stay closed."
+        ),
+    )
 
     status_parser = subparsers.add_parser("status")
     _add_server_flags(status_parser)
@@ -700,7 +727,47 @@ def _build_control_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _serve_bundle(args: argparse.Namespace) -> None:
+    """Restore a bundle and serve it as a Live Space."""
+
+    from hyperview.bundle_restore import restore_bundle
+
+    runtime, result = restore_bundle(
+        args.from_bundle,
+        workspace_id=args.workspace_id or args.workspace,
+    )
+    for warning in result.warnings:
+        print(f"Warning: {warning}", file=sys.stderr)
+
+    dataset_obj = runtime.get_dataset(result.workspace_id)
+    session = Session(runtime, args.host, args.port, dataset_obj)
+    session.start(background=True)
+    print(
+        f"Restored Live Space '{result.workspace_id}' from {result.bundle_dir} "
+        f"({result.num_samples} samples, {result.num_spaces} spaces, "
+        f"{result.num_layouts} layouts, {result.num_collections} collections, "
+        f"{result.num_extensions} extensions, {result.num_panels} panels"
+        f"{', reused existing dataset' if result.reused_dataset else ''})"
+    )
+    print(f"HyperView runtime is running at {session.url}")
+    if not args.no_browser:
+        session.open_browser()
+    session.wait()
+
+
 def _run_server_command(args: argparse.Namespace) -> None:
+    if getattr(args, "public", False):
+        # The flag is the documented spelling; the env var stays the mechanism
+        # so a container can set it without rewriting the command line.
+        os.environ["HYPERVIEW_NO_AUTH"] = "1"
+
+    if getattr(args, "from_bundle", None):
+        _serve_bundle(args)
+        return
+
+    if getattr(args, "workspace_id", None):
+        raise SystemExit("--workspace-id only applies together with --from")
+
     runtime = HyperViewRuntime()
     workspace_id = args.workspace or runtime.workspace_registry.active_workspace_id or "default"
     runtime.workspace_registry.ensure_workspace(workspace_id, activate=True)
