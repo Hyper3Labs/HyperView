@@ -1,0 +1,31 @@
+{
+  "hooks": [
+    "listTools",
+    "useActiveLayout",
+    "useCollection",
+    "useCommandClient",
+    "useDatasetInfo",
+    "useHostAdapter",
+    "usePanelActions",
+    "usePanelInteractions",
+    "usePanelState",
+    "useQuery",
+    "useSample",
+    "useSampleResults",
+    "useSamples",
+    "useSelection",
+    "useSimilarSamples",
+    "useSupportsLassoSelection",
+    "useSupportsSampleSimilarity",
+    "useSupportsTextSearch",
+    "useSupportsTools",
+    "useTool"
+  ],
+  "keys": [
+    "React",
+    "createClient",
+    "hooks",
+    "version"
+  ],
+  "version": "2"
+}

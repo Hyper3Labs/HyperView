@@ -37,6 +37,12 @@ rm -rf "$STATIC_DIR"
 mkdir -p "$STATIC_DIR"
 cp -r out/* "$STATIC_DIR/"
 
+# The packaged panel SDK contract is read by panel linters, so refresh it from
+# the same source the shell was just built from.
+echo "Refreshing the packaged panel SDK surface..."
+cd "$PROJECT_ROOT"
+python3 scripts/emit_panel_sdk_surface.py
+
 echo ""
 echo "✅ Frontend exported to $STATIC_DIR"
 echo ""

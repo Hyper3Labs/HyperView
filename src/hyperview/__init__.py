@@ -12,6 +12,7 @@ _disable_blocked_datasets_torch_shared_memory()
 from . import api as _api  # noqa: E402
 from . import ui as ui  # noqa: E402
 from .core import Sample as Sample  # noqa: E402
+from .panel_sdk import panel_sdk_surface as panel_sdk_surface  # noqa: E402
 
 Dataset = _api.Dataset
 Session = _api.Session
@@ -27,6 +28,7 @@ __all__ = [
     "Sample",
     "launch",
     "export_workspace",
+    "panel_sdk_surface",
     "register_provider",
     "unregister_provider",
     "ui",
