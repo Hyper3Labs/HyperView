@@ -1392,6 +1392,31 @@ class HyperViewRuntime:
             self._bump_version()
             return workspace
 
+    def restore_workspace_state(
+        self,
+        workspace_id: str,
+        payload: dict[str, Any],
+    ) -> WorkspaceState:
+        """Replace a workspace's collections, view, and panel state wholesale.
+
+        Restoring a bundle has to land the exported view exactly as it was:
+        the same collection ids, the same panel instances and props, the same
+        panel state and revisions, the same active layout key. Replaying that
+        through the individual mutation commands would regenerate ids and
+        revisions instead of reproducing them, so the payload -- shaped like
+        the ``workspace`` section of :meth:`snapshot` -- is applied directly.
+        """
+
+        with self._lock:
+            existing = self.workspace_registry.ensure_workspace(workspace_id)
+            restored = WorkspaceState.from_dict({**payload, "id": workspace_id})
+            # The workspace row is older than any view now being applied to it.
+            restored.created_at = existing.created_at
+            _ensure_unique_panel_ids(restored.ui.custom_panels)
+            self.workspace_registry.update_workspace(restored)
+            self._bump_version()
+            return restored
+
     def get_workspace(self, workspace_id: str | None = None) -> WorkspaceState:
         resolved_workspace_id = workspace_id or self.workspace_registry.active_workspace_id
         if resolved_workspace_id is None:
