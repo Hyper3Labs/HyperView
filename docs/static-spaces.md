@@ -34,21 +34,12 @@ The exporter reports warnings in the CLI result and in the manifest's
 Treat those warnings as release blockers for public demos: the bundle remains
 browsable so it can be inspected, but affected images or panels are unavailable.
 
-By default a bundle is prepared for the origin root. To mount it below another
-static site, declare the URL path explicitly:
-
-```bash
-hyperview export research \
-  --out dist/research \
-  --mount-path /spaces/research
-```
-
-Copy the exported contents into `spaces/research/` in the containing site's
-document root. The frontend shell, static API, media, and panel modules remain
-scoped to that mount path, so several Shared Spaces can be open on one origin without
-cookies, referrer routing, or per-Space servers. Path-mounted exports omit the
-standalone Wrangler configuration because a static-assets-only Worker mounts
-its asset directory at the origin root.
+A bundle is location-independent: the shell, static API, media, and panel
+modules resolve relative to the document URL, so the same directory works at an
+origin root or copied into `spaces/research/` under a larger static site, and
+several Shared Spaces can be open on one origin without cookies, referrer
+routing, or per-Space servers. A bundle whose manifest records a `mount_path`
+was produced by an older HyperView and must be re-exported.
 
 ## Cloudflare
 
@@ -85,7 +76,7 @@ the live server explicitly:
 [[panels]]
 id = "analysis"
 title = "Analysis"
-file = "panel.js"
+file = "panel.jsx"
 static_compatible = false
 static_reason = "Requires the analysis.run Python tool."
 ```
