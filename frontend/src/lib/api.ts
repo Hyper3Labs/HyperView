@@ -16,6 +16,10 @@ const MISSING_LABEL_SENTINEL = "undefined";
 const READ_ONLY_DEMO_NOTICE = "Shared Space";
 const RUNTIME_CLIENT_ID = `hv-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`;
 const SAMPLE_BATCH_SIZE = 1000;
+// Keep in sync with SAMPLES_PANEL_STATE_ID / SAMPLES_PANEL_STATE_ALIASES in
+// src/hyperview/runtime.py.
+const SAMPLES_PANEL_STATE_ID = "samples";
+const SAMPLES_PANEL_STATE_ALIASES = new Set([SAMPLES_PANEL_STATE_ID, "grid"]);
 const SESSION_TOKEN_STORAGE_KEY = "hyperview.session-token";
 const MUTATING_METHODS = new Set(["POST", "PATCH", "DELETE"]);
 
@@ -1183,13 +1187,34 @@ async function getStaticSnapshot(): Promise<RuntimeSnapshot> {
   return fetchRuntimeState();
 }
 
-function updateStaticSamplesPanelState(
+function staticPanelStateEntry(
   snapshot: RuntimeSnapshot,
+  panelId: string
+): { state: Record<string, unknown>; state_revision: number } {
+  return snapshot.workspace.ui.panels?.[panelId] ?? { state: {}, state_revision: 0 };
+}
+
+// Mirrors the runtime's panel-state resolution: a panel addresses itself by id,
+// and the Samples aliases (plus an unrouted command) fall back to the shared
+// Samples state slot.
+function resolveStaticPanelStateId(
+  snapshot: RuntimeSnapshot,
+  target?: Record<string, unknown>
+): string {
+  const requested = typeof target?.panel_id === "string" ? target.panel_id.trim() : "";
+  if (!requested || SAMPLES_PANEL_STATE_ALIASES.has(requested)) return SAMPLES_PANEL_STATE_ID;
+  const known = snapshot.workspace.ui.custom_panels.some((panel) => panel.id === requested);
+  return known ? requested : SAMPLES_PANEL_STATE_ID;
+}
+
+function updateStaticCollectionPanelState(
+  snapshot: RuntimeSnapshot,
+  panelId: string,
   state: Record<string, unknown>,
   collections: RuntimeCollection[],
   selectedIds: string[]
 ): RuntimeSnapshot {
-  const current = snapshot.workspace.ui.panels?.samples ?? { state: {}, state_revision: 0 };
+  const current = staticPanelStateEntry(snapshot, panelId);
   return {
     ...snapshot,
     version: snapshot.version + 1,
@@ -1201,7 +1226,7 @@ function updateStaticSamplesPanelState(
         selected_ids: selectedIds,
         panels: {
           ...snapshot.workspace.ui.panels,
-          samples: {
+          [panelId]: {
             state,
             state_revision: current.state_revision + 1,
           },
@@ -1213,6 +1238,7 @@ function updateStaticSamplesPanelState(
 
 function runStaticLabelFilterCommand(
   snapshot: RuntimeSnapshot,
+  panelId: string,
   args: Record<string, unknown>
 ): ControlCommandResult {
   const retainedCollections = snapshot.workspace.collections.filter(
@@ -1220,7 +1246,7 @@ function runStaticLabelFilterCommand(
   );
   const clear = args.clear === true;
   let collection: RuntimeCollection | null = null;
-  const currentState = snapshot.workspace.ui.panels?.samples?.state ?? {};
+  const currentState = staticPanelStateEntry(snapshot, panelId).state;
   let state: Record<string, unknown> = { ...currentState };
   if (!clear) {
     const field = typeof args.field === "string" ? args.field : "label";
@@ -1258,17 +1284,24 @@ function runStaticLabelFilterCommand(
       focus_request: null,
     };
   }
-  staticRuntimeSnapshot = updateStaticSamplesPanelState(snapshot, state, retainedCollections, []);
+  staticRuntimeSnapshot = updateStaticCollectionPanelState(
+    snapshot,
+    panelId,
+    state,
+    retainedCollections,
+    []
+  );
   return {
     ok: true,
     command: "collection.filter.set",
     result: {
+      panel_id: panelId,
       collection_id: collection?.id ?? null,
       collection,
     },
     snapshot: staticRuntimeSnapshot,
     workspace: staticRuntimeSnapshot.workspace,
-    revision: staticRuntimeSnapshot.workspace.ui.panels.samples.state_revision,
+    revision: staticRuntimeSnapshot.workspace.ui.panels[panelId].state_revision,
   };
 }
 
@@ -1276,6 +1309,7 @@ let staticSelectionCounter = 0;
 
 async function runStaticSimilarityAnchorCommand(
   snapshot: RuntimeSnapshot,
+  panelId: string,
   args: Record<string, unknown>
 ): Promise<ControlCommandResult> {
   const sampleId = typeof args.sample_id === "string" ? args.sample_id.trim() : "";
@@ -1345,7 +1379,7 @@ async function runStaticSimilarityAnchorCommand(
     scores: null,
     created_at: Math.floor(Date.now() / 1000),
   };
-  const current = snapshot.workspace.ui.panels?.samples ?? { state: {}, state_revision: 0 };
+  const current = staticPanelStateEntry(snapshot, panelId);
   const retainedCollections = snapshot.workspace.collections.filter(
     (entry) => entry.kind !== "neighbors" && entry.kind !== "search"
   );
@@ -1365,8 +1399,9 @@ async function runStaticSimilarityAnchorCommand(
     collection,
     focus_request: null,
   };
-  staticRuntimeSnapshot = updateStaticSamplesPanelState(
+  staticRuntimeSnapshot = updateStaticCollectionPanelState(
     snapshot,
+    panelId,
     state,
     retainedCollections,
     []
@@ -1374,18 +1409,19 @@ async function runStaticSimilarityAnchorCommand(
   return {
     ok: true,
     command: "panel.samples.retrieval.set-anchor",
-    result: { panel_id: "samples", collection_id: collectionId, collection },
+    result: { panel_id: panelId, collection_id: collectionId, collection },
     snapshot: staticRuntimeSnapshot,
     workspace: staticRuntimeSnapshot.workspace,
-    revision: staticRuntimeSnapshot.workspace.ui.panels.samples.state_revision,
+    revision: staticRuntimeSnapshot.workspace.ui.panels[panelId].state_revision,
   };
 }
 
 function runStaticSelectionCommand(
   snapshot: RuntimeSnapshot,
+  panelId: string,
   args: Record<string, unknown>
 ): ControlCommandResult {
-  const current = snapshot.workspace.ui.panels?.samples ?? { state: {}, state_revision: 0 };
+  const current = staticPanelStateEntry(snapshot, panelId);
   const retainedCollections = snapshot.workspace.collections.filter(
     // Prepared comparison collections are exported with kind=selection and
     // may still be referenced by sibling panel props. Only replace the
@@ -1437,8 +1473,9 @@ function runStaticSelectionCommand(
         }
       : null,
   };
-  staticRuntimeSnapshot = updateStaticSamplesPanelState(
+  staticRuntimeSnapshot = updateStaticCollectionPanelState(
     snapshot,
+    panelId,
     nextState,
     retainedCollections,
     sampleIds
@@ -1447,14 +1484,14 @@ function runStaticSelectionCommand(
     ok: true,
     command: "collection.selection.set",
     result: {
-      panel_id: "samples",
+      panel_id: panelId,
       collection_id: collection?.id ?? null,
       collection,
       selected_ids: sampleIds,
     },
     snapshot: staticRuntimeSnapshot,
     workspace: staticRuntimeSnapshot.workspace,
-    revision: staticRuntimeSnapshot.workspace.ui.panels.samples.state_revision,
+    revision: staticRuntimeSnapshot.workspace.ui.panels[panelId].state_revision,
   };
 }
 
@@ -1549,17 +1586,20 @@ async function runStaticControlCommandNow(args: {
   args?: Record<string, unknown>;
 }): Promise<ControlCommandResult> {
   const snapshot = await getStaticSnapshot();
+  // Collection commands write the issuing panel's state, so an extension panel
+  // driving them in a bundle updates itself rather than a panel named "samples".
+  const collectionPanelId = resolveStaticPanelStateId(snapshot, args.target);
   if (
     args.command === "panel.samples.retrieval.set-anchor" ||
     args.command === "collection.neighbors.create"
   ) {
-    return runStaticSimilarityAnchorCommand(snapshot, args.args ?? {});
+    return runStaticSimilarityAnchorCommand(snapshot, collectionPanelId, args.args ?? {});
   }
   if (args.command === "collection.filter.set") {
-    return runStaticLabelFilterCommand(snapshot, args.args ?? {});
+    return runStaticLabelFilterCommand(snapshot, collectionPanelId, args.args ?? {});
   }
   if (args.command === "collection.selection.set") {
-    return runStaticSelectionCommand(snapshot, args.args ?? {});
+    return runStaticSelectionCommand(snapshot, collectionPanelId, args.args ?? {});
   }
   if (args.command === "workspace.panel.focus") {
     const result = runStaticPanelFocusCommand(snapshot, args.target ?? {});
