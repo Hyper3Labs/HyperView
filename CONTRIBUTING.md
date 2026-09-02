@@ -95,6 +95,7 @@ uv run ruff check src tests examples
 # Frontend
 cd frontend
 npm run lint
+npm test
 npm run build
 ```
 
