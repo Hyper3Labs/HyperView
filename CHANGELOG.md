@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.0 - 2026-09-02
+## 1.1.0 - 2026-09-03
 
 One workspace, two Spaces. `hyperview export` writes a bundle, and that folder
 now hosts two ways: as a **Static Space** (files on any static host) or as a
