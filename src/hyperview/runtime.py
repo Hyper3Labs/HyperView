@@ -792,8 +792,9 @@ def _samples_panel_collection_kind(state: dict[str, Any]) -> str | None:
 
 def _samples_panel_retrieval_query(
     panels: dict[str, PanelStateEntry],
+    panel_id: str = SAMPLES_PANEL_STATE_ID,
 ) -> SimilarityQueryState | None:
-    state_entry = panels.get(SAMPLES_PANEL_STATE_ID)
+    state_entry = panels.get(panel_id)
     retrieval = state_entry.state.get("retrieval") if state_entry is not None else None
     if not isinstance(retrieval, dict):
         return None
@@ -1463,6 +1464,37 @@ class HyperViewRuntime:
             return SAMPLES_PANEL_STATE_ID
         raise KeyError(f"Panel not found: {panel_id}")
 
+    def _resolve_collection_panel_id_locked(
+        self,
+        workspace: WorkspaceState,
+        panel_id: str | None,
+    ) -> str:
+        """Resolve the panel a collection command writes to.
+
+        Collection commands are panel-scoped but the panel is optional: the
+        canonical Samples panel is the default, so every workspace-scoped
+        caller (CLI, Python API, the built-in panels) keeps working unchanged.
+        """
+
+        if panel_id is None:
+            return SAMPLES_PANEL_STATE_ID
+        return self._resolve_panel_state_id_locked(workspace, panel_id)
+
+    def resolve_collection_panel_id(
+        self,
+        workspace_id: str,
+        panel_id: str | None = None,
+    ) -> str:
+        """Public form of the collection-command panel resolution.
+
+        Raises ``KeyError`` when the workspace has no such panel, which the
+        command service reports as ``not_found``.
+        """
+
+        with self._lock:
+            workspace = self.get_workspace(workspace_id)
+            return self._resolve_collection_panel_id_locked(workspace, panel_id)
+
     def _get_panel_state_entry_locked(
         self,
         workspace: WorkspaceState,
@@ -1790,10 +1822,12 @@ class HyperViewRuntime:
         self,
         workspace: WorkspaceState,
         collection: CollectionState | None,
+        *,
+        panel_id: str = SAMPLES_PANEL_STATE_ID,
     ) -> bool:
         resolved_panel_id, entry = self._get_panel_state_entry_locked(
             workspace,
-            SAMPLES_PANEL_STATE_ID,
+            panel_id,
             create=collection is not None,
         )
         if collection is None:
@@ -1826,10 +1860,12 @@ class HyperViewRuntime:
         self,
         workspace: WorkspaceState,
         query: SimilarityQueryState | None,
+        *,
+        panel_id: str = SAMPLES_PANEL_STATE_ID,
     ) -> bool:
         resolved_panel_id, entry = self._get_panel_state_entry_locked(
             workspace,
-            SAMPLES_PANEL_STATE_ID,
+            panel_id,
             create=query is not None,
         )
         if query is None:
@@ -1868,9 +1904,11 @@ class HyperViewRuntime:
         field: str = "label",
         value: Any,
         source: str | None = None,
+        panel_id: str | None = None,
     ) -> WorkspaceState:
         with self._lock:
             workspace = self.get_workspace(workspace_id)
+            target_panel_id = self._resolve_collection_panel_id_locked(workspace, panel_id)
             collection = self._build_label_filter_collection_locked(
                 workspace,
                 field=field,
@@ -1878,15 +1916,21 @@ class HyperViewRuntime:
                 source=source,
             )
             workspace.ui.selected_ids = []
-            self._set_samples_filter_locked(workspace, collection)
+            self._set_samples_filter_locked(workspace, collection, panel_id=target_panel_id)
             self.workspace_registry.update_workspace(workspace)
             self._bump_version()
             return workspace
 
-    def clear_samples_filter(self, workspace_id: str) -> WorkspaceState:
+    def clear_samples_filter(
+        self,
+        workspace_id: str,
+        *,
+        panel_id: str | None = None,
+    ) -> WorkspaceState:
         with self._lock:
             workspace = self.get_workspace(workspace_id)
-            self._set_samples_filter_locked(workspace, None)
+            target_panel_id = self._resolve_collection_panel_id_locked(workspace, panel_id)
+            self._set_samples_filter_locked(workspace, None, panel_id=target_panel_id)
             self.workspace_registry.update_workspace(workspace)
             self._bump_version()
             return workspace
@@ -1960,6 +2004,7 @@ class HyperViewRuntime:
         *,
         focus: bool = True,
         source: str | None = None,
+        panel_id: str | None = None,
     ) -> WorkspaceState:
         """Atomically show explicit rows in Samples and synchronize map selection."""
 
@@ -1976,7 +2021,7 @@ class HyperViewRuntime:
             workspace = self.get_workspace(workspace_id)
             resolved_panel_id, entry = self._get_panel_state_entry_locked(
                 workspace,
-                SAMPLES_PANEL_STATE_ID,
+                self._resolve_collection_panel_id_locked(workspace, panel_id),
                 create=True,
             )
             next_revision = entry.state_revision + 1
@@ -2020,31 +2065,47 @@ class HyperViewRuntime:
     def get_samples_retrieval_query(
         self,
         workspace_id: str,
+        *,
+        panel_id: str | None = None,
     ) -> SimilarityQueryState | None:
         with self._lock:
             workspace = self.get_workspace(workspace_id)
-            return _samples_panel_retrieval_query(workspace.ui.panels)
+            return _samples_panel_retrieval_query(
+                workspace.ui.panels,
+                self._resolve_collection_panel_id_locked(workspace, panel_id),
+            )
 
     def set_samples_retrieval(
         self,
         workspace_id: str,
         query: SimilarityQueryState | None,
+        *,
+        panel_id: str | None = None,
     ) -> WorkspaceState:
         with self._lock:
             workspace = self.get_workspace(workspace_id)
+            target_panel_id = self._resolve_collection_panel_id_locked(workspace, panel_id)
             changed = False
             if query is not None:
                 if workspace.ui.selected_ids:
                     workspace.ui.selected_ids = []
                     changed = True
-            changed = self._set_samples_retrieval_locked(workspace, query) or changed
+            changed = (
+                self._set_samples_retrieval_locked(workspace, query, panel_id=target_panel_id)
+                or changed
+            )
             if changed:
                 self.workspace_registry.update_workspace(workspace)
                 self._bump_version()
             return workspace
 
-    def clear_samples_retrieval(self, workspace_id: str) -> WorkspaceState:
-        return self.set_samples_retrieval(workspace_id, None)
+    def clear_samples_retrieval(
+        self,
+        workspace_id: str,
+        *,
+        panel_id: str | None = None,
+    ) -> WorkspaceState:
+        return self.set_samples_retrieval(workspace_id, None, panel_id=panel_id)
 
     def patch_ui_state(
         self,

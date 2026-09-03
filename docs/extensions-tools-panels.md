@@ -50,6 +50,27 @@ is why workspaces snapshot, sync over SSE, and export statically. Everything a
 panel reads comes through SDK queries and collections; everything it changes
 goes through commands or tools.
 
+That ownership extends to collections. The collection commands —
+`collection.filter.set`, `collection.selection.set`, and
+`collection.neighbors.create` — take an **optional panel target**: their target
+is `{"workspace_id": ..., "panel_id": ...}`, and omitting `panel_id` keeps the
+canonical Samples panel, which is what the CLI, the Python API, and the
+built-in panels send. Naming a panel writes the resulting `collection_id`,
+`collection`, and filter/retrieval state into that panel's own state
+(`ui.panels.<panel_id>`), bumps that panel's `state_revision`, and reports the
+real `panel_id` in the command result — so any panel instance, built-in or
+extension, can own a collection-backed sample view instead of sharing the one
+slot named `samples`. An unknown `panel_id` is a `not_found` error rather than
+a silent write to Samples; the Samples aliases still resolve to Samples. From
+a panel module, `useCommandClient().runCommand(command, { target: { panel_id },
+args })` fills in the workspace for you, `useSampleResults({ panelId })` routes
+its results the same way, and `usePanelInteractions()` reads the current
+panel's collection state when it has one and the Samples panel's otherwise.
+The static bundle's command emulator reads the same target, so a panel behaves
+the same in a bundle as in a Live Space — except that a bundle, which has no
+error surface worth showing a visitor, falls back to Samples for a panel id it
+does not know instead of failing.
+
 The renderer half is not left to fend for itself. Alongside `React` and the
 hooks, `window.HyperViewPanelSDK` exposes `components`: the same `Panel`,
 `PanelHeader`, `PanelToolbar`, `PanelToolbarButton`, and

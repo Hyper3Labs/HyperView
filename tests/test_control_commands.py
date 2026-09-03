@@ -10,6 +10,7 @@ import numpy as np
 from hyperview import Dataset
 from hyperview.control import CommandEnvelope, ControlService, create_default_command_registry
 from hyperview.core.sample import Sample
+from hyperview.extensions import resolve_shipped_extension
 from hyperview.runtime import HyperViewRuntime, ProviderRegistry, WorkspaceRegistry
 
 
@@ -661,3 +662,190 @@ def test_samples_retrieval_commands_own_samples_panel_state(tmp_path: Path) -> N
     assert clear.result["collection"]["kind"] == "all"
     assert "similarity_query" not in clear.workspace["ui"]
     assert clear.workspace["ui"]["panels"]["samples"]["state"]["collection"]["kind"] == "all"
+
+
+def _service_with_dataset_and_reference_panel(tmp_path: Path) -> ControlService:
+    """A workspace whose panels include an extension panel and a second Samples."""
+
+    service = _service_with_dataset(tmp_path)
+    service.runtime.install_extension(
+        "default",
+        resolve_shipped_extension("reference"),
+        add_panels=True,
+        source="shipped",
+    )
+    for panel_id in ("samples", "results"):
+        service.runtime.add_runtime_panel(
+            "default",
+            panel_id=panel_id,
+            kind="builtin",
+            builtin_panel="samples",
+            position="center",
+        )
+    return service
+
+
+def test_collection_filter_writes_the_panel_named_by_the_target(tmp_path: Path) -> None:
+    service = _service_with_dataset_and_reference_panel(tmp_path)
+
+    samples = service.run(
+        CommandEnvelope(
+            command="collection.filter.set",
+            target={"workspace_id": "default"},
+            args={"value": "cat", "source": "samples"},
+        )
+    )
+    assert samples.ok is True
+    assert samples.workspace is not None
+    samples_collection_id = samples.result["collection_id"]
+
+    targeted = service.run(
+        CommandEnvelope(
+            command="collection.filter.set",
+            target={"workspace_id": "default", "panel_id": "reference"},
+            args={"value": "dog", "source": "reference"},
+        )
+    )
+
+    assert targeted.ok is True
+    assert targeted.workspace is not None
+    assert targeted.result["panel_id"] == "reference"
+    panels = targeted.workspace["ui"]["panels"]
+    reference_state = panels["reference"]["state"]
+    assert reference_state["mode"] == "collection"
+    assert reference_state["collection"]["query"]["value"] == "dog"
+    assert reference_state["collection_id"] == targeted.result["collection_id"]
+    # The Samples panel keeps the collection it was given.
+    assert panels["samples"]["state"]["collection_id"] == samples_collection_id
+    assert reference_state["collection_id"] != samples_collection_id
+    # Revision bookkeeping is the target panel's own, as for panel state.patch.
+    assert targeted.revision == panels["reference"]["state_revision"]
+
+
+def test_collection_selection_and_neighbors_target_a_second_samples_panel(
+    tmp_path: Path,
+) -> None:
+    service = _service_with_dataset_and_reference_panel(tmp_path)
+
+    selection = service.run(
+        CommandEnvelope(
+            command="collection.selection.set",
+            target={"workspace_id": "default", "panel_id": "results"},
+            args={"sample_ids": ["s2", "s0"], "source": "results"},
+        )
+    )
+
+    assert selection.ok is True
+    assert selection.workspace is not None
+    assert selection.result["panel_id"] == "results"
+    panels = selection.workspace["ui"]["panels"]
+    results_state = panels["results"]["state"]
+    assert results_state["collection"]["query"] == {"ids": ["s2", "s0"], "source": "results"}
+    assert results_state["focus_request"]["kind"] == "selection"
+    # A seeded Samples panel still shows the whole dataset.
+    assert panels["samples"]["state"]["collection"]["kind"] == "all"
+    # Workspace selection stays workspace-wide, whichever panel presented it.
+    assert selection.workspace["ui"]["selected_ids"] == ["s2", "s0"]
+
+    neighbors = service.run(
+        CommandEnvelope(
+            command="collection.neighbors.create",
+            target={"workspace_id": "default", "panel_id": "results"},
+            args={"sample_id": "s0", "k": 2, "source": "results"},
+        )
+    )
+
+    assert neighbors.ok is True
+    assert neighbors.workspace is not None
+    assert neighbors.result["panel_id"] == "results"
+    neighbor_panels = neighbors.workspace["ui"]["panels"]
+    assert neighbor_panels["results"]["state"]["mode"] == "retrieval"
+    assert neighbor_panels["results"]["state"]["collection"]["kind"] == "neighbors"
+    assert neighbor_panels["samples"]["state"]["collection"]["kind"] == "all"
+    assert "mode" not in neighbor_panels["samples"]["state"]
+
+
+def test_collection_commands_without_a_panel_still_write_samples(tmp_path: Path) -> None:
+    service = _service_with_dataset_and_reference_panel(tmp_path)
+
+    for command, args in (
+        ("collection.filter.set", {"value": "cat", "source": "test"}),
+        ("collection.selection.set", {"sample_ids": ["s0"], "source": "test"}),
+        ("collection.neighbors.create", {"sample_id": "s0", "k": 2, "source": "test"}),
+    ):
+        result = service.run(
+            CommandEnvelope(
+                command=command,
+                target={"workspace_id": "default"},
+                args=args,
+            )
+        )
+        assert result.ok is True, (command, result.error)
+        assert result.result["panel_id"] == "samples"
+        assert result.workspace is not None
+        assert result.workspace["ui"]["panels"]["samples"]["state"]["collection_id"] == (
+            result.result["collection_id"]
+        )
+        # The extension panel keeps the empty collection its definition seeds.
+        reference_state = result.workspace["ui"]["panels"]["reference"]["state"]
+        assert reference_state["collection_id"] == ""
+        assert "collection" not in reference_state
+
+
+def test_collection_commands_accept_the_samples_panel_alias(tmp_path: Path) -> None:
+    service = _service_with_dataset_and_reference_panel(tmp_path)
+
+    result = service.run(
+        CommandEnvelope(
+            command="collection.filter.set",
+            target={"workspace_id": "default", "panel_id": "grid"},
+            args={"value": "cat", "source": "test"},
+        )
+    )
+
+    assert result.ok is True
+    assert result.result["panel_id"] == "samples"
+
+
+def test_collection_commands_reject_an_unknown_panel(tmp_path: Path) -> None:
+    service = _service_with_dataset_and_reference_panel(tmp_path)
+
+    for command, args in (
+        ("collection.filter.set", {"value": "cat"}),
+        ("collection.selection.set", {"sample_ids": ["s0"]}),
+        ("collection.neighbors.create", {"sample_id": "s0", "k": 2}),
+    ):
+        result = service.run(
+            CommandEnvelope(
+                command=command,
+                target={"workspace_id": "default", "panel_id": "not-a-panel"},
+                args=args,
+            )
+        )
+
+        assert result.ok is False, command
+        assert result.error is not None
+        assert result.error.code == "not_found"
+        assert "not-a-panel" in result.error.message
+
+    # Nothing was written on the way to the error.
+    workspace = service.runtime.get_workspace("default")
+    assert "not-a-panel" not in workspace.ui.panels
+
+
+def test_workspace_scoped_commands_still_reject_a_panel_target(tmp_path: Path) -> None:
+    """Only the collection commands opted into a panel target."""
+
+    service = _service_with_dataset(tmp_path)
+
+    result = service.run(
+        CommandEnvelope(
+            command="panel.samples.retrieval.clear",
+            target={"workspace_id": "default", "panel_id": "samples"},
+            args={},
+        )
+    )
+
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.code == "validation_error"

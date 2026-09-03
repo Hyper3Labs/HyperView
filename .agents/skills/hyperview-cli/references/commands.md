@@ -407,6 +407,24 @@ Every control command returns a `CommandResult` envelope with `ok`, `command`,
 returned `snapshot` when present. Do not issue an immediate `/api/runtime`
 refetch unless a legacy endpoint did not return a snapshot.
 
+`collection.filter.set`, `collection.selection.set`, and
+`collection.neighbors.create` take an **optional panel target**. Their target is
+`{"workspace_id": "<workspace>", "panel_id": "<panel>"}`; leaving `panel_id` out
+keeps the canonical Samples panel, which is what the CLI and the Python API
+send, so nothing about the default path changes. Naming a panel writes that
+panel's own state (`ui.panels.<panel_id>`), bumps its `state_revision` — which
+is the `revision` the result reports, as for `workspace.panel.state.patch` —
+and returns the real `panel_id` in `result`. This is how an extension panel
+owns its own collection-backed sample view rather than driving Samples. The
+Samples aliases (`samples`, `grid`) resolve to Samples; an unknown `panel_id`
+fails with `not_found`.
+
+```bash
+curl --max-time 2 -X POST 'http://127.0.0.1:6262/api/control/commands/run' \
+  -H 'Content-Type: application/json' \
+  -d '{"command":"collection.filter.set","target":{"workspace_id":"research","panel_id":"readout"},"args":{"field":"label","value":"cat"}}'
+```
+
 Switch the live UI to a layout and selection:
 
 ```bash

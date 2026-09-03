@@ -162,7 +162,7 @@ Important distinction:
 - `usePanelState()` reads concrete panel props/state and patches panel-owned state through `workspace.panel.state.patch`.
 - `usePanelActions()` updates documented props on a concrete panel through the host contract. In static exports this update is ephemeral and local to the visitor.
 - `useSelection()` exposes current selection and selection setters.
-- `useSampleResults()` presents an explicit ordered set in the canonical Samples panel while synchronizing selection and map focus. Reset restores the full collection.
+- `useSampleResults()` presents an explicit ordered set in the canonical Samples panel while synchronizing selection and map focus. Reset restores the full collection. Pass a panel id -- `useSampleResults({ panelId })`, or per call -- to present the set in that panel's own state instead.
 - `useCollection(collectionId)` reads runtime collection metadata. `useSamples(collectionId)` materializes `all`/`filter`/`neighbors`/`search`/`selection` collections through the paged `GET /api/collections/{id}/items` endpoint (call `loadMore()` while `hasMore`); other kinds fall back to the host-loaded sample page. `scores` carries per-sample distances for neighbors/search collections.
 - `useSample(sampleId)` resolves one sample through the same live/static media contract. Use it for compact anchors and evidence cards instead of fetching `/api/samples/*` directly.
 - `useSimilarSamples({ anchorSampleId, layoutKey?, spaceKey?, k? })` reads one anchor and its ordered nearest neighbours through HyperView's similarity contract. It uses the live runtime when available and the precomputed similarity index in a static export; export with `--similarity-k K` for the largest `k` the panel requests.
@@ -182,7 +182,7 @@ Current hook return shapes:
 - `usePanelState()` → `{ panel, panelId, props, state, stateRevision, patchState(statePatch, { replaceState?, expectedRevision? }): Promise<RuntimeSnapshot> }`
 - `usePanelActions()` → `{ updateProps(panelId, props): Promise<RuntimeSnapshot> }`
 - `useSelection()` → `{ selectedIds: string[], selectionSource, setSelection(ids): Promise<RuntimeSnapshot>, clearSelection(): Promise<RuntimeSnapshot> }`
-- `useSampleResults()` → `{ showResults(ids, { focus?, source? }): Promise<CommandResult>, resetResults({ focus?, source? }): Promise<CommandResult> }`
+- `useSampleResults({ panelId? })` → `{ showResults(ids, { focus?, source?, panelId? }): Promise<CommandResult>, resetResults({ focus?, source?, panelId? }): Promise<CommandResult> }`
 - `useCollection(collectionId)` → `RuntimeCollection | null`
 - `useSamples(collectionId, { pageSize? })` → `{ collection, samples, scores, total, loading, error, hasMore, loadMore }`
 - `useSample(sampleId)` → `{ sample, loading, error }`
@@ -199,7 +199,7 @@ panel needs more rows. Sample reads default to `includeThumbnails: false` and re
 for image rendering. Request inline thumbnails only when the panel specifically
 needs base64 thumbnail payloads.
 
-To clear only the current selection from a panel, use `await useSelection().clearSelection()`. To show curated business-demo results in the canonical Samples panel, use `await useSampleResults().showResults(ids)` and `resetResults()`. To create nearest-neighbor or filtered Samples state, run `collection.neighbors.create`, `collection.filter.set`, or `panel.samples.retrieval.*` through `useCommandClient().runCommand(...)`.
+To clear only the current selection from a panel, use `await useSelection().clearSelection()`. To show curated business-demo results in the canonical Samples panel, use `await useSampleResults().showResults(ids)` and `resetResults()`. To create nearest-neighbor or filtered Samples state, run `collection.neighbors.create`, `collection.filter.set`, or `panel.samples.retrieval.*` through `useCommandClient().runCommand(...)`. The three `collection.*` commands take an optional panel target: pass `{ target: { panel_id: panelId }, args: {...} }` and the collection lands in that panel's own state instead of the Samples panel's; the client fills in the workspace.
 
 To run an extension Python tool from a panel:
 

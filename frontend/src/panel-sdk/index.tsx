@@ -262,6 +262,21 @@ function workspaceTarget(workspaceId: string | null) {
   return { workspace_id: workspaceId ?? "default" };
 }
 
+// Keep in sync with SAMPLES_PANEL_STATE_ID in src/hyperview/runtime.py.
+const SAMPLES_PANEL_STATE_ID = "samples";
+
+/**
+ * Address a collection command at a panel, or leave it workspace-scoped.
+ *
+ * Collection commands (`collection.filter.set`, `collection.selection.set`,
+ * `collection.neighbors.create`) take an optional `panel_id`; omitting it
+ * keeps the canonical Samples panel on both the live server and the static
+ * bundle's command emulator.
+ */
+function collectionPanelTarget(panelId: string | null | undefined) {
+  return panelId ? { panel_id: panelId } : undefined;
+}
+
 function panelLayoutPatch(options: PanelResizeOptions): Record<string, unknown> {
   const patch: Record<string, unknown> = {};
   if ("width" in options) patch.width = options.width ?? null;
@@ -284,7 +299,9 @@ export function createHyperViewPanelClient(workspaceId: string | null): HyperVie
     async runCommand(command, envelope) {
       return runControlCommand({
         command,
-        target: envelope?.target ?? workspaceTarget(workspaceId),
+        // The workspace is the client's to supply, so a panel addressing a
+        // command at itself only has to pass `target: { panel_id }`.
+        target: { ...workspaceTarget(workspaceId), ...(envelope?.target ?? {}) },
         args: envelope?.args ?? {},
       });
     },
@@ -670,17 +687,28 @@ export function useSelection() {
   );
 }
 
-export function useSampleResults() {
+/**
+ * Present an explicit result set in a collection-backed sample view.
+ *
+ * The default target is the canonical Samples panel, which is what an
+ * extension panel usually wants: it computes ids and Samples shows them. A
+ * panel that owns its own sample view passes its instance id -- either once
+ * (`useSampleResults({ panelId })`) or per call -- and the results land in
+ * that panel's state instead.
+ */
+export function useSampleResults(options?: { panelId?: string | null }) {
   const commandClient = useCommandClient();
+  const defaultPanelId = options?.panelId ?? null;
 
   const showResults = useCallback(
     async (
       ids: string[],
-      options?: { focus?: boolean; source?: string }
+      options?: { focus?: boolean; source?: string; panelId?: string | null }
     ) => {
       const sampleIds = Array.from(new Set(ids.map((id) => id.trim()).filter(Boolean)));
       if (sampleIds.length === 0) throw new Error("showResults requires at least one sample id");
       return commandClient.runCommand("collection.selection.set", {
+        target: collectionPanelTarget(options?.panelId ?? defaultPanelId),
         args: {
           sample_ids: sampleIds,
           focus: options?.focus ?? true,
@@ -688,19 +716,20 @@ export function useSampleResults() {
         },
       });
     },
-    [commandClient]
+    [commandClient, defaultPanelId]
   );
 
   const resetResults = useCallback(
-    (options?: { focus?: boolean; source?: string }) =>
+    (options?: { focus?: boolean; source?: string; panelId?: string | null }) =>
       commandClient.runCommand("collection.selection.set", {
+        target: collectionPanelTarget(options?.panelId ?? defaultPanelId),
         args: {
           clear: true,
           focus: options?.focus ?? true,
           source: options?.source ?? "panel",
         },
       }),
-    [commandClient]
+    [commandClient, defaultPanelId]
   );
 
   return useMemo(
@@ -727,7 +756,17 @@ export function useActiveLayout() {
   );
 }
 
-export function usePanelInteractions() {
+/**
+ * Read the hover, highlight and focus signals a panel renders against.
+ *
+ * The signals live in the state of whichever panel owns the collection-backed
+ * sample view. That is the Samples panel by default -- which is what the
+ * scatter panel and every panel without a collection of its own follows. A
+ * panel that owns one (because collection commands were addressed at it) reads
+ * its own state instead, and `panelId` names one explicitly.
+ */
+export function usePanelInteractions(options?: { panelId?: string | null }) {
+  const instance = usePanelInstance();
   const hoveredId = useStore((state) => state.hoveredId);
   const setHoveredId = useStore((state) => state.setHoveredId);
   const labelFilter = useStore((state) => state.labelFilter);
@@ -736,10 +775,18 @@ export function usePanelInteractions() {
   const scatterLabelOverlayMode = useStore((state) => state.scatterLabelOverlayMode);
   const setScatterLabelOverlayMode = useStore((state) => state.setScatterLabelOverlayMode);
   const labelColorMapId = useColorSettings((state) => state.labelColorMapId);
-  const samplesPanelState = panelStates.samples?.state ?? {};
+  const requestedPanelId = options?.panelId ?? instance.panelId ?? null;
+  const requestedPanelState =
+    requestedPanelId === null ? undefined : panelStates[requestedPanelId]?.state;
+  const ownsCollection =
+    typeof requestedPanelState?.collection_id === "string" &&
+    requestedPanelState.collection_id.length > 0;
+  const collectionPanelState = ownsCollection
+    ? (requestedPanelState as Record<string, unknown>)
+    : panelStates[SAMPLES_PANEL_STATE_ID]?.state ?? {};
   const collectionId =
-    typeof samplesPanelState.collection_id === "string"
-      ? samplesPanelState.collection_id
+    typeof collectionPanelState.collection_id === "string"
+      ? collectionPanelState.collection_id
       : null;
   const collection = runtimeCollections.find((item) => item.id === collectionId) ?? null;
   const highlightedCollectionId =
@@ -751,7 +798,7 @@ export function usePanelInteractions() {
     () => new Set(highlightedSamples.samples.map((sample) => sample.id)),
     [highlightedSamples.samples]
   );
-  const rawFocusRequest = samplesPanelState.focus_request;
+  const rawFocusRequest = collectionPanelState.focus_request;
   const focusRequest = useMemo(() => {
     if (!rawFocusRequest || typeof rawFocusRequest !== "object" || Array.isArray(rawFocusRequest)) {
       return null;

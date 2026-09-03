@@ -100,13 +100,20 @@ async function loadStaticApi() {
     location: { href: "http://localhost/bundle/" },
     dispatchEvent: () => true,
   };
+  const json = (body, status = 200) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    });
   globalThis.fetch = async (input) => {
     const url = String(input);
-    if (url.endsWith("api/runtime.json")) {
-      return new Response(JSON.stringify(snapshot()), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+    if (url.endsWith("api/runtime.json")) return json(snapshot());
+    // A bundle exported without a similarity index answers the neighbors path
+    // with an empty result set, which is enough to pin the panel routing.
+    if (url.endsWith("api/search/similar/index.json")) return json({ detail: "absent" }, 404);
+    if (url.endsWith("api/samples/index.json")) return json({ shards: [] });
+    if (url.endsWith("api/dataset.json")) {
+      return json({ name: "demo", num_samples: 0, labels: [], layouts: [] });
     }
     throw new Error(`unexpected static fetch: ${url}`);
   };
@@ -170,4 +177,48 @@ test("an unknown panel id falls back to the Samples state slot", async () => {
   });
 
   assert.equal(payload.result.panel_id, "samples");
+});
+
+test("a neighbors collection issued by an extension panel stays on that panel", async () => {
+  const { runControlCommand } = await loadStaticApi();
+
+  const payload = await runControlCommand({
+    command: "collection.neighbors.create",
+    target: { workspace_id: "demo", panel_id: "region-readout" },
+    args: { sample_id: "a", k: 2, source: "region-readout" },
+  });
+
+  assert.equal(payload.result.panel_id, "region-readout");
+  const panels = payload.snapshot.workspace.ui.panels;
+  assert.equal(panels["region-readout"].state.mode, "retrieval");
+  assert.equal(panels.samples, undefined);
+});
+
+// The live server's Samples retrieval commands take a workspace target only --
+// `collection.neighbors.create` is the id that carries a panel. The emulator
+// routes the same way so a bundle and a Live Space agree.
+test("a Samples retrieval command ignores a panel target, as the live server does", async () => {
+  const { runControlCommand } = await loadStaticApi();
+
+  const payload = await runControlCommand({
+    command: "panel.samples.retrieval.set-anchor",
+    target: { workspace_id: "demo", panel_id: "region-readout" },
+    args: { sample_id: "a", k: 2, source: "panel" },
+  });
+
+  assert.equal(payload.result.panel_id, "samples");
+  assert.equal(payload.snapshot.workspace.ui.panels["region-readout"], undefined);
+});
+
+test("a filter targeted at the Samples alias writes the shared Samples slot", async () => {
+  const { runControlCommand } = await loadStaticApi();
+
+  const payload = await runControlCommand({
+    command: "collection.filter.set",
+    target: { workspace_id: "demo", panel_id: "grid" },
+    args: { field: "label", value: "cat" },
+  });
+
+  assert.equal(payload.result.panel_id, "samples");
+  assert.equal(payload.snapshot.workspace.ui.panels.samples.state.mode, "collection");
 });
