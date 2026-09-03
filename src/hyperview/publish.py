@@ -56,6 +56,16 @@ NO_AUTH_COMMENT = (
     "# extension install, tool execution and compute stay closed."
 )
 
+# The image COPYs the bundle in and owns it for the life of the container, so
+# restore can point the dataset straight at the bundle's media and extension
+# folders. Without this flag restore copies both into HYPERVIEW_DATASETS_DIR,
+# which is the right default on a workstation -- where the bundle can be moved,
+# deleted, or re-exported over -- and pure duplication here.
+LINK_MEDIA_COMMENT = (
+    "# The image carries the bundle and never moves it, so the restored dataset\n"
+    "# points at the bundle's own media instead of copying it a second time."
+)
+
 
 @dataclass(frozen=True)
 class PublishPlan:
@@ -440,8 +450,10 @@ def render_dockerfile(
             "HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 \\",
             f"    CMD curl -f http://localhost:{LIVE_SPACE_PORT}/api/runtime || exit 1",
             "",
+            LINK_MEDIA_COMMENT,
             'CMD ["hyperview", "serve", \\',
             f'     "--from", "{LIVE_BUNDLE_DIR}", \\',
+            '     "--link-media", \\',
             '     "--host", "0.0.0.0", \\',
             f'     "--port", "{LIVE_SPACE_PORT}", \\',
             '     "--public"]',

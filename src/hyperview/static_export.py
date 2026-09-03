@@ -930,6 +930,75 @@ def _deployment_payload(out_dir: Path, workspace_id: str) -> dict[str, Any]:
     }
 
 
+def _resolved(path: str | Path) -> Path | None:
+    try:
+        return Path(path).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def _sources_inside_output_dir(
+    runtime: HyperViewRuntime,
+    workspace_id: str,
+    dataset: Dataset,
+    out_dir: Path,
+) -> list[str]:
+    """Name every file the export would copy out of its own output directory."""
+
+    offenders: list[str] = []
+
+    for sample in dataset.samples:
+        if not sample.filepath:
+            continue
+        source = _resolved(sample.filepath)
+        if source is not None and source.is_relative_to(out_dir):
+            offenders.append(f"sample '{sample.id}' media at {source}")
+
+    folders, _warnings = _extension_folders_to_copy(runtime, workspace_id)
+    for name, info in sorted(folders.items()):
+        source = _resolved(info["folder"])
+        if source is not None and source.is_relative_to(out_dir):
+            offenders.append(f"extension '{name}' folder at {source}")
+
+    for panel in runtime.get_workspace(workspace_id).ui.custom_panels:
+        module_file = panel.resolved_module_file()
+        if module_file is None:
+            continue
+        source = _resolved(module_file)
+        if source is not None and source.is_relative_to(out_dir):
+            offenders.append(f"panel '{panel.id}' module at {source}")
+
+    return offenders
+
+
+def _refuse_export_that_reads_its_own_output(
+    runtime: HyperViewRuntime,
+    workspace_id: str,
+    dataset: Dataset,
+    out_dir: Path,
+) -> None:
+    """Refuse before anything is cleared, not after.
+
+    Exporting a workspace whose media or extension folders live inside the
+    output directory would delete the files it is about to copy: the bundle
+    comes out missing exactly what it was reading. A workspace restored from a
+    bundle with ``--link-media`` is the way this happens.
+    """
+
+    offenders = _sources_inside_output_dir(runtime, workspace_id, dataset, out_dir)
+    if not offenders:
+        return
+    preview = "; ".join(offenders[:3])
+    more = "" if len(offenders) <= 3 else f"; and {len(offenders) - 3} more"
+    raise RuntimeError(
+        f"Export would read from its own output directory and was refused before "
+        f"anything was written: {len(offenders)} source files of workspace "
+        f"'{workspace_id}' are inside {out_dir} ({preview}{more}). Export to a "
+        "different directory, or restore the bundle without --link-media so the "
+        "dataset owns its media and extensions outside the bundle."
+    )
+
+
 def _prepare_output_dir(out_dir: Path) -> None:
     if out_dir.exists() and not out_dir.is_dir():
         raise RuntimeError(f"Export path is not a directory: {out_dir}")
@@ -1018,12 +1087,16 @@ def export_runtime_workspace(
     if similarity_k < 0:
         raise ValueError("similarity_k must be zero or greater")
     out_dir = Path(out).expanduser().resolve()
-    _prepare_output_dir(out_dir)
 
     workspace = runtime.get_workspace(workspace_id)
     if not workspace.dataset_name:
         raise RuntimeError(f"Workspace '{workspace_id}' has no dataset")
     dataset = runtime.get_dataset(workspace_id, workspace.dataset_name)
+
+    # Every check that can refuse the export runs before the output directory
+    # is cleared, so a refusal leaves an existing bundle intact.
+    _refuse_export_that_reads_its_own_output(runtime, workspace_id, dataset, out_dir)
+    _prepare_output_dir(out_dir)
 
     _copy_static_frontend(out_dir)
     _inject_static_config(out_dir / "index.html")

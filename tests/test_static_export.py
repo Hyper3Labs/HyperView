@@ -112,6 +112,33 @@ def _add_text_search_space(dataset: Dataset, sample_ids: list[str]) -> str:
     return space_key
 
 
+def test_export_refuses_to_read_media_out_of_its_own_output_directory(tmp_path: Path) -> None:
+    """An export must never clear the folder it is about to copy files from.
+
+    A workspace restored from a bundle with `--link-media` reads its media from
+    that bundle. Re-exporting it over the same directory would delete every
+    file the export then tries to copy, leaving a bundle with missing media.
+    """
+
+    runtime = _make_runtime(tmp_path)
+    out_dir = tmp_path / "bundle"
+    export_runtime_workspace(runtime, "demo", out_dir)
+    before = sorted(path.name for path in out_dir.iterdir())
+
+    dataset = runtime.get_dataset(workspace_id="demo")
+    sample = dataset.samples[0]
+    sample.filepath = str(out_dir / "api" / "samples" / sample.id / "content")
+    dataset.add_sample(sample)
+
+    with pytest.raises(RuntimeError, match="own output directory"):
+        export_runtime_workspace(runtime, "demo", out_dir)
+
+    # Refused before anything was cleared: the bundle it was reading is intact.
+    assert sorted(path.name for path in out_dir.iterdir()) == before
+    assert (out_dir / "api" / "samples" / sample.id / "content").is_file()
+    assert (out_dir / "hyperview-static.json").is_file()
+
+
 def test_static_export_writes_bundle_snapshot_samples_media_and_flag(tmp_path: Path) -> None:
     runtime = _make_runtime(tmp_path)
     dataset = runtime.get_dataset(workspace_id="demo")

@@ -346,6 +346,27 @@ The dataset lands in the current `HYPERVIEW_DATASETS_DIR` under the name the
 bundle records. Restoring the same bundle again reuses it, so a container that
 restarts comes back to the same Space instead of re-ingesting.
 
+The restored dataset owns its files: sample media is copied out of the bundle
+into `<HYPERVIEW_MEDIA_DIR>/restored/<dataset>/` (or
+`<HYPERVIEW_DATASETS_DIR>/<dataset>/media/` when that variable is unset) and
+each extension folder into `<HYPERVIEW_DATASETS_DIR>/<dataset>/extensions/`, so
+the bundle can be deleted, moved, or re-exported afterwards. Restoring on the
+machine that exported the bundle reuses the source dataset without touching a
+sample whose media file already exists outside the bundle; only a missing file,
+or one that already points inside the bundle, is re-pointed.
+
+`--link-media` skips both copies and points the dataset at the bundle in place.
+Use it only where the process owns the bundle for its whole life, such as the
+generated Live Space image, which carries the bundle and passes the flag:
+
+```bash
+hyperview serve --from dist/research-demo --public --link-media --no-browser
+```
+
+An export refuses, before clearing anything, when the media or extension
+folders it would copy live inside its own `--out` directory -- exporting a
+`--link-media` Space back over its bundle.
+
 `--public` drops the session token, the same as setting `HYPERVIEW_NO_AUTH=1`.
 Viewer-facing commands (panel state, selection, collections, layout view) stay
 open; everything that imports modules, installs extension code, or starts
