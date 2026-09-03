@@ -493,3 +493,12 @@ def test_extra_pip_overrides_a_manifest_pin_by_name() -> None:
         "hyperview==1.0.1.dev1+gabc",
         "Hyper_Models==0.4.0",
     ]
+
+
+def test_plan_reports_the_overridden_pin_not_the_manifest_one(tmp_path, monkeypatch) -> None:
+    from hyperview.publish import _effective_packages
+
+    assert _effective_packages({"hyperview": "1.0.1.dev1+gabc"}, ("hyperview==1.1.0",)) == {
+        "hyperview": "1.1.0"
+    }
+    assert _effective_packages({"hyperview": "1.1.0"}, ("torch==2.4.0",)) == {"hyperview": "1.1.0"}

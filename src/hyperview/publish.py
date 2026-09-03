@@ -264,6 +264,17 @@ def _requirements(packages: dict[str, str], extra_pip: tuple[str, ...]) -> list[
     return requirements
 
 
+def _effective_packages(packages: dict[str, str], extra_pip: tuple[str, ...]) -> dict[str, str]:
+    """The pins the Dockerfile will actually install, after ``extra_pip`` overrides."""
+
+    effective = dict(packages)
+    for spec in extra_pip:
+        name, sep, version = spec.partition("==")
+        if sep and _requirement_name(name) in effective:
+            effective[_requirement_name(name)] = version.strip()
+    return effective
+
+
 def _requirement_name(spec: str) -> str:
     """The distribution name of a pip requirement, normalised like ``packages``."""
 
@@ -487,7 +498,7 @@ def _publish_to_hf(
     generated = {"README.md": render_readme(manifest, mode=mode, title=title, emoji=emoji)}
     packages: dict[str, str] = {}
     if mode == "live":
-        packages = _manifest_packages(manifest)
+        packages = _effective_packages(_manifest_packages(manifest), extra_pip)
         generated["Dockerfile"] = render_dockerfile(manifest, extra_pip=extra_pip)
 
     num_files, bundle_bytes = _bundle_stats(bundle_dir)
