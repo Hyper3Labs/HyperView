@@ -9,7 +9,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from hyperview.control.models import CommandError
 from hyperview.control.registry import CommandExecution, CommandRegistry, CommandSpec, EmptyArgs
 from hyperview.control.runtime_commands import runtime_command_specs
-from hyperview.runtime import HyperViewRuntime, SimilarityQueryState
+from hyperview.runtime import (
+    SAMPLES_PANEL_STATE_ID,
+    HyperViewRuntime,
+    SimilarityQueryState,
+)
 
 PositivePanelDimension = Annotated[int, Field(gt=0)]
 
@@ -123,6 +127,22 @@ class WorkspaceTarget(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     workspace_id: str
+
+
+class CollectionTarget(BaseModel):
+    """Workspace target that may name the panel a collection command drives.
+
+    ``panel_id`` is optional and defaults to the canonical Samples panel, so
+    every workspace-scoped caller -- the CLI, the Python API, the built-in
+    panels, and the static bundle's command emulator -- keeps its behaviour.
+    Naming a panel instead gives that panel its own collection-backed sample
+    view, which is what an extension panel needs to own one.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_id: str
+    panel_id: str | None = None
 
 
 class JobTarget(BaseModel):
@@ -260,6 +280,20 @@ def _workspace_target(target: BaseModel) -> WorkspaceTarget:
     return target
 
 
+def _collection_target(target: BaseModel) -> CollectionTarget:
+    """Accept either target shape for the handlers a collection command shares.
+
+    ``collection.neighbors.create`` and ``panel.samples.retrieval.set-anchor``
+    run the same handler; only the first one carries a panel.
+    """
+
+    if isinstance(target, CollectionTarget):
+        return target
+    if isinstance(target, WorkspaceTarget):
+        return CollectionTarget(workspace_id=target.workspace_id)
+    raise CommandError("validation_error", "Invalid collection target")
+
+
 def _cancel_job(
     runtime: HyperViewRuntime,
     target: BaseModel,
@@ -312,16 +346,23 @@ def _fields_set_payload(model: BaseModel) -> dict[str, Any]:
     return {field: getattr(model, field) for field in model.model_fields_set}
 
 
-def _samples_panel_collection_result(workspace) -> dict[str, object]:
-    state_entry = workspace.ui.panels.get("samples")
+def _samples_panel_collection_result(workspace, panel_id: str) -> dict[str, object]:
+    state_entry = workspace.ui.panels.get(panel_id)
     state = state_entry.state if state_entry is not None else {}
     collection = state.get("collection")
     collection_id = state.get("collection_id")
     return {
-        "panel_id": "samples",
+        "panel_id": panel_id,
         "collection_id": collection_id if isinstance(collection_id, str) else None,
         "collection": collection if isinstance(collection, dict) else None,
     }
+
+
+def _panel_state_revision(workspace, panel_id: str) -> int:
+    """Report the target panel's own state revision, as panel state.patch does."""
+
+    state_entry = workspace.ui.panels.get(panel_id)
+    return state_entry.state_revision if state_entry is not None else 0
 
 
 def _space_key_deprecation_messages(args: BaseModel) -> tuple[str, ...]:
@@ -584,10 +625,14 @@ def _set_samples_retrieval_anchor(
     target: BaseModel,
     args: BaseModel,
 ) -> CommandExecution:
-    workspace_target = _workspace_target(target)
+    collection_target = _collection_target(target)
     retrieval_args = _samples_retrieval_set_args(args)
+    panel_id = runtime.resolve_collection_panel_id(
+        collection_target.workspace_id,
+        collection_target.panel_id,
+    )
     query = runtime.resolve_similarity_query(
-        workspace_target.workspace_id,
+        collection_target.workspace_id,
         retrieval_args.sample_id,
         layout_key=retrieval_args.layout_key,
         index_id=retrieval_args.index_id,
@@ -595,11 +640,15 @@ def _set_samples_retrieval_anchor(
         k=retrieval_args.k,
         source=retrieval_args.source,
     )
-    workspace = runtime.set_samples_retrieval(workspace_target.workspace_id, query)
+    workspace = runtime.set_samples_retrieval(
+        collection_target.workspace_id,
+        query,
+        panel_id=panel_id,
+    )
     return CommandExecution(
         workspace=workspace,
-        result=_samples_panel_collection_result(workspace),
-        revision=workspace.ui.view_revision,
+        result=_samples_panel_collection_result(workspace, panel_id),
+        revision=_panel_state_revision(workspace, panel_id),
         messages=_space_key_deprecation_messages(retrieval_args),
     )
 
@@ -613,8 +662,8 @@ def _clear_samples_retrieval(
     workspace = runtime.clear_samples_retrieval(workspace_target.workspace_id)
     return CommandExecution(
         workspace=workspace,
-        result=_samples_panel_collection_result(workspace),
-        revision=workspace.ui.view_revision,
+        result=_samples_panel_collection_result(workspace, SAMPLES_PANEL_STATE_ID),
+        revision=_panel_state_revision(workspace, SAMPLES_PANEL_STATE_ID),
     )
 
 
@@ -640,8 +689,8 @@ def _set_samples_retrieval_k(
     workspace = runtime.set_samples_retrieval(workspace_target.workspace_id, next_query)
     return CommandExecution(
         workspace=workspace,
-        result=_samples_panel_collection_result(workspace),
-        revision=workspace.ui.view_revision,
+        result=_samples_panel_collection_result(workspace, SAMPLES_PANEL_STATE_ID),
+        revision=_panel_state_revision(workspace, SAMPLES_PANEL_STATE_ID),
     )
 
 
@@ -664,8 +713,8 @@ def _set_samples_text_retrieval(
     workspace = runtime.set_samples_retrieval(workspace_target.workspace_id, query)
     return CommandExecution(
         workspace=workspace,
-        result=_samples_panel_collection_result(workspace),
-        revision=workspace.ui.view_revision,
+        result=_samples_panel_collection_result(workspace, SAMPLES_PANEL_STATE_ID),
+        revision=_panel_state_revision(workspace, SAMPLES_PANEL_STATE_ID),
         messages=_space_key_deprecation_messages(retrieval_args),
     )
 
@@ -675,21 +724,29 @@ def _filter_labels(
     target: BaseModel,
     args: BaseModel,
 ) -> CommandExecution:
-    workspace_target = _workspace_target(target)
+    collection_target = _collection_target(target)
     filter_args = _labels_filter_args(args)
+    panel_id = runtime.resolve_collection_panel_id(
+        collection_target.workspace_id,
+        collection_target.panel_id,
+    )
     if filter_args.clear:
-        workspace = runtime.clear_samples_filter(workspace_target.workspace_id)
+        workspace = runtime.clear_samples_filter(
+            collection_target.workspace_id,
+            panel_id=panel_id,
+        )
     else:
         workspace = runtime.set_samples_filter(
-            workspace_target.workspace_id,
+            collection_target.workspace_id,
             field=filter_args.field,
             value=filter_args.value,
             source=filter_args.source,
+            panel_id=panel_id,
         )
     return CommandExecution(
         workspace=workspace,
-        result=_samples_panel_collection_result(workspace),
-        revision=workspace.ui.view_revision,
+        result=_samples_panel_collection_result(workspace, panel_id),
+        revision=_panel_state_revision(workspace, panel_id),
     )
 
 
@@ -698,23 +755,28 @@ def _set_samples_selection(
     target: BaseModel,
     args: BaseModel,
 ) -> CommandExecution:
-    workspace_target = _workspace_target(target)
+    collection_target = _collection_target(target)
     selection_args = _samples_selection_set_args(args)
+    panel_id = runtime.resolve_collection_panel_id(
+        collection_target.workspace_id,
+        collection_target.panel_id,
+    )
     try:
         workspace = runtime.set_samples_selection(
-            workspace_target.workspace_id,
+            collection_target.workspace_id,
             [] if selection_args.clear else selection_args.sample_ids,
             focus=selection_args.focus,
             source=selection_args.source,
+            panel_id=panel_id,
         )
     except (KeyError, ValueError) as exc:
         raise CommandError("validation_error", str(exc)) from exc
-    result = _samples_panel_collection_result(workspace)
+    result = _samples_panel_collection_result(workspace, panel_id)
     result["selected_ids"] = list(workspace.ui.selected_ids)
     return CommandExecution(
         workspace=workspace,
         result=result,
-        revision=workspace.ui.view_revision,
+        revision=_panel_state_revision(workspace, panel_id),
     )
 
 
@@ -860,8 +922,11 @@ def create_default_command_registry() -> CommandRegistry:
         CommandSpec(
             id="collection.neighbors.create",
             owner="backend",
-            summary="Create a nearest-neighbor collection for the Samples panel.",
-            target_model=WorkspaceTarget,
+            summary=(
+                "Create a nearest-neighbor collection for the Samples panel, "
+                "or for the panel named by the target."
+            ),
+            target_model=CollectionTarget,
             args_model=SamplesRetrievalSetArgs,
             handler=_set_samples_retrieval_anchor,
         ),
@@ -876,16 +941,22 @@ def create_default_command_registry() -> CommandRegistry:
         CommandSpec(
             id="collection.filter.set",
             owner="backend",
-            summary="Create or clear a label filter collection for the Samples panel.",
-            target_model=WorkspaceTarget,
+            summary=(
+                "Create or clear a label filter collection for the Samples panel, "
+                "or for the panel named by the target."
+            ),
+            target_model=CollectionTarget,
             args_model=LabelsFilterArgs,
             handler=_filter_labels,
         ),
         CommandSpec(
             id="collection.selection.set",
             owner="backend",
-            summary="Present an explicit sample result set and synchronized selection.",
-            target_model=WorkspaceTarget,
+            summary=(
+                "Present an explicit sample result set and synchronized selection "
+                "on the Samples panel, or on the panel named by the target."
+            ),
+            target_model=CollectionTarget,
             args_model=SamplesSelectionSetArgs,
             handler=_set_samples_selection,
         ),

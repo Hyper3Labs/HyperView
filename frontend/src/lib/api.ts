@@ -1194,6 +1194,14 @@ function staticPanelStateEntry(
   return snapshot.workspace.ui.panels?.[panelId] ?? { state: {}, state_revision: 0 };
 }
 
+// The commands whose target carries an optional `panel_id`. Keep in sync with
+// the CommandSpecs that use CollectionTarget in src/hyperview/control/ui_panel.py.
+const COLLECTION_PANEL_TARGET_COMMANDS = new Set([
+  "collection.filter.set",
+  "collection.selection.set",
+  "collection.neighbors.create",
+]);
+
 // Mirrors the runtime's panel-state resolution: a panel addresses itself by id,
 // and the Samples aliases (plus an unrouted command) fall back to the shared
 // Samples state slot.
@@ -1588,7 +1596,11 @@ async function runStaticControlCommandNow(args: {
   const snapshot = await getStaticSnapshot();
   // Collection commands write the issuing panel's state, so an extension panel
   // driving them in a bundle updates itself rather than a panel named "samples".
-  const collectionPanelId = resolveStaticPanelStateId(snapshot, args.target);
+  // Only the `collection.*` ids carry a panel target; the Samples-panel
+  // retrieval commands are workspace-scoped on the live server too.
+  const collectionPanelId = COLLECTION_PANEL_TARGET_COMMANDS.has(args.command)
+    ? resolveStaticPanelStateId(snapshot, args.target)
+    : SAMPLES_PANEL_STATE_ID;
   if (
     args.command === "panel.samples.retrieval.set-anchor" ||
     args.command === "collection.neighbors.create"
