@@ -502,3 +502,22 @@ def test_plan_reports_the_overridden_pin_not_the_manifest_one(tmp_path, monkeypa
         "hyperview": "1.1.0"
     }
     assert _effective_packages({"hyperview": "1.1.0"}, ("torch==2.4.0",)) == {"hyperview": "1.1.0"}
+
+
+def test_dockerfile_reads_producer_pins_and_runs_pre_install_first() -> None:
+    from hyperview.publish import render_dockerfile
+
+    manifest = {
+        "hyperview_version": "1.1.0",
+        "producer": {"hyperview": "1.1.0", "hyper_models": "0.3.1", "python": "3.11.11"},
+    }
+    dockerfile = render_dockerfile(
+        manifest,
+        extra_pip=("hyper-models[ml]==0.3.1",),
+        pre_install=("torch torchvision --index-url https://download.pytorch.org/whl/cpu",),
+    )
+    pre = dockerfile.index("RUN pip install torch torchvision --index-url")
+    pinned = dockerfile.index('"hyperview==1.1.0"')
+    assert pre < pinned
+    assert '"hyper-models[ml]==0.3.1"' in dockerfile
+    assert '"hyper-models==0.3.1"' not in dockerfile

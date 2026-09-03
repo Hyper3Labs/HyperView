@@ -337,6 +337,17 @@ def _build_control_parser() -> argparse.ArgumentParser:
         help="Extra requirement for a Live Space image. Repeatable.",
     )
     publish_parser.add_argument(
+        "--pre-install",
+        action="append",
+        default=None,
+        metavar="PIP_ARGS",
+        help=(
+            "Raw pip install arguments run before the pinned install of a Live Space "
+            "image, e.g. 'torch torchvision --index-url https://download.pytorch.org/whl/cpu'. "
+            "Repeatable."
+        ),
+    )
+    publish_parser.add_argument(
         "--hardware",
         default=None,
         help="Hugging Face hardware flavor to request, such as cpu-upgrade.",
@@ -880,6 +891,7 @@ def _run_publish_command(args: argparse.Namespace) -> None:
         title=args.title,
         emoji=args.emoji,
         extra_pip=tuple(args.extra_pip or ()),
+        pre_install=tuple(args.pre_install or ()),
         hardware=args.hardware,
         commit_message=args.commit_message,
     )

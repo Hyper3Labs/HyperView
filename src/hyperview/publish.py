@@ -240,6 +240,12 @@ def _manifest_packages(manifest: dict[str, Any]) -> dict[str, str]:
     for source in sources:
         for name, version in _normalize_pins(source).items():
             packages.setdefault(name, version)
+    # The restore-capable exporter records what produced the vectors.
+    producer = _manifest_section(manifest, "producer")
+    for key, name in (("hyper_models", "hyper-models"), ("hyper-models", "hyper-models")):
+        version = producer.get(key)
+        if version:
+            packages.setdefault(name, str(version))
     # An older manifest may name the model package directly.
     for key in ("hyper_models_version", "hyper-models-version"):
         version = manifest.get(key)
@@ -396,13 +402,20 @@ def render_dockerfile(
     manifest: dict[str, Any],
     *,
     extra_pip: tuple[str, ...] = (),
+    pre_install: tuple[str, ...] = (),
 ) -> str:
-    """Render the Live Space Dockerfile that serves the bundle."""
+    """Render the Live Space Dockerfile that serves the bundle.
+
+    ``pre_install`` entries are raw ``pip install`` argument strings run before
+    the pinned install, for wheels that do not come from PyPI's default index,
+    such as CPU-only torch: ``"torch torchvision --index-url https://download.pytorch.org/whl/cpu"``.
+    """
 
     python_version = _python_version(manifest)
     packages = _manifest_packages(manifest)
     requirements = _requirements(packages, extra_pip)
     install = " \\\n    ".join(f'"{requirement}"' for requirement in requirements)
+    pre_install_lines = [f"RUN pip install {args.strip()}" for args in pre_install if args.strip()]
     return "\n".join(
         [
             f"FROM python:{python_version}-slim",
@@ -423,6 +436,7 @@ def render_dockerfile(
             f"WORKDIR {LIVE_APP_DIR}",
             "",
             "RUN pip install --upgrade pip",
+            *pre_install_lines,
             f"RUN pip install \\\n    {install}",
             "",
             "# The bundle is the unit of delivery: `hyperview serve --from` restores the",
@@ -483,6 +497,7 @@ def _publish_to_hf(
     title: str | None,
     emoji: str | None,
     extra_pip: tuple[str, ...],
+    pre_install: tuple[str, ...] = (),
     hardware: str | None,
     commit_message: str | None,
     token: str | None,
@@ -499,7 +514,7 @@ def _publish_to_hf(
     packages: dict[str, str] = {}
     if mode == "live":
         packages = _effective_packages(_manifest_packages(manifest), extra_pip)
-        generated["Dockerfile"] = render_dockerfile(manifest, extra_pip=extra_pip)
+        generated["Dockerfile"] = render_dockerfile(manifest, extra_pip=extra_pip, pre_install=pre_install)
 
     num_files, bundle_bytes = _bundle_stats(bundle_dir)
     space_sdk = "docker" if mode == "live" else "static"
@@ -658,6 +673,7 @@ def publish(
     title: str | None = None,
     emoji: str | None = None,
     extra_pip: tuple[str, ...] | list[str] = (),
+    pre_install: tuple[str, ...] | list[str] = (),
     hardware: str | None = None,
     commit_message: str | None = None,
     token: str | None = None,
@@ -676,6 +692,8 @@ def publish(
         title: Space title, overriding the one derived from the manifest.
         emoji: Space emoji, overriding the default.
         extra_pip: Additional ``pkg==version`` requirements for a Live Space.
+        pre_install: Raw ``pip install`` argument strings run before the pinned
+            install, for non-PyPI wheels such as CPU-only torch.
         hardware: Hugging Face hardware flavor to request, such as ``cpu-upgrade``.
         commit_message: Commit message for the Hugging Face upload.
         token: Hugging Face token; falls back to ``HF_TOKEN`` and the local login.
@@ -684,6 +702,7 @@ def publish(
     resolved_bundle, manifest = _load_bundle(bundle_dir)
     kind, destination = parse_target(to)
     extras = tuple(extra_pip or ())
+    pre = tuple(pre_install or ())
 
     if kind == "hf":
         return _publish_to_hf(
@@ -696,6 +715,7 @@ def publish(
             title=title,
             emoji=emoji,
             extra_pip=extras,
+            pre_install=pre,
             hardware=hardware,
             commit_message=commit_message,
             token=token,
