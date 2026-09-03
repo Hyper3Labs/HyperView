@@ -80,6 +80,7 @@ def _staged_api(recorder: dict) -> MagicMock:
     """An HfApi double that records the staged folder before it is torn down."""
 
     api = MagicMock()
+    api.repo_exists.return_value = False
 
     def _capture(**kwargs):
         folder = Path(kwargs["folder_path"])
@@ -525,3 +526,15 @@ def test_dockerfile_reads_producer_pins_and_runs_pre_install_first() -> None:
     assert pre < pinned
     assert '"hyper-models[ml]==0.3.1"' in dockerfile
     assert '"hyper-models==0.3.1"' not in dockerfile
+
+
+def test_publish_does_not_recreate_an_existing_space(bundle_dir) -> None:
+    from hyperview.publish import publish
+
+    api = MagicMock()
+    api.repo_exists.return_value = True
+    api.upload_folder.return_value = MagicMock(oid="deadbeef")
+    with patch("hyperview.publish._hf_api", return_value=api):
+        publish(bundle_dir, to="hf:acme/demo", mode="static")
+    api.create_repo.assert_not_called()
+    api.upload_folder.assert_called_once()

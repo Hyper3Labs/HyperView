@@ -565,13 +565,17 @@ def _publish_to_hf(
             return PublishResult(plan=plan, dry_run=True, url=url)
 
         api = _hf_api(token)
-        api.create_repo(
-            repo_id=repo_id,
-            repo_type="space",
-            space_sdk=space_sdk,
-            private=private,
-            exist_ok=True,
-        )
+        # Creating is a plan-gated operation on Hugging Face (Docker Spaces under
+        # a free organization answer 402 even with exist_ok), so only create
+        # when the Space really is missing; an existing Space just gets a commit.
+        if not api.repo_exists(repo_id=repo_id, repo_type="space"):
+            api.create_repo(
+                repo_id=repo_id,
+                repo_type="space",
+                space_sdk=space_sdk,
+                private=private,
+                exist_ok=True,
+            )
         if hardware:
             api.request_space_hardware(repo_id=repo_id, hardware=hardware)
         api.upload_folder(
