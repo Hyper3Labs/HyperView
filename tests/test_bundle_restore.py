@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -19,7 +20,11 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from hyperview.bundle_restore import restore_bundle
+from hyperview.bundle_restore import (
+    restore_bundle,
+    restored_extensions_dir,
+    restored_media_dir,
+)
 from hyperview.core.dataset import Dataset
 from hyperview.core.sample import Sample
 from hyperview.extensions import resolve_shipped_extension
@@ -200,9 +205,12 @@ def test_restore_reproduces_the_exported_workspace(
     assert restored["sample-2"].label == "dog"
     assert restored["sample-3"].text == "a photo of a dog number 3"
     assert restored["sample-1"].metadata == {"index": 1, "split": "train"}
-    # Media resolves against the bundle's own copy rather than a second one.
+    # Media resolves against the restored dataset's own copy, never the bundle.
     assert Path(restored["sample-0"].filepath).is_file()
-    assert Path(restored["sample-0"].filepath).is_relative_to(out_dir)
+    assert not Path(restored["sample-0"].filepath).is_relative_to(out_dir)
+    assert Path(restored["sample-0"].filepath).is_relative_to(restored_media_dir(DATASET_NAME))
+    assert result.num_media_copied == len(sample_ids)
+    assert result.num_media_reused == 0
 
     assert [space.space_key for space in dataset.list_spaces()] == [SPACE_KEY]
     space = dataset.list_spaces()[0]
@@ -245,8 +253,10 @@ def test_restore_reproduces_the_exported_workspace(
         assert panel.props == exported["props"]
         assert panel.layout_dict() == exported["layout"]
         # The export strips the exporting host's module path; the restored
-        # panel points at the extension folder inside this bundle.
-        assert Path(panel.resolved_module_file()).is_relative_to(out_dir)
+        # panel points at the copy of the extension folder the dataset owns.
+        module_file = Path(panel.resolved_module_file())
+        assert not module_file.is_relative_to(out_dir)
+        assert module_file.is_relative_to(restored_extensions_dir(DATASET_NAME))
 
     exported_states = snapshot["workspace"]["ui"]["panels"]
     restored_states = {
@@ -291,11 +301,158 @@ def test_restoring_twice_into_the_same_datasets_dir_reuses_the_dataset(
     repaired = dataset[sample_ids[0]]
     assert repaired.label == "cat"
     assert repaired.media_type == "image/png"
-    assert Path(repaired.filepath).is_relative_to(out_dir)
+    assert Path(repaired.filepath).is_relative_to(restored_media_dir(DATASET_NAME))
+    # Only the row whose file had gone missing was re-pointed; the other three
+    # already had a readable file of their own and were left alone.
+    assert second.num_media_copied == 1
+    assert second.num_media_reused == len(sample_ids) - 1
 
     workspace = second_runtime.get_workspace(WORKSPACE_ID)
     assert workspace.ui.active_layout_key == layout_key
     assert second_runtime.get_panel_state(WORKSPACE_ID, PANEL_ID)["state"]["notes"] == PANEL_NOTES
+
+
+def test_restore_beside_the_source_dataset_keeps_the_source_media(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reported corruption: serving a bundle where the source dataset lives.
+
+    `hyperview serve --from` on the machine that exported the bundle reuses the
+    dataset of the same name. Re-pointing its samples at the bundle's own media
+    copies would make the source dataset depend on a folder the next export
+    clears, so a sample whose file is readable and outside the bundle keeps it.
+    """
+
+    datasets_dir = tmp_path / "source-home" / "datasets"
+    datasets_dir.mkdir(parents=True)
+    monkeypatch.setenv("HYPERVIEW_DATASETS_DIR", str(datasets_dir))
+    monkeypatch.setenv("HYPERVIEW_MEDIA_DIR", str(tmp_path / "source-home" / "media"))
+
+    runtime, sample_ids, _layout_key = _source_runtime(tmp_path, persist=True)
+    out_dir = tmp_path / "bundle"
+    export_runtime_workspace(runtime, WORKSPACE_ID, out_dir)
+    source_paths = {sample.id: sample.filepath for sample in Dataset(DATASET_NAME).samples}
+
+    restored_runtime, result = restore_bundle(out_dir)
+
+    assert result.reused_dataset is True
+    assert result.num_media_reused == len(sample_ids)
+    assert result.num_media_copied == 0
+    dataset = restored_runtime.get_dataset(WORKSPACE_ID)
+    assert {sample.id: sample.filepath for sample in dataset.samples} == source_paths
+
+    # The bundle is now disposable: deleting it leaves the dataset intact.
+    shutil.rmtree(out_dir)
+    for sample in Dataset(DATASET_NAME).samples:
+        assert Path(sample.filepath).is_file()
+
+
+def test_restore_into_a_fresh_dir_copies_media_and_extensions_out_of_the_bundle(
+    tmp_path: Path, fresh_datasets_dir: Path
+) -> None:
+    out_dir, _snapshot, sample_ids, _layout_key = _export(tmp_path)
+
+    runtime, result = restore_bundle(out_dir)
+
+    assert result.link_media is False
+    assert result.num_media_copied == len(sample_ids)
+    assert result.num_media_linked == 0
+    assert result.num_media_reused == 0
+    assert result.media_dir == restored_media_dir(DATASET_NAME)
+
+    dataset = runtime.get_dataset(WORKSPACE_ID)
+    for sample in dataset.samples:
+        assert not Path(sample.filepath).is_relative_to(out_dir)
+    installation = next(iter(runtime.list_extensions()))
+    assert not installation.manifest.folder.is_relative_to(out_dir)
+    assert installation.manifest.folder.is_relative_to(restored_extensions_dir(DATASET_NAME))
+
+    # Nothing the Space serves may depend on the bundle folder surviving.
+    shutil.rmtree(out_dir)
+    client = TestClient(create_app(runtime=runtime, api_token="secret-token"))
+    media_response = client.get(f"/api/samples/{sample_ids[0]}/content")
+    assert media_response.status_code == 200
+    assert media_response.content.startswith(b"\x89PNG")
+    assert Path(
+        next(
+            panel.resolved_module_file()
+            for panel in runtime.get_workspace(WORKSPACE_ID).ui.custom_panels
+        )
+    ).is_file()
+
+
+def test_restore_refreshes_the_copy_it_owns_when_the_bundle_media_changed(
+    tmp_path: Path, fresh_datasets_dir: Path
+) -> None:
+    """Owning the media must not mean serving a stale copy of it.
+
+    Re-exporting a bundle and restarting the Space against the same datasets
+    directory has to bring the new bytes across. Only the dataset's own copy is
+    ever rewritten; a file that lives anywhere else is left alone.
+    """
+
+    out_dir, _snapshot, sample_ids, _layout_key = _export(tmp_path)
+    runtime, _first = restore_bundle(out_dir)
+    owned_copy = Path(runtime.get_dataset(WORKSPACE_ID)[sample_ids[0]].filepath)
+
+    bundle_media = out_dir / "api" / "samples" / sample_ids[0] / "content"
+    Image.new("RGB", (40, 40), (255, 0, 0)).save(bundle_media, format="PNG")
+
+    second_runtime, second = restore_bundle(out_dir)
+
+    # The path is unchanged -- nothing was re-pointed -- but the bytes are new.
+    assert Path(second_runtime.get_dataset(WORKSPACE_ID)[sample_ids[0]].filepath) == owned_copy
+    assert second.num_media_reused == len(sample_ids)
+    assert second.num_media_copied == 0
+    assert owned_copy.read_bytes() == bundle_media.read_bytes()
+
+
+def test_link_media_points_at_the_bundle_and_a_later_restore_takes_ownership(
+    tmp_path: Path, fresh_datasets_dir: Path
+) -> None:
+    out_dir, _snapshot, sample_ids, _layout_key = _export(tmp_path)
+
+    runtime, result = restore_bundle(out_dir, link_media=True)
+
+    assert result.link_media is True
+    assert result.media_dir is None
+    assert result.num_media_linked == len(sample_ids)
+    assert result.num_media_copied == 0
+    dataset = runtime.get_dataset(WORKSPACE_ID)
+    for sample in dataset.samples:
+        assert Path(sample.filepath).is_relative_to(out_dir)
+    assert next(iter(runtime.list_extensions())).manifest.folder.is_relative_to(out_dir)
+
+    # Restoring the same bundle again without the flag has to take the rows
+    # back off the bundle: a path inside it is not a file worth keeping.
+    second_runtime, second = restore_bundle(out_dir)
+
+    assert second.num_media_copied == len(sample_ids)
+    assert second.num_media_reused == 0
+    for sample in second_runtime.get_dataset(WORKSPACE_ID).samples:
+        assert not Path(sample.filepath).is_relative_to(out_dir)
+
+
+def test_export_refuses_to_clear_the_bundle_it_reads_media_from(
+    tmp_path: Path, fresh_datasets_dir: Path
+) -> None:
+    """The second half of the reported corruption.
+
+    A workspace restored with `--link-media` reads its media out of the bundle.
+    Exporting it back over that same folder would clear the files it is about
+    to copy, so the export refuses before anything is removed.
+    """
+
+    out_dir, _snapshot, sample_ids, _layout_key = _export(tmp_path)
+    runtime, _result = restore_bundle(out_dir, link_media=True)
+    before = sorted(path.name for path in out_dir.iterdir())
+
+    with pytest.raises(RuntimeError, match="own output directory"):
+        export_runtime_workspace(runtime, WORKSPACE_ID, out_dir)
+
+    assert sorted(path.name for path in out_dir.iterdir()) == before
+    assert (out_dir / "api" / "samples" / sample_ids[0] / "content").is_file()
+    assert (out_dir / "extensions" / "reference" / "extension.toml").is_file()
 
 
 def test_restored_runtime_serves_the_workspace_over_http(

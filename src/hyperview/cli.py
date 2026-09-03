@@ -8,7 +8,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
@@ -22,6 +22,9 @@ from hyperview.runtime import HyperViewRuntime, ProviderRegistry, WorkspaceRegis
 from hyperview.server.security import is_local_host, read_server_info
 from hyperview.static_export import DEFAULT_SIMILARITY_EXPORT_K, export_workspace
 from hyperview.storage.schema import parse_layout_dimension
+
+if TYPE_CHECKING:
+    from hyperview.bundle_restore import BundleRestoreResult
 
 
 def _read_json_response(response: Any) -> Any:
@@ -283,6 +286,17 @@ def _build_control_parser() -> argparse.ArgumentParser:
         help=(
             "Workspace id to restore a --from bundle under. "
             "Defaults to the id the bundle was exported from."
+        ),
+    )
+    serve_parser.add_argument(
+        "--link-media",
+        dest="link_media",
+        action="store_true",
+        help=(
+            "Point the restored dataset at the bundle's own media and extension "
+            "folders instead of copying them into HYPERVIEW_DATASETS_DIR. Applies "
+            "only together with --from, and only when this process owns the bundle "
+            "for its whole life, such as a container image that carries it."
         ),
     )
     serve_parser.add_argument(
@@ -784,6 +798,21 @@ def _build_control_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _media_placement_line(result: BundleRestoreResult) -> str:
+    """Say where the restored dataset's media ended up, and what was left alone."""
+
+    if result.link_media:
+        return (
+            f"Media: {result.num_media_linked} samples point at the bundle "
+            f"({result.bundle_dir}); {result.num_media_reused} kept the file they "
+            "already had (--link-media)."
+        )
+    return (
+        f"Media: {result.num_media_copied} samples restored into {result.media_dir}; "
+        f"{result.num_media_reused} kept the file they already had."
+    )
+
+
 def _serve_bundle(args: argparse.Namespace) -> None:
     """Restore a bundle and serve it as a Live Space."""
 
@@ -792,9 +821,11 @@ def _serve_bundle(args: argparse.Namespace) -> None:
     runtime, result = restore_bundle(
         args.from_bundle,
         workspace_id=args.workspace_id or args.workspace,
+        link_media=getattr(args, "link_media", False),
     )
     for warning in result.warnings:
         print(f"Warning: {warning}", file=sys.stderr)
+    print(_media_placement_line(result))
 
     dataset_obj = runtime.get_dataset(result.workspace_id)
     session = Session(runtime, args.host, args.port, dataset_obj)
@@ -824,6 +855,9 @@ def _run_server_command(args: argparse.Namespace) -> None:
 
     if getattr(args, "workspace_id", None):
         raise SystemExit("--workspace-id only applies together with --from")
+
+    if getattr(args, "link_media", False):
+        raise SystemExit("--link-media only applies together with --from")
 
     runtime = HyperViewRuntime()
     workspace_id = args.workspace or runtime.workspace_registry.active_workspace_id or "default"

@@ -172,21 +172,48 @@ hyperview serve --from dist/research --no-browser
 ```
 
 Restore recreates the dataset in the current `HYPERVIEW_DATASETS_DIR` under the
-name the bundle records, points sample media at the bundle's own copies,
-recreates every embedding space and layout under the ids and keys the export
-used, recreates the collections the view references, installs each extension
-the bundle carries, and applies the exported workspace snapshot. The server
-opens on exactly the exported view.
+name the bundle records, recreates every embedding space and layout under the
+ids and keys the export used, recreates the collections the view references,
+installs each extension the bundle carries, and applies the exported workspace
+snapshot. The server opens on exactly the exported view.
+
+A restored dataset owns its files. Sample media is copied out of the bundle
+into the restored dataset's own directory — `<HYPERVIEW_MEDIA_DIR>/restored/<dataset>/`
+when that variable is set, and `<HYPERVIEW_DATASETS_DIR>/<dataset>/media/`
+otherwise — and each extension folder is copied to
+`<HYPERVIEW_DATASETS_DIR>/<dataset>/extensions/<name>/`. The bundle is then
+disposable: deleting it, moving it, or re-exporting over it cannot break the
+Space.
+
+`--link-media` opts out of both copies and points the dataset at the bundle in
+place. It is for a process that owns the bundle for its whole life — the Live
+Space image `hyperview publish --mode live` generates copies the bundle into
+the image and passes the flag, so the container keeps one copy of the media
+instead of two. Do not use it on a workstation, where the bundle can be moved,
+deleted, or exported over.
 
 Restore is idempotent. A container that restarts against the same datasets
 directory reuses the dataset it finds rather than re-ingesting, and
 re-registering vectors and coordinates is an upsert.
+
+Reuse never overwrites a good file. Restoring a bundle on the machine that
+exported it finds the source dataset under the same name: a sample whose
+current file exists outside the bundle keeps it, and only a sample whose file
+is missing or already points inside the bundle is re-pointed at the restored
+copy. Restore prints how many files it copied and how many samples kept the
+file they already had.
+
+For the same reason an export refuses, before it clears anything, when any
+sample media, extension folder, or panel module it is about to copy resolves
+inside the output directory — the case where a `--link-media` Space is exported
+back over the bundle it is reading.
 
 Add `--public` for a Space with no session token — the flag spelling of
 `HYPERVIEW_NO_AUTH=1`, which still works:
 
 ```bash
 hyperview serve --from dist/research --public --host 0.0.0.0 --port 7860 --no-browser
+hyperview serve --from dist/research --public --link-media --no-browser
 ```
 
 Public is not open. Anonymous visitors keep the viewer commands; anything that

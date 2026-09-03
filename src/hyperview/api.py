@@ -961,19 +961,25 @@ def restore_workspace(
     runtime: HyperViewRuntime | None = None,
     *,
     workspace_id: str | None = None,
+    link_media: bool = False,
 ) -> str:
     """Load an exported bundle into a runtime and return its workspace id.
 
     A bundle written by ``hyperview export`` hosts two ways: as a **Static
     Space** (files on a static host) or, after this call, as a **Live Space**
     backed by a real runtime. The dataset lands in the current
-    ``HYPERVIEW_DATASETS_DIR``; restoring the same bundle again reuses it.
+    ``HYPERVIEW_DATASETS_DIR`` and owns its own copy of the bundle's media and
+    extension folders; restoring the same bundle again reuses it, and a sample
+    that already has a readable file outside the bundle keeps it.
 
     Args:
         bundle: Path to a folder written by ``hyperview export``.
         runtime: Runtime to restore into. A new one is created when omitted.
         workspace_id: Workspace id to restore under. Defaults to the id the
             bundle was exported from.
+        link_media: Point the restored dataset at the bundle's own media and
+            extension folders instead of copying them. The dataset then depends
+            on the bundle staying where it is.
 
     Returns:
         The workspace id the bundle was restored under.
@@ -983,7 +989,12 @@ def restore_workspace(
         >>> workspace_id = hv.restore_workspace("dist/research")
     """
 
-    _runtime, result = restore_bundle(bundle, runtime=runtime, workspace_id=workspace_id)
+    _runtime, result = restore_bundle(
+        bundle,
+        runtime=runtime,
+        workspace_id=workspace_id,
+        link_media=link_media,
+    )
     return result.workspace_id
 
 
@@ -999,6 +1010,7 @@ def launch(
     block: bool = True,
     workspace_id: str = "default",
     from_bundle: str | Path | None = None,
+    link_media: bool = False,
     extensions: Iterable[str | os.PathLike[str]] | None = None,
 ) -> Session:
     """Launch the HyperView visualization server.
@@ -1030,6 +1042,10 @@ def launch(
         from_bundle: Path to a folder written by ``hyperview export``. Restores
             it as a Live Space -- dataset, embedding spaces, layouts,
             collections, extensions, and the exported view -- and serves it.
+        link_media: With ``from_bundle``, point the restored dataset at the
+            bundle's own media and extension folders instead of copying them
+            into the datasets directory. The dataset then depends on the bundle
+            staying exactly where it is.
         extensions: Extensions to register before anything else runs against
             the new runtime. Each entry is either a path to an extension folder
             or the name of an extension shipped with HyperView. A view can only
@@ -1073,6 +1089,7 @@ def launch(
             height=height,
             block=block,
             workspace_id=workspace_id,
+            link_media=link_media,
         )
 
     if dataset is None:
@@ -1215,6 +1232,7 @@ def _launch_from_bundle(
     height: int,
     block: bool,
     workspace_id: str,
+    link_media: bool = False,
 ) -> Session:
     """Restore a bundle and serve it as a Live Space."""
 
@@ -1236,6 +1254,7 @@ def _launch_from_bundle(
     runtime, result = restore_bundle(
         bundle,
         workspace_id=workspace_id if workspace_id != "default" else None,
+        link_media=link_media,
     )
     for warning in result.warnings:
         print(f"Warning: {warning}")
@@ -1249,6 +1268,16 @@ def _launch_from_bundle(
         f"({result.num_samples} samples, {result.num_layouts} layouts, "
         f"{result.num_extensions} extensions)"
     )
+    if result.link_media:
+        print(
+            f"   Media: {result.num_media_linked} samples point at the bundle, "
+            f"{result.num_media_reused} kept the file they already had."
+        )
+    else:
+        print(
+            f"   Media: {result.num_media_copied} samples restored into "
+            f"{result.media_dir}, {result.num_media_reused} kept the file they already had."
+        )
     if notebook:
         if _is_colab():
             print(f"HyperView is running (Colab, port={session.port}).")

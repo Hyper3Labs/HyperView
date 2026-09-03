@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+- Stop a Live Space restore from leaving a dataset that depends on the bundle
+  folder. Sample media and extension folders are copied into the restored
+  dataset's own directory under `HYPERVIEW_DATASETS_DIR` (media goes to
+  `HYPERVIEW_MEDIA_DIR` when set), so deleting, moving, or re-exporting over
+  the bundle no longer breaks the Space. Restoring on the machine that exported
+  the bundle now keeps every sample file that already exists outside it, and
+  re-points only missing files or paths inside the bundle.
+- Add `hyperview serve --from <bundle> --link-media` and
+  `restore_bundle(..., link_media=True)` for a process that owns the bundle for
+  its whole life. The generated Live Space Dockerfile passes it, because the
+  image carries the bundle.
+- Refuse an export whose sample media, extension folders, or panel modules
+  resolve inside its own `--out` directory, before the existing bundle is
+  cleared, instead of writing a bundle with missing media.
+
 ## 1.1.0 - 2026-09-03
 
 One workspace, two Spaces. `hyperview export` writes a bundle, and that folder

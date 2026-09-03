@@ -245,6 +245,10 @@ def test_dockerfile_pins_the_manifest_versions_and_serves_the_bundle(manifest: d
     assert "http://localhost:7860/api/runtime" in dockerfile
     assert '"hyperview", "serve"' in dockerfile
     assert '"--from", "/home/user/app/bundle"' in dockerfile
+    # The image owns the bundle for the life of the container, so restore points
+    # at its media instead of copying it into the datasets dir a second time.
+    assert '"--link-media"' in dockerfile
+    assert "points at the bundle's own media instead of copying it" in dockerfile
     assert '"--host", "0.0.0.0"' in dockerfile
     assert '"--port", "7860"' in dockerfile
     assert '"--public"' in dockerfile
