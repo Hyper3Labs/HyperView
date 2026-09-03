@@ -1,6 +1,8 @@
 # One workspace, two Spaces: architecture plan (September 2026)
 
-Status: decision record. Supersedes the naming and mode sections of
+Status: decision record. Phases 0-3, 6 (component kit, panel-aware
+collection commands) and 9 shipped in 1.1.0 on 2026-09-03; phases 4, 5, 7 and
+8 remain open (see "Status" at the end). Supersedes the naming and mode sections of
 `panel-extension-refactor-2026-07.md`; that file is now history.
 
 ## Decisions
@@ -184,3 +186,20 @@ hyperview publish dist/<slug> --to hf:hyper3labs/<name>-live --mode live
 ```
 
 No Dockerfile, no README frontmatter, no registry edit, no mount script.
+
+## Status (2026-09-03)
+
+Shipped in 1.1.0: `hyperview serve --from`, `hyperview publish`, the
+Live Space / Static Space naming, `hv.ui.Panel` and typed panel props,
+`create_collection` and `find_layout`, `launch(extensions=)`, the panel SDK
+component kit, panel-aware collection commands, the machine-readable SDK
+surface, and the six bug fixes above. All nine demos use the new API; the six
+Static Spaces on the landing site are 1.1.0 exports; DeepFashion and ABO
+deploy as Live Spaces from those same bundles through the existing
+Trusted-Publisher workflows (`deploy_mode: live-bundle`).
+
+Still open: D4 vocabulary (delete `kind`, `PanelInstance`), D5 routing `core`
+through the extension path and opening extension panels from the UI, D6 one
+capability table, D7 `demo.toml` (deprioritised: demos are intentionally
+free-form). A restore data-safety fix (media copied out of the bundle, export
+refusing to read from its own output) is in progress for 1.1.1.
