@@ -1,8 +1,17 @@
 # Changelog
 
-## Unreleased
+## 1.1.1 - 2026-09-03
+
+### Features
+- `hyperview publish --mode live` reads the model package pin from the bundle's
+  `producer` section, lets `--extra-pip` override a recorded pin by name, and
+  gains `--pre-install` for wheels outside PyPI's default index such as
+  CPU-only torch.
 
 ### Fixes
+- Only create a Hugging Face Space when it is missing. Creating is
+  plan-gated (Docker Spaces under a free organization answer 402 even with
+  `exist_ok`), while committing to an existing Space is not.
 - Stop a Live Space restore from leaving a dataset that depends on the bundle
   folder. Sample media and extension folders are copied into the restored
   dataset's own directory under `HYPERVIEW_DATASETS_DIR` (media goes to
