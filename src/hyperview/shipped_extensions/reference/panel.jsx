@@ -3,8 +3,23 @@ if (!sdk || sdk.version !== "2") {
   throw new Error("HyperViewPanelSDK v2 is not available on window.");
 }
 
-const { React, components, hooks } = sdk;
-const { Panel, PanelHeader, PanelToolbar, PanelToolbarButton } = components;
+const { React, components = {}, hooks = {} } = sdk;
+const {
+  Panel = ({ children, className = "" }) => (
+    <div className={`flex flex-col h-full bg-card overflow-hidden ${className}`.trim()} style={{ height: "100%" }}>
+      {children}
+    </div>
+  ),
+  PanelHeader = ({ title }) => (
+    <div className="border-b px-3 py-2 text-sm font-medium">{title}</div>
+  ),
+  PanelToolbar = ({ items, actions }) => (
+    <div className="flex items-center justify-between border-b px-3 py-1.5 text-xs">{actions}</div>
+  ),
+  PanelToolbarButton = ({ children, ...rest }) => (
+    <button type="button" className="rounded px-2 py-1 text-xs border" {...rest}>{children}</button>
+  ),
+} = components;
 const { useCollection, usePanelState, useSelection, useSupportsTools, useTool } = hooks;
 
 export default function ReferencePanel({ panelId, props }) {
