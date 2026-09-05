@@ -418,7 +418,8 @@ def test_runtime_control_api_supports_checkpoint_jobs_panels_and_ui_state(
         if panel["id"] == "experiment-b-scatter"
     )
 
-    assert histogram_panel["kind"] == "module"
+    assert "kind" not in histogram_panel
+    assert histogram_panel["renderer"] == "module:panel.js"
     assert histogram_panel["data"]["module_src"].startswith(
         "/api/panels/content/default/label-histogram/panel.js"
     )
@@ -446,7 +447,8 @@ def test_runtime_control_api_supports_checkpoint_jobs_panels_and_ui_state(
         },
     }
     assert text_panel["data"]["module_src"].startswith("/api/panels/content/default/notes/panel.js")
-    assert scatter_panel["kind"] == "builtin"
+    assert "kind" not in scatter_panel
+    assert scatter_panel["renderer"] == "native:scatter"
     assert scatter_panel["layout_key"] == target_layout
     assert scatter_panel["geometry"] == "euclidean"
     assert scatter_panel["layout_dimension"] == 2
@@ -541,7 +543,6 @@ def test_runtime_snapshot_panel_contract_includes_state_and_layout(tmp_path: Pat
     runtime.add_runtime_panel(
         workspace_id,
         panel_id="samples",
-        kind="builtin",
         builtin_panel="samples",
         position="right",
         width=360,
@@ -693,7 +694,6 @@ min_height = 180
     runtime.add_runtime_panel(
         "default",
         panel_id="summary-manual",
-        kind="extension",
         extension="readout",
         extension_panel="summary",
     )
@@ -736,7 +736,6 @@ def test_runtime_panel_builder_matches_public_ui_compilation(tmp_path: Path) -> 
             "default",
             panel_id="map",
             title="Map",
-            kind="scatter",
             layout_key=layout_key,
             position="center",
         ),
@@ -744,7 +743,6 @@ def test_runtime_panel_builder_matches_public_ui_compilation(tmp_path: Path) -> 
             "default",
             panel_id="samples",
             title=None,
-            kind="builtin",
             builtin_panel="samples",
             position="right",
             reference_panel_id="map",
@@ -754,7 +752,6 @@ def test_runtime_panel_builder_matches_public_ui_compilation(tmp_path: Path) -> 
             "default",
             panel_id="summary",
             title=None,
-            kind="extension",
             extension="readout-ext",
             extension_panel="summary",
             position="bottom",
@@ -810,7 +807,6 @@ def test_panel_add_command_requires_existing_layout(tmp_path: Path) -> None:
         args={
             "panel_id": "missing-layout",
             "title": "Missing Layout",
-            "kind": "scatter",
             "layout_key": "missing-layout",
         },
     )
@@ -1458,7 +1454,6 @@ def test_module_file_is_persisted_but_never_put_on_the_wire(tmp_path: Path) -> N
     runtime.add_runtime_panel(
         "default",
         panel_id="summary",
-        kind="extension",
         extension="readout-ext",
         extension_panel="summary",
         require_resolved_layout=False,
@@ -1506,7 +1501,6 @@ def test_registry_round_trip_restores_the_panel_module_file(tmp_path: Path) -> N
     runtime.add_runtime_panel(
         "default",
         panel_id="summary",
-        kind="extension",
         extension="readout-ext",
         extension_panel="summary",
         require_resolved_layout=False,
@@ -1522,5 +1516,5 @@ def test_registry_round_trip_restores_the_panel_module_file(tmp_path: Path) -> N
         spec for spec in restored.ui.custom_panels if spec.id == "summary"
     )
     assert restored_spec.module_file == str(panel_file.resolve())
-    assert restored_spec.kind == "module"
+    assert restored_spec.renders_module() is True
     assert restored_spec.renderer == "module:panel.js"

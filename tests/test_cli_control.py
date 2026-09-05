@@ -322,7 +322,6 @@ def test_cli_panel_add_posts_extension_panel_instance(
         "args": {
             "panel_id": "agent-panel",
             "title": None,
-            "kind": "extension",
             "builtin_panel": None,
             "extension": "agent-tools",
             "extension_panel": "agent-panel",
@@ -382,7 +381,6 @@ def test_cli_panel_add_posts_scatter_panel_layout_binding(monkeypatch, capsys) -
         "args": {
             "panel_id": "uncha-poincare",
             "title": "UNCHA",
-            "kind": "scatter",
             "builtin_panel": None,
             "extension": None,
             "extension_panel": None,
@@ -436,7 +434,6 @@ def test_cli_panel_add_posts_builtin_samples_panel(monkeypatch, capsys) -> None:
         "args": {
             "panel_id": "samples",
             "title": None,
-            "kind": "builtin",
             "builtin_panel": "samples",
             "extension": None,
             "extension_panel": None,

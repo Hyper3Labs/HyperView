@@ -45,7 +45,7 @@ import numpy as np
 from hyperview.core.dataset import Dataset
 from hyperview.core.sample import Sample
 from hyperview.extensions import EXTENSION_MANIFEST_NAME, resolve_panel_source
-from hyperview.runtime import HyperViewRuntime
+from hyperview.runtime import HyperViewRuntime, panel_payload_renders_module
 from hyperview.static_export import (
     RESTORE_SCHEMA_VERSION,
     SAMPLE_MEDIA_FILENAME,
@@ -535,8 +535,7 @@ def _repair_panel_module_file(
 
     if panel.get("module_file"):
         return None
-    kind = str(panel.get("kind") or "module")
-    if kind == "builtin":
+    if not panel_payload_renders_module(panel):
         return None
 
     panel_id = str(panel.get("id") or "?")

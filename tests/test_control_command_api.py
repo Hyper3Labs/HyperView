@@ -24,7 +24,6 @@ def _client_with_panel(tmp_path: Path) -> TestClient:
     runtime.add_runtime_panel(
         "default",
         panel_id="samples",
-        kind="builtin",
         builtin_panel="samples",
         position="right",
         width=320,
@@ -60,8 +59,11 @@ def test_control_commands_endpoint_lists_backend_panel_commands(tmp_path: Path) 
         "collection.selection.set",
     }.issubset(command_ids)
     commands = {command["id"]: command for command in response.json()["commands"]}
-    add_kind_schema = commands["workspace.panel.add"]["args_schema"]["properties"]["kind"]
-    assert "module" not in add_kind_schema["enum"]
+    add_args_schema = commands["workspace.panel.add"]["args_schema"]["properties"]
+    # `kind` is deleted from the panel contract but still accepted from older
+    # scripts, so it stays in the schema as an optional deprecated argument.
+    assert "module" not in str(add_args_schema["kind"])
+    assert add_args_schema["kind"].get("default") is None
     builtin_panel_schema = commands["workspace.panel.add"]["args_schema"]["properties"][
         "builtin_panel"
     ]

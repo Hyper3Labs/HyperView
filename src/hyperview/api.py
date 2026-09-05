@@ -559,7 +559,6 @@ class SessionUiController:
             args={
                 "panel_id": panel_id,
                 "title": title,
-                "kind": "scatter",
                 "layout_key": layout_key,
                 "position": position,
                 "reference_panel_id": reference_panel_id,

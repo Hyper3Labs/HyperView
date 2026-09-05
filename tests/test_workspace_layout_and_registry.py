@@ -9,8 +9,8 @@ from pathlib import Path
 from hyperview.control import CommandEnvelope, ControlService, create_default_command_registry
 from hyperview.extensions import load_core_panel_definitions
 from hyperview.runtime import (
-    CustomPanelSpec,
     HyperViewRuntime,
+    PanelInstance,
     ProviderRegistry,
     WorkspaceRegistry,
 )
@@ -119,7 +119,7 @@ def test_replacing_declared_view_invalidates_persisted_dockview_layout(
 
     runtime.replace_custom_panels(
         "default",
-        [CustomPanelSpec(id="samples", title="Samples", kind="builtin", builtin_panel="samples")],
+        [PanelInstance(id="samples", title="Samples", builtin_panel="samples")],
         has_explicit_view=True,
     )
 
@@ -130,7 +130,7 @@ def test_replacing_declared_view_invalidates_persisted_dockview_layout(
     runtime.set_workspace_layout("default", {"activeGroup": "stale-again"})
     runtime.replace_custom_panels(
         "default",
-        [CustomPanelSpec(id="samples", title="Samples", kind="builtin", builtin_panel="samples")],
+        [PanelInstance(id="samples", title="Samples", builtin_panel="samples")],
         has_explicit_view=True,
     )
 

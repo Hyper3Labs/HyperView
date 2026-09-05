@@ -196,14 +196,15 @@ def test_public_ui_view_can_place_builtin_samples_panel() -> None:
     workspace = runtime.get_workspace(workspace_id)
     panels = workspace.ui.custom_panels
     assert [panel.id for panel in panels] == ["map", "samples"]
-    assert panels[1].kind == "builtin"
+    assert panels[1].renders_native() is True
     assert panels[1].builtin_panel == "samples"
     assert panels[1].reference_panel_id == "map"
     assert panels[1].direction == "right"
 
     snapshot = runtime.snapshot(workspace_id)
     samples_panel = snapshot["workspace"]["ui"]["custom_panels"][1]
-    assert samples_panel["kind"] == "builtin"
+    assert "kind" not in samples_panel
+    assert samples_panel["renderer"] == "native:samples"
     assert samples_panel["builtin_panel"] == "samples"
     assert samples_panel["data"]["module_src"] is None
 

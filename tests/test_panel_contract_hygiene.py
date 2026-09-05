@@ -6,7 +6,12 @@ from pathlib import Path
 import pytest
 
 from hyperview.extensions import ExtensionManifest
-from hyperview.runtime import CustomPanelSpec, PanelStateEntry, WorkspaceUiState
+from hyperview.runtime import (
+    CustomPanelSpec,
+    PanelInstance,
+    PanelStateEntry,
+    WorkspaceUiState,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 PANEL_SDK_SOURCE = ROOT / "frontend" / "src" / "panel-sdk" / "index.tsx"
@@ -24,7 +29,7 @@ def test_v2_sdk_exposes_generic_similarity_hook_to_extensions() -> None:
 
 def test_custom_panel_snapshot_carries_state_only_in_panel_state_map() -> None:
     ui = WorkspaceUiState(
-        custom_panels=[CustomPanelSpec(id="summary", title="Summary")],
+        custom_panels=[PanelInstance(id="summary", title="Summary")],
         panels={
             "summary": PanelStateEntry(
                 state={"collapsed": True},
@@ -43,23 +48,79 @@ def test_custom_panel_snapshot_carries_state_only_in_panel_state_map() -> None:
     }
 
 
-def test_custom_panel_kind_is_normalized_and_unknown_values_fail_clearly() -> None:
-    scatter = CustomPanelSpec.from_dict({"id": "map", "title": "Map", "kind": "scatter"})
-    extension = CustomPanelSpec.from_dict(
+def test_legacy_panel_kind_is_folded_into_the_fields_it_implied() -> None:
+    """A payload written before D4 still loads, and `kind` does not come back.
+
+    `kind` was four disagreeing enums over one panel; it is deleted from the
+    spec and from everything the runtime writes. Persisted workspaces, exported
+    bundles and older `workspace.panel.add` scripts still carry it, so
+    `from_dict` reads it once -- for what it implied about the renderer, the
+    panel type and the provenance -- and then drops it.
+    """
+
+    scatter = PanelInstance.from_dict({"id": "map", "title": "Map", "kind": "scatter"})
+    builtin = PanelInstance.from_dict(
+        {"id": "samples", "title": "Samples", "kind": "builtin", "builtin_panel": "samples"}
+    )
+    extension = PanelInstance.from_dict(
         {"id": "summary", "title": "Summary", "kind": "extension"}
     )
 
-    assert scatter.kind == "builtin"
     assert scatter.builtin_panel == "scatter"
+    assert scatter.panel_type == "scatter"
     assert scatter.source == "shipped"
     assert scatter.renderer == "native:scatter"
-    assert extension.kind == "module"
+    assert scatter.renders_native() is True
+
+    assert builtin.renderer == "native:samples"
+    assert builtin.resolved_panel_type() == "samples"
+    assert builtin.resolved_source() == "shipped"
+    assert builtin.renders_native() is True
+
+    assert extension.renders_module() is True
+
+    assert not hasattr(scatter, "kind")
+    for spec in (scatter, builtin, extension):
+        assert "kind" not in spec.to_dict()
+        assert "kind" not in spec.to_storage_dict()
 
     with pytest.raises(
         ValueError,
-        match="Unsupported panel kind 'iframe'; expected 'builtin' or 'module'",
+        match=(
+            "Unsupported panel kind 'iframe'; expected one of: "
+            "builtin, extension, module, scatter"
+        ),
     ):
-        CustomPanelSpec.from_dict({"id": "legacy", "title": "Legacy", "kind": "iframe"})
+        PanelInstance.from_dict({"id": "legacy", "title": "Legacy", "kind": "iframe"})
+
+
+def test_panel_instance_is_the_name_and_custom_panel_spec_still_imports() -> None:
+    assert CustomPanelSpec is PanelInstance
+
+
+def test_a_fresh_workspace_panel_round_trips_through_storage_unchanged() -> None:
+    """`to_storage_dict` -> `from_dict` is a fixed point, with no `kind` in it."""
+
+    original = PanelInstance(
+        id="map",
+        title="Map",
+        panel_type="scatter",
+        builtin_panel="scatter",
+        layout_key="layout-a",
+        geometry="euclidean",
+        layout_dimension=2,
+        position="center",
+        props={"mode": "browse"},
+    )
+
+    stored = original.to_storage_dict()
+    assert "kind" not in stored
+
+    round_tripped = PanelInstance.from_dict(stored)
+
+    assert round_tripped == original
+    assert round_tripped.to_storage_dict() == stored
+    assert "kind" not in round_tripped.to_dict()
 
 
 def test_extension_panel_definitions_do_not_publish_lifecycle(tmp_path: Path) -> None:

@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from hyperview.runtime import SAMPLES_PANEL_STATE_ID, CustomPanelSpec, HyperViewRuntime
+from hyperview.runtime import SAMPLES_PANEL_STATE_ID, HyperViewRuntime, PanelInstance
 
 PanelPosition = Literal["center", "right", "bottom"]
 PanelDirection = Literal["right", "left", "above", "below", "within"]
@@ -480,13 +480,13 @@ def compile_view(
     *,
     runtime: HyperViewRuntime | None = None,
     workspace_id: str | None = None,
-) -> list[CustomPanelSpec]:
+) -> list[PanelInstance]:
     """Compile a public view object into runtime panel specs."""
 
     if runtime is not None:
         validate_panel_types(view, runtime)
 
-    specs: list[CustomPanelSpec] = []
+    specs: list[PanelInstance] = []
     for item in view.contents:
         specs.extend(
             _compile_item(
@@ -502,7 +502,7 @@ def compile_view(
     return specs
 
 
-def _validate_unique_panel_ids(panels: list[CustomPanelSpec]) -> None:
+def _validate_unique_panel_ids(panels: list[PanelInstance]) -> None:
     seen: set[str] = set()
     duplicates: list[str] = []
     for panel in panels:
@@ -525,7 +525,7 @@ def _compile_item(
     direction: PanelDirection | None,
     runtime: HyperViewRuntime | None,
     workspace_id: str | None,
-) -> list[CustomPanelSpec]:
+) -> list[PanelInstance]:
     if isinstance(item, Container):
         return _compile_container(
             item,
@@ -558,8 +558,8 @@ def _compile_container(
     direction: PanelDirection | None,
     runtime: HyperViewRuntime | None,
     workspace_id: str | None,
-) -> list[CustomPanelSpec]:
-    specs: list[CustomPanelSpec] = []
+) -> list[PanelInstance]:
+    specs: list[PanelInstance] = []
     previous_panel_id: str | None = None
     child_direction = _container_direction(container.kind)
 
@@ -616,7 +616,7 @@ def _panel_to_spec(
     position: PanelPosition | None,
     runtime: HyperViewRuntime | None,
     workspace_id: str | None,
-) -> CustomPanelSpec:
+) -> PanelInstance:
     layout_kwargs = panel.layout.to_runtime_kwargs() if panel.layout is not None else {}
 
     if runtime is not None:
@@ -629,7 +629,6 @@ def _panel_to_spec(
                 workspace_id or "",
                 panel_id=panel.id,
                 title=panel.title,
-                kind="extension",
                 extension=match.extension,
                 extension_panel=match.extension_panel,
                 position=position,
@@ -644,7 +643,6 @@ def _panel_to_spec(
                 workspace_id or "",
                 panel_id=panel.id,
                 title=panel.title or match.definition.title or match.definition.label,
-                kind="scatter",
                 layout_key=panel.layout_key,
                 position=position,
                 reference_panel_id=panel.reference_panel_id,
@@ -660,7 +658,6 @@ def _panel_to_spec(
             workspace_id or "",
             panel_id=panel.id,
             title=panel.title,
-            kind="builtin",
             builtin_panel=panel.panel_type,
             position=position,
             reference_panel_id=panel.reference_panel_id,
@@ -676,10 +673,10 @@ def _panel_to_spec(
             f"Panel type {panel.panel_type!r} requires a runtime to resolve its panel definition"
         )
 
-    return CustomPanelSpec(
+    return PanelInstance(
         id=panel.id,
         title=panel.title or panel.panel_type.title(),
-        kind="scatter" if panel.panel_type == SCATTER_PANEL_TYPE else "builtin",
+        panel_type=panel.panel_type,
         builtin_panel=panel.panel_type,
         position=position or "right",
         layout_key=panel.layout_key,

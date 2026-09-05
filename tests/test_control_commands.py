@@ -22,7 +22,6 @@ def _service_with_panel(tmp_path: Path) -> ControlService:
     runtime.add_runtime_panel(
         "default",
         panel_id="samples",
-        kind="builtin",
         builtin_panel="samples",
         position="right",
         width=320,
@@ -678,7 +677,6 @@ def _service_with_dataset_and_reference_panel(tmp_path: Path) -> ControlService:
         service.runtime.add_runtime_panel(
             "default",
             panel_id=panel_id,
-            kind="builtin",
             builtin_panel="samples",
             position="center",
         )
@@ -936,7 +934,7 @@ def test_view_menu_request_opens_an_installed_extension_panel(tmp_path: Path) ->
     assert added.workspace is not None
     panel = added.workspace["ui"]["custom_panels"][0]
     assert panel["id"] == "readout"
-    assert panel["kind"] == "module"
+    assert "kind" not in panel
     assert panel["renderer"] == "module:panel.js"
     assert panel["extension"] == "installed-ext"
 
@@ -969,13 +967,13 @@ def test_view_menu_request_opens_a_shipped_module_extension_panel(tmp_path: Path
     legacy = service.runtime.build_custom_panel(
         "default",
         panel_id="reference",
-        kind="builtin",
         builtin_panel=definition.panel_type,
         require_resolved_layout=False,
     )
-    # The old request shape resolved, but to a panel the native host cannot draw.
-    assert legacy.kind == "builtin"
+    # The built-in request shape still resolves, and the renderer -- not a
+    # separate `kind` that could disagree with it -- says which host draws it.
     assert legacy.renderer == "module:panel.jsx"
+    assert legacy.renders_module() is True
 
     added = service.run(
         CommandEnvelope(
@@ -993,7 +991,7 @@ def test_view_menu_request_opens_a_shipped_module_extension_panel(tmp_path: Path
     assert added.ok is True, added.error
     assert added.workspace is not None
     panel = added.workspace["ui"]["custom_panels"][0]
-    assert panel["kind"] == "module"
+    assert "kind" not in panel
     assert panel["renderer"] == "module:panel.jsx"
     assert panel["extension"] == "reference"
     # The module file stays server-side; the frontend loads it by panel id.

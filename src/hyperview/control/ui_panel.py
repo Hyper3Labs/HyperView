@@ -54,7 +54,10 @@ class PanelAddArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     panel_id: str
-    kind: Literal["extension", "scatter", "builtin"]
+    #: Deprecated. What a panel is is read off ``builtin_panel``,
+    #: ``extension``/``extension_panel`` and ``layout_key``; older scripts and
+    #: exported bundles still send this and it is accepted and ignored.
+    kind: Literal["extension", "scatter", "builtin"] | None = None
     title: str | None = None
     builtin_panel: str | None = None
     extension: str | None = None
@@ -373,6 +376,15 @@ def _space_key_deprecation_messages(args: BaseModel) -> tuple[str, ...]:
     return ("Deprecated argument 'space_key'; use 'index_id' instead.",)
 
 
+def _kind_deprecation_messages(args: PanelAddArgs) -> tuple[str, ...]:
+    if "kind" not in args.model_fields_set or args.kind is None:
+        return ()
+    return (
+        "Deprecated argument 'kind'; a panel is named by 'builtin_panel', "
+        "'extension'/'extension_panel' or 'layout_key'.",
+    )
+
+
 def _add_panel(
     runtime: HyperViewRuntime,
     target: BaseModel,
@@ -384,7 +396,6 @@ def _add_panel(
         workspace_target.workspace_id,
         panel_id=add_args.panel_id,
         title=add_args.title,
-        kind=add_args.kind,
         builtin_panel=add_args.builtin_panel,
         extension=add_args.extension,
         extension_panel=add_args.extension_panel,
@@ -404,7 +415,11 @@ def _add_panel(
         layout_dimension=add_args.layout_dimension,
         require_resolved_layout=add_args.require_resolved_layout,
     )
-    return _workspace_execution(workspace)
+    return CommandExecution(
+        workspace=workspace,
+        revision=workspace.ui.view_revision,
+        messages=_kind_deprecation_messages(add_args),
+    )
 
 
 def _update_panel(

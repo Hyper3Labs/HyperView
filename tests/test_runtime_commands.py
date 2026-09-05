@@ -325,24 +325,24 @@ def test_complete_workspace_view_reproduces_from_snapshot_via_public_commands(
     source_ui = source.runtime.snapshot("default")["workspace"]["ui"]
 
     for panel in source_ui["custom_panels"]:
-        if panel["kind"] == "module":
+        # The snapshot carries no `kind`; the renderer namespace says which
+        # request shape reopens the panel.
+        assert "kind" not in panel
+        if panel["renderer"].startswith("module:"):
             add_args = {
                 "panel_id": panel["id"],
-                "kind": "extension",
                 "extension": panel["extension"],
                 "extension_panel": panel["extension_panel"],
             }
         elif panel["panel_type"] == "scatter" and panel["layout_key"]:
             add_args = {
                 "panel_id": panel["id"],
-                "kind": "scatter",
                 "layout_key": panel["layout_key"],
                 "require_resolved_layout": False,
             }
         else:
             add_args = {
                 "panel_id": panel["id"],
-                "kind": "builtin",
                 "builtin_panel": panel["panel_type"],
             }
         add_args.update(

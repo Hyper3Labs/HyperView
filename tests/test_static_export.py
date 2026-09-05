@@ -112,6 +112,37 @@ def _add_text_search_space(dataset: Dataset, sample_ids: list[str]) -> str:
     return space_key
 
 
+def test_exported_runtime_snapshot_carries_no_panel_kind(tmp_path: Path) -> None:
+    """A bundle names panels by renderer, never by the deleted `kind` enum.
+
+    Bundles are the unit of delivery, so the snapshot is the wire format an
+    older reader would meet. `kind` is gone from it; `renderer` -- `native:*`
+    for a shipped panel, `module:*` for one an extension draws -- carries what
+    it used to say.
+    """
+
+    runtime = _make_runtime(tmp_path)
+    runtime.add_runtime_panel(
+        "demo",
+        panel_id="scatter",
+        title="Scatter",
+        builtin_panel="scatter",
+        position="center",
+    )
+    out_dir = tmp_path / "bundle"
+
+    export_runtime_workspace(runtime, "demo", out_dir)
+
+    snapshot = json.loads((out_dir / "api" / "runtime.json").read_text(encoding="utf-8"))
+    panels = {panel["id"]: panel for panel in snapshot["workspace"]["ui"]["custom_panels"]}
+
+    assert set(panels) >= {"scatter", "readout"}
+    for panel in panels.values():
+        assert "kind" not in panel
+    assert panels["scatter"]["renderer"] == "native:scatter"
+    assert panels["readout"]["renderer"].startswith("module:")
+
+
 def test_export_refuses_to_read_media_out_of_its_own_output_directory(tmp_path: Path) -> None:
     """An export must never clear the folder it is about to copy files from.
 

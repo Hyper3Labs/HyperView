@@ -628,8 +628,14 @@ def _build_control_parser() -> argparse.ArgumentParser:
     ui_panel_add.add_argument("--workspace", required=True)
     ui_panel_add.add_argument("--panel-id", required=True)
     ui_panel_add.add_argument("--title")
+    # Deprecated: what a panel is is read off --builtin-panel, --extension /
+    # --extension-panel and --layout-key. Still accepted so scripts written
+    # against the old flag keep running; hidden so new ones do not learn it.
     ui_panel_add.add_argument(
-        "--kind", choices=["auto", "extension", "scatter", "builtin"], default="auto"
+        "--kind",
+        choices=["auto", "extension", "scatter", "builtin"],
+        default="auto",
+        help=argparse.SUPPRESS,
     )
     ui_panel_add.add_argument("--builtin-panel")
     ui_panel_add.add_argument("--extension")
@@ -1434,12 +1440,16 @@ def _run_ui_command(args: argparse.Namespace) -> None:
         _print_output(_http_get_json(f"{base_url}/api/panel-definitions"), as_json=args.json)
         return
     if args.ui_command == "panel" and args.ui_panel_command == "add":
-        panel_kind = args.kind
-        if panel_kind == "auto":
-            if args.builtin_panel:
-                panel_kind = "builtin"
-            else:
-                panel_kind = "scatter" if args.layout_key else "extension"
+        # The runtime derives the same shape from these flags; resolving it
+        # here too only buys the caller a better error than a failed lookup.
+        if args.extension or args.extension_panel:
+            panel_kind = "extension"
+        elif args.builtin_panel:
+            panel_kind = "builtin"
+        elif args.layout_key:
+            panel_kind = "scatter"
+        else:
+            panel_kind = args.kind if args.kind != "auto" else "extension"
         if panel_kind == "builtin" and not args.builtin_panel:
             raise RuntimeError(
                 "Built-in panels require --builtin-panel. "
@@ -1461,7 +1471,6 @@ def _run_ui_command(args: argparse.Namespace) -> None:
             args={
                 "panel_id": args.panel_id,
                 "title": args.title,
-                "kind": panel_kind,
                 "builtin_panel": args.builtin_panel,
                 "extension": args.extension,
                 "extension_panel": args.extension_panel,

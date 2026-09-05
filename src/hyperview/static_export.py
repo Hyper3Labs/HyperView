@@ -29,7 +29,7 @@ from fastapi import HTTPException
 from hyperview._version import __version__
 from hyperview.core.dataset import Dataset
 from hyperview.extensions import EXTENSION_MANIFEST_NAME, ExtensionManifest
-from hyperview.runtime import CollectionState, CustomPanelSpec, HyperViewRuntime
+from hyperview.runtime import CollectionState, HyperViewRuntime, PanelInstance
 from hyperview.server.app import (
     DEFAULT_THUMBNAIL_SIZE,
     serialize_sample_for_response,
@@ -763,7 +763,7 @@ def _annotate_static_panels(
         reason = definition.get("static_reason")
         panel_id = str(panel.get("id") or "")
         runtime_panel = runtime_panels.get(panel_id)
-        if compatible and runtime_panel is not None and runtime_panel.kind == "module":
+        if compatible and runtime_panel is not None and runtime_panel.renders_module():
             module_file = runtime_panel.resolved_module_file()
             if module_file is None or not module_file.is_file():
                 compatible = False
@@ -773,7 +773,7 @@ def _annotate_static_panels(
         if isinstance(data, dict):
             data["static_compatible"] = compatible
             data["static_reason"] = reason
-            if compatible and runtime_panel is not None and runtime_panel.kind == "module":
+            if compatible and runtime_panel is not None and runtime_panel.renders_module():
                 module_file = runtime_panel.resolved_module_file()
                 if module_file is not None:
                     module_name = (
@@ -815,14 +815,14 @@ def _copy_panel_modules(
         if module_file is not None
     }
     for panel in workspace.ui.custom_panels:
-        if panel.kind != "module" or panel.id not in compatible_ids:
+        if not panel.renders_module() or panel.id not in compatible_ids:
             continue
         _copy_panel_module(out_dir, panel, workspace_id, excluded_modules)
 
 
 def _copy_panel_module(
     out_dir: Path,
-    panel: CustomPanelSpec,
+    panel: PanelInstance,
     workspace_id: str,
     excluded_modules: set[Path],
 ) -> None:
