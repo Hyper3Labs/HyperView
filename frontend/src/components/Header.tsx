@@ -47,7 +47,8 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
-import { isStaticBundle, setActiveWorkspace } from "@/lib/api";
+import { setActiveWorkspace } from "@/lib/api";
+import { useCapabilities } from "@/lib/useCapabilities";
 import { isLabelColorMapId } from "@/lib/labelColors";
 import {
   LABEL_COLOR_MAP_OPTIONS,
@@ -75,13 +76,16 @@ export function Header() {
     }))
   );
   const applyRuntimeSnapshot = useStore((state) => state.applyRuntimeSnapshot);
+  const capabilities = useCapabilities();
   const dockview = useDockviewApi();
   const panelConfig = useMemo(() => {
     return panelDefinitions.flatMap((definition) => {
       const layout = definition.default_layout;
       if (layout.position !== "center") return [];
       // A bundle that declares a definition unusable should not offer it.
-      if (isStaticBundle() && definition.static_compatible === false) return [];
+      if (!capabilities.server_runtime && definition.static_compatible === false) {
+        return [];
+      }
       const declaredId = layout.id;
       const id = typeof declaredId === "string" && declaredId ? declaredId : definition.panel_type;
       return [{
@@ -90,7 +94,7 @@ export function Header() {
         icon: getPanelIcon(definition.icon, definition.panel_type),
       }];
     });
-  }, [panelDefinitions]);
+  }, [capabilities.server_runtime, panelDefinitions]);
   const viewMenuPanelIds = useMemo(
     () => panelConfig.map((panel) => panel.id),
     [panelConfig]
@@ -132,7 +136,7 @@ export function Header() {
   };
 
   useEffect(() => {
-    if (isStaticBundle()) {
+    if (!capabilities.runtime_mutations) {
       setStaticBundle(true);
       setReadOnlyNotice("Static Space");
     }
@@ -145,7 +149,7 @@ export function Header() {
     };
     window.addEventListener("hyperview-readonly-notice", handleNotice);
     return () => window.removeEventListener("hyperview-readonly-notice", handleNotice);
-  }, []);
+  }, [capabilities.runtime_mutations]);
 
   return (
     <header className="h-7 min-h-[28px] bg-card border-b border-border flex items-center justify-between px-2">

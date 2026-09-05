@@ -4,7 +4,8 @@ import React, { useEffect, useMemo, useState, type ComponentType } from "react";
 import type { IDockviewPanelProps } from "dockview-react";
 import { AlertTriangle, Puzzle } from "lucide-react";
 
-import { backendUrl, isStaticBundle } from "@/lib/api";
+import { backendUrl } from "@/lib/api";
+import { useCapabilities } from "@/lib/useCapabilities";
 import { getNativePanelComponent } from "@/panels/registry";
 import { installHyperViewPanelSdkGlobal } from "@/panel-sdk";
 import { useStore } from "@/store/useStore";
@@ -222,11 +223,12 @@ export function PanelHost(props: IDockviewPanelProps<PanelHostParams>) {
     state.panelDefinitions.find((candidate) => candidate.panel_type === panelType) ?? null
   );
   const panelState = useStore((state) => state.panelStates[panelId]);
+  const capabilities = useCapabilities();
 
   if (!panel) {
     // A definition-backed panel has no runtime panel to carry the reason, so
     // the bundle's declaration on the definition is what gates it.
-    if (isStaticBundle() && definition?.static_compatible === false) {
+    if (!capabilities.server_runtime && definition?.static_compatible === false) {
       return (
         <PanelMessage
           title={definition.title || props.params?.definitionTitle || "Panel"}
@@ -255,7 +257,7 @@ export function PanelHost(props: IDockviewPanelProps<PanelHostParams>) {
     );
   }
 
-  if (isStaticBundle() && panel.data.static_compatible === false) {
+  if (!capabilities.server_runtime && panel.data.static_compatible === false) {
     return <StaticPanelUnavailable panel={panel} />;
   }
 

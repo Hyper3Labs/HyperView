@@ -29,11 +29,12 @@ import { Columns2 } from "lucide-react";
 
 import {
   addRuntimePanel,
+  getCapabilities,
   getRuntimeClientId,
-  isStaticBundle,
   removeRuntimePanel,
   runControlCommand,
 } from "@/lib/api";
+import { useCapabilities } from "@/lib/useCapabilities";
 import {
   CENTER_PANEL_TAB_COMPONENTS,
   getPanelTabComponent,
@@ -135,7 +136,7 @@ function definitionLayout(definition: RuntimePanelDefinition) {
 // no exported layouts, say). Keep those out of the default view instead of
 // docking a panel that can only report why it is empty.
 function isDefinitionAvailable(definition: RuntimePanelDefinition) {
-  return !isStaticBundle() || definition.static_compatible !== false;
+  return getCapabilities().server_runtime || definition.static_compatible !== false;
 }
 
 function defaultPanelId(definition: RuntimePanelDefinition) {
@@ -560,6 +561,7 @@ function getRuntimePanelHostParams(
 }
 
 function DockviewPanelActions(props: IDockviewHeaderActionsProps) {
+  const capabilities = useCapabilities();
   const activeWorkspaceId = useStore((state) => state.activeWorkspaceId);
   const customPanels = useStore((state) => state.customPanels);
   const applyRuntimeSnapshot = useStore((state) => state.applyRuntimeSnapshot);
@@ -617,7 +619,7 @@ function DockviewPanelActions(props: IDockviewHeaderActionsProps) {
   if (
     !activePanel ||
     NON_ANCHOR_PANEL_IDS.has(activePanel.id) ||
-    (isStaticBundle() && activePanel.id.startsWith(RUNTIME_PANEL_PREFIX))
+    (!capabilities.runtime_mutations && activePanel.id.startsWith(RUNTIME_PANEL_PREFIX))
   ) {
     return null;
   }
@@ -679,7 +681,7 @@ export function useDockviewApi() {
       const definition = panelDefinitions.find(
         (item) => defaultPanelId(item) === panelId
       );
-      if (!definition || isStaticBundle()) return;
+      if (!definition || !getCapabilities().runtime_mutations) return;
       void addRuntimePanel({
         workspaceId: activeWorkspaceId,
         panelId,
@@ -696,7 +698,7 @@ export function useDockviewApi() {
 
   const resetLayout = useCallback(() => {
     setWorkspaceLayoutLocal(null);
-    if (isStaticBundle() || !activeWorkspaceId) {
+    if (!getCapabilities().runtime_mutations || !activeWorkspaceId) {
       window.location.reload();
       return;
     }
@@ -985,7 +987,7 @@ export function DockviewWorkspace() {
     if (
       !api ||
       !workspaceHasSize ||
-      !isStaticBundle() ||
+      getCapabilities().runtime_mutations ||
       !activeWorkspaceId ||
       hasExplicitView ||
       panelDefinitions.length === 0 ||
@@ -1039,7 +1041,9 @@ export function DockviewWorkspace() {
       // sharing it between clients of different sizes makes them continually
       // overwrite one another. Direct manipulation remains local, while
       // semantic workspace.panel.* commands update the declared view.
-      if (isStaticBundle() || !activeWorkspaceId || hasExplicitView) return;
+      if (!getCapabilities().runtime_mutations || !activeWorkspaceId || hasExplicitView) {
+        return;
+      }
       layoutSaveTimer.current = setTimeout(() => {
         void runControlCommand({
           command: "workspace.layout.set",
@@ -1086,7 +1090,7 @@ export function DockviewWorkspace() {
       !activeWorkspaceId ||
       workspaceLayout ||
       hasExplicitView ||
-      isStaticBundle() ||
+      !getCapabilities().runtime_mutations ||
       panelDefinitions.length === 0 ||
       bootstrappingWorkspace.current === activeWorkspaceId
     ) return;
@@ -1194,7 +1198,7 @@ export function DockviewWorkspace() {
       api.getPanel(getDockPanelId(existingScatter))?.api.setActive();
       return;
     }
-    if (isStaticBundle() || !activeWorkspaceId) return;
+    if (!getCapabilities().runtime_mutations || !activeWorkspaceId) return;
 
     void addRuntimePanel({
       workspaceId: activeWorkspaceId,

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { fetchRuntimeState, getRuntimeEventsUrl, isStaticBundle } from "@/lib/api";
+import { fetchRuntimeState, getCapabilities, getRuntimeEventsUrl } from "@/lib/api";
 import { useStore } from "@/store/useStore";
 import type { RuntimeSnapshot } from "@/types";
 
@@ -56,7 +56,9 @@ export function useRuntimeSync(
 
     void bootstrap();
 
-    if (isStaticBundle()) {
+    // Only a host with a server behind it pushes runtime updates; a Static
+    // Space has the one snapshot the bundle shipped.
+    if (!getCapabilities().server_runtime) {
       return () => {
         cancelled = true;
       };
