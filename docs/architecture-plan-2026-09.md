@@ -258,6 +258,16 @@ Two operational facts that came out of the same debugging:
   initial state wins over a previous run; an unchanged view still leaves a
   visitor's navigation alone.
 
+### Released as 1.2.0 (2026-09-05)
+
+The two fixes above (`HYPERVIEW_HOME`, re-authored Samples collection), the D4
+`kind` deletion, and the D6 capability table ship together as 1.2.0. Minor
+bump, not patch: the placed-panel record on the wire loses `kind`, the export
+manifest gains `capabilities.commands`, a Live Space gains
+`GET /api/capabilities`, and `PanelInstance` is the public name of a placed
+panel. Every payload written by 1.1.x still loads. Precision Regions was
+re-exported on 1.2.0 and remounted on hyper3labs.github.io.
+
 ### D4 status (2026-09-05)
 
 `kind` is deleted. It is gone from the placed-panel record, from
