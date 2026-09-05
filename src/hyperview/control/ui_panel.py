@@ -283,8 +283,10 @@ def _workspace_target(target: BaseModel) -> WorkspaceTarget:
 def _collection_target(target: BaseModel) -> CollectionTarget:
     """Accept either target shape for the handlers a collection command shares.
 
-    ``collection.neighbors.create`` and ``panel.samples.retrieval.set-anchor``
-    run the same handler; only the first one carries a panel.
+    The panel-scoped commands declare :class:`CollectionTarget`; the older
+    workspace-scoped aliases that share their handlers
+    (``panel.samples.retrieval.set-text-query``, for instance) still send a
+    :class:`WorkspaceTarget`, which resolves to the default Samples panel.
     """
 
     if isinstance(target, CollectionTarget):
@@ -699,10 +701,14 @@ def _set_samples_text_retrieval(
     target: BaseModel,
     args: BaseModel,
 ) -> CommandExecution:
-    workspace_target = _workspace_target(target)
+    collection_target = _collection_target(target)
     retrieval_args = _samples_retrieval_set_text_args(args)
+    panel_id = runtime.resolve_collection_panel_id(
+        collection_target.workspace_id,
+        collection_target.panel_id,
+    )
     query = runtime.resolve_text_retrieval_query(
-        workspace_target.workspace_id,
+        collection_target.workspace_id,
         retrieval_args.query_text,
         layout_key=retrieval_args.layout_key,
         index_id=retrieval_args.index_id,
@@ -710,11 +716,15 @@ def _set_samples_text_retrieval(
         k=retrieval_args.k,
         source=retrieval_args.source,
     )
-    workspace = runtime.set_samples_retrieval(workspace_target.workspace_id, query)
+    workspace = runtime.set_samples_retrieval(
+        collection_target.workspace_id,
+        query,
+        panel_id=panel_id,
+    )
     return CommandExecution(
         workspace=workspace,
-        result=_samples_panel_collection_result(workspace, SAMPLES_PANEL_STATE_ID),
-        revision=_panel_state_revision(workspace, SAMPLES_PANEL_STATE_ID),
+        result=_samples_panel_collection_result(workspace, panel_id),
+        revision=_panel_state_revision(workspace, panel_id),
         messages=_space_key_deprecation_messages(retrieval_args),
     )
 
@@ -890,8 +900,11 @@ def create_default_command_registry() -> CommandRegistry:
         CommandSpec(
             id="panel.samples.retrieval.set-anchor",
             owner="backend",
-            summary="Set Samples panel retrieval anchor state.",
-            target_model=WorkspaceTarget,
+            summary=(
+                "Set retrieval anchor state on the Samples panel, "
+                "or on the panel named by the target."
+            ),
+            target_model=CollectionTarget,
             args_model=SamplesRetrievalSetArgs,
             handler=_set_samples_retrieval_anchor,
         ),
@@ -933,8 +946,11 @@ def create_default_command_registry() -> CommandRegistry:
         CommandSpec(
             id="collection.search.create",
             owner="backend",
-            summary="Create a text-search collection for the Samples panel.",
-            target_model=WorkspaceTarget,
+            summary=(
+                "Create a text-search collection for the Samples panel, "
+                "or for the panel named by the target."
+            ),
+            target_model=CollectionTarget,
             args_model=SamplesRetrievalSetTextArgs,
             handler=_set_samples_text_retrieval,
         ),
