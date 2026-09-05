@@ -5,6 +5,7 @@ import os
 
 from fastapi.testclient import TestClient
 
+from hyperview.capabilities import viewer_commands
 from hyperview.cli import _http_headers
 from hyperview.runtime import HyperViewRuntime
 from hyperview.server.app import create_app
@@ -259,3 +260,21 @@ def test_public_command_allowlist_covers_viewer_actions() -> None:
         "workspace.dataset.set",
     ):
         assert not command_allowed_without_token(command), command
+
+
+def test_capabilities_endpoint_reports_the_live_table(monkeypatch) -> None:
+    """A Live Space publishes the same contract a Static Space ships (D6)."""
+
+    app = create_app(runtime=_runtime(), api_token="secret-token")
+    payload = TestClient(app).get("/api/capabilities").json()
+
+    assert payload["mode"] == "live"
+    assert payload["commands"] == viewer_commands("live")
+    assert payload["text_search"] is True
+    assert payload["python_tools"] is True
+    assert payload["server_runtime"] is True
+    assert payload["public"] is False
+
+    monkeypatch.setenv("HYPERVIEW_NO_AUTH", "1")
+    public_app = create_app(runtime=_runtime())
+    assert TestClient(public_app).get("/api/capabilities").json()["public"] is True

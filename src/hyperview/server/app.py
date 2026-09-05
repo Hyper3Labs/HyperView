@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 
 from hyperview._version import __version__
+from hyperview.capabilities import capabilities_payload
 from hyperview.control import (
     CommandEnvelope,
     CommandResult,
@@ -636,6 +637,17 @@ def create_app(
             "dataset": workspace.dataset_name if workspace is not None else None,
             "pid": os.getpid(),
         }
+
+    @app.get("/api/capabilities")
+    async def get_capabilities():
+        """Report what this host lets a viewer do, from the one capability table.
+
+        A Static Space ships the same block in its manifest, so the frontend
+        reads one shape either way instead of branching on where it is served
+        from.
+        """
+
+        return capabilities_payload("live", public=auth_disabled())
 
     @app.get("/api/runtime")
     async def get_runtime_state(

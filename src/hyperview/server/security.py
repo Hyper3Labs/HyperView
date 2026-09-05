@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from hyperview.capabilities import command_allowed_in_mode
 from hyperview.storage.config import StorageConfig
 
 _LOCAL_HOST_NAMES = frozenset({"localhost", "0.0.0.0", "::"})
@@ -125,20 +126,10 @@ def remove_server_info(port: int, token: str | None) -> None:
 # nothing else. Everything outside this set stays closed even under
 # HYPERVIEW_NO_AUTH=1, because the rest of the command surface imports
 # arbitrary modules, installs extension code, or starts unbounded compute.
-_PUBLIC_COMMAND_PREFIXES = ("workspace.panel.", "panel.", "collection.")
-_PUBLIC_COMMANDS = frozenset(
-    {
-        "workspace.active-layout.set",
-        "workspace.selection.set",
-        "workspace.state.patch",
-        "workspace.layout-view.set",
-        "workspace.layout.get",
-        "workspace.layout.set",
-    }
-)
-
-
+#
+# The set itself lives in hyperview.capabilities, which is the one table a Live
+# Space, a Static Space export manifest, and the frontend all read.
 def command_allowed_without_token(command: str) -> bool:
     """Return whether an anonymous visitor may run ``command``."""
 
-    return command in _PUBLIC_COMMANDS or command.startswith(_PUBLIC_COMMAND_PREFIXES)
+    return command_allowed_in_mode(command, "live")

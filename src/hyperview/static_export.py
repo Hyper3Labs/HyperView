@@ -27,6 +27,7 @@ import numpy as np
 from fastapi import HTTPException
 
 from hyperview._version import __version__
+from hyperview.capabilities import capabilities_payload
 from hyperview.core.dataset import Dataset
 from hyperview.extensions import EXTENSION_MANIFEST_NAME, ExtensionManifest
 from hyperview.runtime import CollectionState, HyperViewRuntime, PanelInstance
@@ -1160,20 +1161,17 @@ def export_runtime_workspace(
             "dataset_name": workspace.dataset_name,
             "fingerprint": _workspace_fingerprint(dataset, snapshot),
         },
-        "capabilities": {
-            "browse_samples": True,
-            "layouts": has_layouts,
-            "selection": True,
-            "lasso_2d": has_2d_layout,
-            "lasso_3d": False,
-            "sample_similarity": num_similarity_queries > 0,
-            "similarity_k": similarity_k if num_similarity_queries > 0 else 0,
-            "text_search": False,
-            "python_tools": False,
-            "runtime_mutations": False,
-            "panel_state": "ephemeral",
-            "panels": panel_statuses,
-        },
+        # The mode's own contract -- which commands a viewer may run, what a
+        # Static Space cannot do -- comes from hyperview.capabilities. Only the
+        # facts this export knows are passed in.
+        "capabilities": capabilities_payload(
+            "static",
+            layouts=has_layouts,
+            lasso_2d=has_2d_layout,
+            sample_similarity=num_similarity_queries > 0,
+            similarity_k=similarity_k if num_similarity_queries > 0 else 0,
+            panels=panel_statuses,
+        ),
         "artifacts": {
             "runtime": "api/runtime.json",
             "dataset": "api/dataset.json",
