@@ -338,6 +338,34 @@ class ProviderRegistry:
         return target
 
 
+def _migrate_kind(kind: str) -> Literal["module", "builtin"]:
+    """Normalize a persisted or transport panel kind to the two-kind contract.
+
+    Transport requests may still describe where a panel comes from
+    (``scatter``, ``extension``); snapshots only ever expose ``builtin`` or
+    ``module``. Both the dataclass and ``from_dict`` route through here so the
+    migration cannot drift between the two doors into a spec.
+    """
+
+    if kind == "scatter":
+        return "builtin"
+    if kind == "extension":
+        return "module"
+    if kind not in {"module", "builtin"}:
+        raise ValueError(
+            f"Unsupported panel kind '{kind}'; expected 'builtin' or 'module'"
+        )
+    return kind  # type: ignore[return-value]
+
+
+def _native_component_name(renderer: str | None) -> str | None:
+    """The frontend component a ``native:`` renderer reference names."""
+
+    if not renderer or not renderer.startswith("native:"):
+        return None
+    return renderer.removeprefix("native:").strip() or None
+
+
 @dataclass
 class CustomPanelSpec:
     id: str
@@ -367,18 +395,13 @@ class CustomPanelSpec:
     props: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.kind == "scatter":
-            self.kind = "builtin"
+        was_scatter = self.kind == "scatter"
+        self.kind = _migrate_kind(self.kind)
+        if was_scatter:
             self.builtin_panel = self.builtin_panel or "scatter"
             self.panel_type = self.panel_type or "scatter"
             self.source = self.source or "shipped"
             self.renderer = self.renderer or "native:scatter"
-        elif self.kind == "extension":
-            self.kind = "module"
-        elif self.kind not in {"module", "builtin"}:
-            raise ValueError(
-                f"Unsupported panel kind '{self.kind}'; expected 'builtin' or 'module'"
-            )
         if self.kind == "builtin":
             native_type = self.builtin_panel or self.panel_type
             self.renderer = self.renderer or (f"native:{native_type}" if native_type else None)
@@ -389,18 +412,7 @@ class CustomPanelSpec:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CustomPanelSpec:
         persisted_kind = str(data.get("kind") or "module")
-        kind = persisted_kind
-        # One-way migration for panel specs persisted before the two-kind
-        # runtime contract. Transport requests may still describe where a
-        # panel comes from, but snapshots only expose builtin or module.
-        if kind == "scatter":
-            kind = "builtin"
-        elif kind == "extension":
-            kind = "module"
-        elif kind not in {"module", "builtin"}:
-            raise ValueError(
-                f"Unsupported panel kind '{kind}'; expected 'builtin' or 'module'"
-            )
+        kind = _migrate_kind(persisted_kind)
 
         builtin_panel = data.get("builtin_panel")
         if builtin_panel is not None:
@@ -464,6 +476,21 @@ class CustomPanelSpec:
         )
 
     def to_dict(self) -> dict[str, Any]:
+        """The wire form of this panel: what a browser is allowed to see.
+
+        ``module_file`` is an absolute path on the machine running the runtime
+        and has no meaning in a browser, so it is not part of the wire form.
+        Anything that has to keep it -- the workspace registry on disk -- uses
+        :meth:`to_storage_dict`.
+        """
+
+        payload = self.to_storage_dict()
+        payload.pop("module_file", None)
+        return payload
+
+    def to_storage_dict(self) -> dict[str, Any]:
+        """The wire form plus the host-only fields a reload needs back."""
+
         payload = asdict(self)
         payload["panel_type"] = self.resolved_panel_type()
         payload["source"] = self.resolved_source()
@@ -806,9 +833,11 @@ def _custom_panel_instance_payload(
     panel_states: dict[str, PanelStateEntry],
     *,
     data: dict[str, Any] | None = None,
+    for_storage: bool = False,
 ) -> dict[str, Any]:
+    spec = panel.to_storage_dict() if for_storage else panel.to_dict()
     payload = {
-        **panel.to_dict(),
+        **spec,
         "state_revision": panel_states.get(panel.id, PanelStateEntry()).state_revision,
     }
     if data is not None:
@@ -881,12 +910,12 @@ class WorkspaceUiState:
             view_revision=int(data.get("view_revision") or 0),
         )
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self, *, for_storage: bool = False) -> dict[str, Any]:
         return {
             "active_layout_key": self.active_layout_key,
             "selected_ids": list(self.selected_ids),
             "custom_panels": [
-                _custom_panel_instance_payload(panel, self.panels)
+                _custom_panel_instance_payload(panel, self.panels, for_storage=for_storage)
                 for panel in self.custom_panels
             ],
             "panels": {
@@ -931,7 +960,14 @@ class WorkspaceState:
             created_at=int(data.get("created_at") or _now_ts()),
         )
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self, *, for_storage: bool = False) -> dict[str, Any]:
+        """Serialize this workspace.
+
+        ``for_storage`` keeps the host-only panel fields (the absolute
+        ``module_file`` path) that a reload needs to find a module panel's
+        source again. Everything served to a browser leaves them out.
+        """
+
         return {
             "id": self.id,
             "dataset_name": self.dataset_name,
@@ -939,7 +975,7 @@ class WorkspaceState:
                 collection.to_dict()
                 for collection in sorted(self.collections.values(), key=lambda item: item.id)
             ],
-            "ui": self.ui.to_dict(),
+            "ui": self.ui.to_dict(for_storage=for_storage),
             "created_at": self.created_at,
         }
 
@@ -1007,7 +1043,7 @@ class WorkspaceRegistry:
                     persisted[workspace_id] = workspace
             self._workspaces = persisted
             payload["workspaces"] = [
-                workspace.to_dict()
+                workspace.to_dict(for_storage=True)
                 for workspace in sorted(persisted.values(), key=lambda item: item.id)
             ]
             _atomic_write_json(self.path, payload)
@@ -2734,8 +2770,8 @@ class HyperViewRuntime:
                 raise ValueError(f"Active panel is not in the view: {next_active_panel_id}")
 
             panels_changed = [
-                panel.to_dict() for panel in workspace.ui.custom_panels
-            ] != [panel.to_dict() for panel in next_panels]
+                panel.to_storage_dict() for panel in workspace.ui.custom_panels
+            ] != [panel.to_storage_dict() for panel in next_panels]
             view_mode_changed = workspace.ui.has_explicit_view != next_has_explicit_view
             persisted_layout_changed = workspace.ui.layout is not None
             if (
@@ -3215,13 +3251,17 @@ class HyperViewRuntime:
         loaded = load_extension_tools(manifest)
         prepared_panels: list[CustomPanelSpec] = []
         for panel_entry in manifest.panels:
+            # The renderer reference decides how a panel is drawn; where the
+            # panel was declared does not. An extension that names a module
+            # ships that file, and one that names a native renderer resolves to
+            # the frontend component of that name -- or fails at render time if
+            # this shell has no such component, which is not an install error.
             module_name = panel_entry.module_file()
-            if module_name is None:
-                raise ValueError(
-                    f"Installable extension panel '{manifest.name}/{panel_entry.id}' "
-                    "must declare a module renderer"
-                )
-            panel_file = resolve_panel_source(manifest.folder, module_name)
+            panel_file = (
+                resolve_panel_source(manifest.folder, module_name)
+                if module_name is not None
+                else None
+            )
             definition = panel_entry.to_definition(manifest.name, source=source)
             layout = _panel_layout_fields(
                 definition.default_layout,
@@ -3239,12 +3279,14 @@ class HyperViewRuntime:
                 CustomPanelSpec(
                     id=panel_entry.id,
                     title=definition.title or definition.label,
+                    kind="module" if panel_file is not None else "builtin",
                     panel_type=definition.panel_type,
                     source=definition.source,
                     renderer=definition.renderer,
+                    builtin_panel=_native_component_name(definition.renderer),
                     extension=manifest.name,
                     extension_panel=panel_entry.id,
-                    module_file=str(panel_file),
+                    module_file=str(panel_file) if panel_file is not None else None,
                     **layout,
                     props=merge_default_props(definition, None),
                 )

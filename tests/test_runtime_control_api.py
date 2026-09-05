@@ -422,7 +422,14 @@ def test_runtime_control_api_supports_checkpoint_jobs_panels_and_ui_state(
     assert histogram_panel["data"]["module_src"].startswith(
         "/api/panels/content/default/label-histogram/panel.js"
     )
-    assert histogram_panel["module_file"] == str(right_panel_file.resolve())
+    # The module path stays server-side: the frontend loads the module by URL.
+    assert "module_file" not in histogram_panel
+    histogram_spec = next(
+        spec
+        for spec in runtime.get_workspace("default").ui.custom_panels
+        if spec.id == "label-histogram"
+    )
+    assert histogram_spec.module_file == str(right_panel_file.resolve())
     assert histogram_panel["width"] == 320
     assert histogram_panel["min_width"] == 240
     assert text_panel["title"] == "Ranked Notes"
@@ -1425,3 +1432,95 @@ def test_extension_tool_artifact_url_serves_extension_storage_file(
     artifact_response = client.get(payload["result"]["url"])
     assert artifact_response.status_code == 200
     assert artifact_response.text == "artifact ok"
+
+
+def test_module_file_is_persisted_but_never_put_on_the_wire(tmp_path: Path) -> None:
+    """A panel module's path on disk is storage detail, not transport.
+
+    The frontend loads a panel module through `/api/panels/content/...`, so the
+    absolute path it happens to live at on the server is of no use to it and is
+    a needless disclosure. The registry still needs it to reopen the panel after
+    a restart, hence the two shapes.
+    """
+
+    panel_file = _write_panel_extension(
+        tmp_path / "readout-ext",
+        name="readout-ext",
+        panel_id="summary",
+        title="Summary",
+    )
+    registry_path = tmp_path / "workspaces.json"
+    runtime = HyperViewRuntime(
+        provider_registry=ProviderRegistry(tmp_path / "providers.json"),
+        workspace_registry=WorkspaceRegistry(registry_path),
+    )
+    runtime.install_extension("default", tmp_path / "readout-ext")
+    runtime.add_runtime_panel(
+        "default",
+        panel_id="summary",
+        kind="extension",
+        extension="readout-ext",
+        extension_panel="summary",
+        require_resolved_layout=False,
+    )
+
+    workspace = runtime.get_workspace("default")
+    spec = workspace.ui.custom_panels[0]
+    assert spec.module_file == str(panel_file.resolve())
+
+    wire = workspace.to_dict()
+    stored = workspace.to_dict(for_storage=True)
+    wire_panels = wire["ui"]["custom_panels"]
+    stored_panels = stored["ui"]["custom_panels"]
+    assert wire_panels and stored_panels
+    assert all("module_file" not in panel for panel in wire_panels)
+    assert stored_panels[0]["module_file"] == str(panel_file.resolve())
+    # The two shapes differ in that field alone.
+    assert [
+        {key: value for key, value in panel.items() if key != "module_file"}
+        for panel in stored_panels
+    ] == wire_panels
+
+    # The panel payload the server hands the frontend is the wire shape too.
+    client = FastAPITestClient(create_app(runtime=runtime))
+    payload = client.get("/api/runtime").json()
+    assert payload["workspace"]["ui"]["custom_panels"]
+    assert all(
+        "module_file" not in panel for panel in payload["workspace"]["ui"]["custom_panels"]
+    )
+
+
+def test_registry_round_trip_restores_the_panel_module_file(tmp_path: Path) -> None:
+    panel_file = _write_panel_extension(
+        tmp_path / "readout-ext",
+        name="readout-ext",
+        panel_id="summary",
+        title="Summary",
+    )
+    registry_path = tmp_path / "workspaces.json"
+    runtime = HyperViewRuntime(
+        provider_registry=ProviderRegistry(tmp_path / "providers.json"),
+        workspace_registry=WorkspaceRegistry(registry_path),
+    )
+    runtime.install_extension("default", tmp_path / "readout-ext")
+    runtime.add_runtime_panel(
+        "default",
+        panel_id="summary",
+        kind="extension",
+        extension="readout-ext",
+        extension_panel="summary",
+        require_resolved_layout=False,
+    )
+
+    saved = json.loads(registry_path.read_text(encoding="utf-8"))
+    assert json.dumps(saved).count(str(panel_file.resolve())) >= 1
+
+    reloaded = WorkspaceRegistry(registry_path)
+    restored = reloaded.get("default")
+    assert restored is not None
+    restored_spec = next(
+        spec for spec in restored.ui.custom_panels if spec.id == "summary"
+    )
+    assert restored_spec.module_file == str(panel_file.resolve())
+    assert restored_spec.kind == "module"
+    assert restored_spec.renderer == "module:panel.js"
