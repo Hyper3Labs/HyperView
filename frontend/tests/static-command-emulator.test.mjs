@@ -5,12 +5,32 @@
 // writes. A bundle can host several panels, so a command issued by an extension
 // panel must land on that panel, not on a panel literally named "samples".
 import assert from "node:assert/strict";
+import { registerHooks } from "node:module";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
+
+// api.ts imports the generated capability table through the "@/" alias that
+// tsconfig defines. Node resolves modules without tsconfig, so teach it the
+// one alias this graph uses.
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier.startsWith("@/")) {
+      return nextResolve(
+        new URL(`../src/${specifier.slice(2)}.ts`, import.meta.url).href,
+        context
+      );
+    }
+    return nextResolve(specifier, context);
+  },
+});
 
 const API_MODULE = pathToFileURL(
   new URL("../src/lib/api.ts", import.meta.url).pathname
 ).href;
+
+const { CAPABILITY_MODES } = await import(
+  new URL("../src/generated/capabilities.ts", import.meta.url).href
+);
 
 function panel(id) {
   return {
@@ -93,7 +113,7 @@ function snapshot() {
 
 // Each test needs its own module instance: the emulator caches the snapshot it
 // mutates in module scope.
-async function loadStaticApi() {
+async function loadStaticApi({ commands = CAPABILITY_MODES.static.commands } = {}) {
   globalThis.window = {
     __HYPERVIEW_STATIC__: true,
     location: { href: "http://localhost/bundle/" },
@@ -106,6 +126,15 @@ async function loadStaticApi() {
     });
   globalThis.fetch = async (input) => {
     const url = String(input);
+    // The bundle's manifest is the emulator's own contract: it says which
+    // commands this host runs (D6).
+    if (url.endsWith("hyperview-static.json")) {
+      return json({
+        schema_version: 1,
+        kind: "hyperview-static-space",
+        capabilities: { ...CAPABILITY_MODES.static, commands },
+      });
+    }
     if (url.endsWith("api/runtime.json")) return json(snapshot());
     // A bundle exported without a similarity index answers the neighbors path
     // with an empty result set, which is enough to pin the panel routing.
@@ -235,4 +264,40 @@ test("a filter targeted at the Samples alias writes the shared Samples slot", as
 
   assert.equal(payload.result.panel_id, "samples");
   assert.equal(payload.snapshot.workspace.ui.panels.samples.state.mode, "collection");
+});
+
+// The manifest is authoritative: a host that does not list a command does not
+// half-emulate it, and the frontend keeps no allowlist of its own.
+test("the emulator refuses a command the manifest does not list", async () => {
+  const { runControlCommand } = await loadStaticApi({
+    commands: {
+      ...CAPABILITY_MODES.static.commands,
+      allowed: CAPABILITY_MODES.static.commands.allowed.filter(
+        (command) => command !== "collection.filter.set"
+      ),
+    },
+  });
+
+  const payload = await runControlCommand({
+    command: "collection.filter.set",
+    target: { workspace_id: "demo" },
+    args: { field: "label", value: "cat" },
+  });
+
+  assert.equal(payload.ok, false);
+  assert.equal(payload.error.code, "conflict");
+  assert.equal(payload.snapshot.workspace.ui.panels.samples, undefined);
+});
+
+test("a command outside the exported surface is refused by default", async () => {
+  const { runControlCommand } = await loadStaticApi();
+
+  const payload = await runControlCommand({
+    command: "collection.search.create",
+    target: { workspace_id: "demo" },
+    args: { query_text: "a cat", k: 5 },
+  });
+
+  assert.equal(payload.ok, false);
+  assert.match(payload.error.message, /Live Space/);
 });

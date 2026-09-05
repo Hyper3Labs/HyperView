@@ -1,3 +1,8 @@
+import {
+  CAPABILITY_MODES,
+  type Capabilities,
+  type HostingMode,
+} from "@/generated/capabilities";
 import type {
   DatasetInfo,
   EmbeddingsData,
@@ -232,10 +237,7 @@ export interface StaticBundleManifest {
   schema_version: number;
   kind: "hyperview-static-space" | string;
   static: boolean;
-  capabilities: {
-    sample_similarity?: boolean;
-    [key: string]: unknown;
-  };
+  capabilities: Partial<Capabilities> & { [key: string]: unknown };
 }
 
 let staticBundleManifestPromise: Promise<StaticBundleManifest> | null = null;
@@ -247,6 +249,97 @@ export function fetchStaticBundleManifest(): Promise<StaticBundleManifest | null
     "hyperview-static.json"
   );
   return staticBundleManifestPromise;
+}
+
+/*
+ * Capabilities: what this host lets a viewer do.
+ *
+ * There is one table, src/hyperview/capabilities.py. It reaches the browser
+ * three ways, narrowest last: `@/generated/capabilities` is emitted from it at
+ * build time, `GET /api/capabilities` reports it for a live server, and a
+ * Static Space bundle's manifest reports it plus the facts only the export
+ * knows (which layouts shipped, whether similarity was precomputed). Nothing
+ * here is hand-maintained, and no viewer command is named anywhere else in
+ * TypeScript.
+ */
+
+export type { Capabilities, HostingMode };
+
+function detectHostingMode(): HostingMode {
+  return isStaticBundle() ? "static" : "live";
+}
+
+let resolvedCapabilities: Capabilities | null = null;
+let capabilitiesPromise: Promise<Capabilities> | null = null;
+const capabilityListeners = new Set<() => void>();
+
+function publishCapabilities(next: Capabilities): Capabilities {
+  resolvedCapabilities = next;
+  for (const listener of capabilityListeners) listener();
+  return next;
+}
+
+async function loadCapabilities(): Promise<Capabilities> {
+  const mode = detectHostingMode();
+  const defaults = CAPABILITY_MODES[mode];
+  try {
+    if (mode === "static") {
+      const manifest = await fetchStaticBundleManifest();
+      return publishCapabilities({ ...defaults, ...(manifest?.capabilities ?? {}) });
+    }
+    const res = await fetch(apiUrl("/capabilities"));
+    if (!res.ok) return publishCapabilities(defaults);
+    const payload = (await res.json()) as Partial<Capabilities>;
+    return publishCapabilities({ ...defaults, ...payload });
+  } catch {
+    // A host that cannot answer is held to what its mode permits, never more.
+    return publishCapabilities(defaults);
+  }
+}
+
+/**
+ * The capabilities resolved for this host, asynchronously.
+ *
+ * Resolves once per page; every later caller gets the same object.
+ */
+export function resolveCapabilities(): Promise<Capabilities> {
+  capabilitiesPromise ??= loadCapabilities();
+  return capabilitiesPromise;
+}
+
+/**
+ * The capabilities known right now, synchronously.
+ *
+ * Before {@link resolveCapabilities} settles this is what the hosting mode
+ * permits; afterwards it is the host's own narrower answer. The object
+ * identity is stable until it changes, so `useSyncExternalStore` can read it.
+ */
+export function getCapabilities(): Capabilities {
+  if (resolvedCapabilities) return resolvedCapabilities;
+  return CAPABILITY_MODES[detectHostingMode()];
+}
+
+/** The capabilities a server render assumes, before the host is known. */
+export function getServerCapabilities(): Capabilities {
+  return CAPABILITY_MODES.live;
+}
+
+/** Subscribe to capability resolution; returns the unsubscribe function. */
+export function subscribeToCapabilities(listener: () => void): () => void {
+  capabilityListeners.add(listener);
+  void resolveCapabilities();
+  return () => {
+    capabilityListeners.delete(listener);
+  };
+}
+
+/** Whether this host runs `command`, per its resolved command surface. */
+export function isCommandAllowed(command: string, capabilities = getCapabilities()): boolean {
+  const { allowed, allowed_prefixes } = capabilities.commands;
+  return (
+    allowed.includes(command) ||
+    allowed_prefixes.some((prefix) => command.startsWith(prefix))
+  );
 }
 
 export interface ToolMetadata {
@@ -294,7 +387,7 @@ export async function runControlCommand(args: {
 }
 
 export async function listTools(): Promise<ToolMetadata[]> {
-  if (isStaticBundle()) {
+  if (!getCapabilities().python_tools) {
     throw new ApiError(
       "Tools require the HyperView server and are unavailable in static exports.",
       400,
@@ -318,7 +411,7 @@ export async function runTool<T = unknown>(
   workspaceId: string,
   params: Record<string, unknown> = {}
 ): Promise<T> {
-  if (isStaticBundle()) {
+  if (!getCapabilities().python_tools) {
     throw new ApiError(
       "Tools require the HyperView server and are unavailable in static exports.",
       400,
@@ -409,7 +502,7 @@ export async function setLabelFilterCollection(args: {
 }
 
 export async function setActiveWorkspace(workspaceId: string): Promise<RuntimeSnapshot> {
-  if (isStaticBundle()) {
+  if (!getCapabilities().runtime_mutations) {
     showReadOnlyNotice();
     return fetchRuntimeState(workspaceId);
   }
@@ -711,7 +804,7 @@ export async function fetchTextSimilarSamples(
     signal?: AbortSignal;
   } = {}
 ): Promise<SimilaritySearchResponse> {
-  if (isStaticBundle()) {
+  if (!getCapabilities().text_search) {
     throw new ApiError("Text search is not available in a Static Space", 400, null);
   }
   const res = await apiRequest(apiUrl("/search/text"), {
@@ -757,7 +850,7 @@ export async function setLayoutView(args: {
   layoutKey: string;
   camera3d?: OrbitView3DRequest | null;
 }): Promise<RuntimeSnapshot | null> {
-  if (isStaticBundle()) {
+  if (!getCapabilities().runtime_mutations) {
     return null;
   }
   const payload = await runControlCommand({
@@ -1204,16 +1297,6 @@ function staticPanelStateEntry(
   return snapshot.workspace.ui.panels?.[panelId] ?? { state: {}, state_revision: 0 };
 }
 
-// The commands whose target carries an optional `panel_id`. Keep in sync with
-// the CommandSpecs that use CollectionTarget in src/hyperview/control/ui_panel.py.
-const COLLECTION_PANEL_TARGET_COMMANDS = new Set([
-  "collection.filter.set",
-  "collection.selection.set",
-  "collection.neighbors.create",
-  "collection.search.create",
-  "panel.samples.retrieval.set-anchor",
-]);
-
 // Mirrors the runtime's panel-state resolution: a panel addresses itself by id,
 // and the Samples aliases (plus an unrouted command) fall back to the shared
 // Samples state slot.
@@ -1606,12 +1689,19 @@ async function runStaticControlCommandNow(args: {
   args?: Record<string, unknown>;
 }): Promise<ControlCommandResult> {
   const snapshot = await getStaticSnapshot();
+  const capabilities = await resolveCapabilities();
+  if (!isCommandAllowed(args.command, capabilities)) {
+    // The bundle's own manifest says which commands this host runs. Anything
+    // else -- a text query, a new layout, a panel a Live Space would create --
+    // is refused here rather than half-emulated.
+    return refuseStaticCommand(args.command, snapshot);
+  }
   // Collection commands write the issuing panel's state, so an extension panel
   // driving them in a bundle updates itself rather than a panel named "samples".
   // The set that carries a panel target mirrors the CommandSpecs whose target is
   // a CollectionTarget on the live server; every other command here is
   // workspace-scoped and always resolves to the shared Samples state slot.
-  const collectionPanelId = COLLECTION_PANEL_TARGET_COMMANDS.has(args.command)
+  const collectionPanelId = capabilities.commands.panel_target.includes(args.command)
     ? resolveStaticPanelStateId(snapshot, args.target)
     : SAMPLES_PANEL_STATE_ID;
   if (
@@ -1685,10 +1775,17 @@ async function runStaticControlCommandNow(args: {
     }
   }
 
+  return refuseStaticCommand(args.command, snapshot);
+}
+
+function refuseStaticCommand(
+  command: string,
+  snapshot: RuntimeSnapshot
+): ControlCommandResult {
   showReadOnlyNotice();
   return {
     ok: false,
-    command: args.command,
+    command,
     snapshot,
     workspace: snapshot.workspace,
     revision: snapshot.workspace.ui.view_revision,

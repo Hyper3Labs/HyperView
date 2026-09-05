@@ -12,6 +12,7 @@ import pytest
 from PIL import Image
 
 from hyperview import Dataset, Session
+from hyperview.capabilities import viewer_commands
 from hyperview.control import CommandEnvelope, ControlService, create_default_command_registry
 from hyperview.core.sample import Sample
 from hyperview.runtime import HyperViewRuntime, ProviderRegistry, WorkspaceRegistry
@@ -277,6 +278,12 @@ def test_static_export_writes_bundle_snapshot_samples_media_and_flag(tmp_path: P
     assert manifest["capabilities"]["lasso_2d"] is True
     assert manifest["capabilities"]["text_search"] is False
     assert manifest["capabilities"]["python_tools"] is False
+    # The bundle carries its own command contract, so the browser emulator has
+    # no hand-maintained allowlist of its own (D6).
+    assert manifest["capabilities"]["mode"] == "static"
+    assert manifest["capabilities"]["commands"] == viewer_commands("static")
+    assert "collection.search.create" not in manifest["capabilities"]["commands"]["allowed"]
+    assert "collection.filter.set" in manifest["capabilities"]["commands"]["allowed"]
     assert manifest["deployment"]["cloudflare"]["mode"] == "static-assets-only"
     assert manifest["warnings"] == []
     wrangler = json.loads((out_dir / "wrangler.jsonc").read_text(encoding="utf-8"))
@@ -393,11 +400,27 @@ def test_static_asset_urls_follow_wherever_the_bundle_is_served(base: str) -> No
     script = r"""
 const fs = require("fs");
 const ts = require("./frontend/node_modules/typescript");
-const source = fs.readFileSync("./frontend/src/lib/api.ts", "utf8");
-const compiled = ts.transpileModule(source, {
-  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  fileName: "api.ts",
-}).outputText;
+// api.ts imports the generated capability table by its "@/" alias. Bare node
+// has no bundler to resolve that, so load the little module graph by hand.
+const loadedModules = new Map();
+function loadModule(path) {
+  const cached = loadedModules.get(path);
+  if (cached) return cached;
+  const compiled = ts.transpileModule(fs.readFileSync(path, "utf8"), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+    fileName: path,
+  }).outputText;
+  const loaded = { exports: {} };
+  loadedModules.set(path, loaded);
+  const aliasRequire = (id) =>
+    id.startsWith("@/")
+      ? loadModule("./frontend/src/" + id.slice(2) + ".ts").exports
+      : require(id);
+  new Function("exports", "require", "module", "__filename", "__dirname", compiled)(
+    loaded.exports, aliasRequire, loaded, path, "."
+  );
+  return loaded;
+}
 
 const base = new URL(process.argv[1]);
 global.window = {
@@ -435,10 +458,7 @@ global.fetch = async (url) => {
   });
 };
 
-const module = { exports: {} };
-new Function("exports", "require", "module", "__filename", "__dirname", compiled)(
-  module.exports, require, module, "api.ts", "."
-);
+const module = loadModule("./frontend/src/lib/api.ts");
 
 (async () => {
   await module.exports.fetchDataset();
@@ -617,11 +637,27 @@ def test_static_ephemeral_filter_resolves_samples_without_collection_file_fetch(
     script = r"""
 const fs = require("fs");
 const ts = require("./frontend/node_modules/typescript");
-const source = fs.readFileSync("./frontend/src/lib/api.ts", "utf8");
-const compiled = ts.transpileModule(source, {
-  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  fileName: "api.ts",
-}).outputText;
+// api.ts imports the generated capability table by its "@/" alias. Bare node
+// has no bundler to resolve that, so load the little module graph by hand.
+const loadedModules = new Map();
+function loadModule(path) {
+  const cached = loadedModules.get(path);
+  if (cached) return cached;
+  const compiled = ts.transpileModule(fs.readFileSync(path, "utf8"), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+    fileName: path,
+  }).outputText;
+  const loaded = { exports: {} };
+  loadedModules.set(path, loaded);
+  const aliasRequire = (id) =>
+    id.startsWith("@/")
+      ? loadModule("./frontend/src/" + id.slice(2) + ".ts").exports
+      : require(id);
+  new Function("exports", "require", "module", "__filename", "__dirname", compiled)(
+    loaded.exports, aliasRequire, loaded, path, "."
+  );
+  return loaded;
+}
 
 global.window = {
   __HYPERVIEW_STATIC__: true,
@@ -671,14 +707,7 @@ global.fetch = async (url) => {
   });
 };
 
-const module = { exports: {} };
-new Function("exports", "require", "module", "__filename", "__dirname", compiled)(
-  module.exports,
-  require,
-  module,
-  "api.ts",
-  "."
-);
+const module = loadModule("./frontend/src/lib/api.ts");
 
 (async () => {
   const api = module.exports;
@@ -719,11 +748,27 @@ def test_static_selection_commands_are_serialized_and_panel_patches_preserve_sel
     script = r"""
 const fs = require("fs");
 const ts = require("./frontend/node_modules/typescript");
-const source = fs.readFileSync("./frontend/src/lib/api.ts", "utf8");
-const compiled = ts.transpileModule(source, {
-  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  fileName: "api.ts",
-}).outputText;
+// api.ts imports the generated capability table by its "@/" alias. Bare node
+// has no bundler to resolve that, so load the little module graph by hand.
+const loadedModules = new Map();
+function loadModule(path) {
+  const cached = loadedModules.get(path);
+  if (cached) return cached;
+  const compiled = ts.transpileModule(fs.readFileSync(path, "utf8"), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+    fileName: path,
+  }).outputText;
+  const loaded = { exports: {} };
+  loadedModules.set(path, loaded);
+  const aliasRequire = (id) =>
+    id.startsWith("@/")
+      ? loadModule("./frontend/src/" + id.slice(2) + ".ts").exports
+      : require(id);
+  new Function("exports", "require", "module", "__filename", "__dirname", compiled)(
+    loaded.exports, aliasRequire, loaded, path, "."
+  );
+  return loaded;
+}
 
 global.window = {
   __HYPERVIEW_STATIC__: true,
@@ -785,10 +830,7 @@ global.fetch = async (url) => {
   });
 };
 
-const module = { exports: {} };
-new Function("exports", "require", "module", "__filename", "__dirname", compiled)(
-  module.exports, require, module, "api.ts", "."
-);
+const module = loadModule("./frontend/src/lib/api.ts");
 
 (async () => {
   const api = module.exports;
@@ -869,11 +911,27 @@ def test_static_similarity_anchor_command_materializes_neighbors() -> None:
     script = r"""
 const fs = require("fs");
 const ts = require("./frontend/node_modules/typescript");
-const source = fs.readFileSync("./frontend/src/lib/api.ts", "utf8");
-const compiled = ts.transpileModule(source, {
-  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  fileName: "api.ts",
-}).outputText;
+// api.ts imports the generated capability table by its "@/" alias. Bare node
+// has no bundler to resolve that, so load the little module graph by hand.
+const loadedModules = new Map();
+function loadModule(path) {
+  const cached = loadedModules.get(path);
+  if (cached) return cached;
+  const compiled = ts.transpileModule(fs.readFileSync(path, "utf8"), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+    fileName: path,
+  }).outputText;
+  const loaded = { exports: {} };
+  loadedModules.set(path, loaded);
+  const aliasRequire = (id) =>
+    id.startsWith("@/")
+      ? loadModule("./frontend/src/" + id.slice(2) + ".ts").exports
+      : require(id);
+  new Function("exports", "require", "module", "__filename", "__dirname", compiled)(
+    loaded.exports, aliasRequire, loaded, path, "."
+  );
+  return loaded;
+}
 
 global.window = {
   __HYPERVIEW_STATIC__: true,
@@ -930,10 +988,7 @@ global.fetch = async (url) => {
   });
 };
 
-const module = { exports: {} };
-new Function("exports", "require", "module", "__filename", "__dirname", compiled)(
-  module.exports, require, module, "api.ts", "."
-);
+const module = loadModule("./frontend/src/lib/api.ts");
 
 (async () => {
   const result = await module.exports.runControlCommand({
