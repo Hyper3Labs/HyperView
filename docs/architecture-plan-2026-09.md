@@ -233,3 +233,26 @@ Closed on this branch, against the D4/D5/D6 list:
 Still open after it: `kind` itself survives on `CustomPanelSpec` and the
 transport (D4 wants it deleted, not merely made non-deciding), and capability
 information is still defined in more than one table (D6).
+
+### Released as 1.1.2 and 1.1.3 (2026-09-05)
+
+The panel-parity branch above merged and shipped as 1.1.2. 1.1.3 fixes a
+seeding bug the Precision Regions rebuild exposed: a Samples panel entering a
+fresh workspace was always seeded with the all-samples collection, and the
+frontend gives runtime state precedence for the default `samples` panel, so a
+view that authored `collection_id` on that panel opened on the whole dataset
+in a Static Space (a second Samples panel with any other id was fine because
+the frontend lets the prop win there). The runtime now seeds from the authored
+collection when the workspace stores it and falls back to every sample.
+
+Two operational facts that came out of the same debugging:
+
+- The workspace registry lives in the parent of `HYPERVIEW_DATASETS_DIR`
+  (`<parent>/workspaces.json`), so two datasets dirs with the same parent
+  share workspaces. A reproducible export needs its own parent directory, not
+  just its own datasets dir.
+- Re-applying a view over a persisted workspace keeps the previous run's panel
+  state when the panel id already exists, even if the authored `collectionId`
+  prop changed. Authored *initial state* wins over a previous run; authored
+  *props* do not. Whether the Samples collection prop should be treated as
+  initial state is open.
