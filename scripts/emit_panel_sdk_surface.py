@@ -36,6 +36,9 @@ _HOOKS_BLOCK = re.compile(r"\n(?P<indent>\s*)hooks:\s*\{(?P<body>.*?)\n(?P=inden
 _COMPONENTS_BLOCK = re.compile(
     r"\n(?P<indent>\s*)components:\s*\{(?P<body>.*?)\n(?P=indent)\},", re.DOTALL
 )
+_CONSTANTS_BLOCK = re.compile(
+    r"\n(?P<indent>\s*)constants:\s*\{(?P<body>.*?)\n(?P=indent)\},", re.DOTALL
+)
 _VERSION = re.compile(r"""version:\s*["'](?P<version>[^"']+)["']""")
 
 
@@ -78,15 +81,26 @@ def read_panel_sdk_surface(source: Path = SDK_SOURCE) -> dict[str, Any]:
     components = _COMPONENTS_BLOCK.search(body)
     component_names = sorted(set(_entry_names(components.group("body")))) if components else []
 
+    constants = _CONSTANTS_BLOCK.search(body)
+    constant_names = sorted(set(_entry_names(constants.group("body")))) if constants else []
+
     remainder = body.replace(hooks.group(0), "\n")
     if components is not None:
         remainder = remainder.replace(components.group(0), "\n")
-    keys = sorted(set(_entry_names(remainder)) | {"hooks"} | ({"components"} if components else set()))
+    if constants is not None:
+        remainder = remainder.replace(constants.group(0), "\n")
+    keys = sorted(
+        set(_entry_names(remainder))
+        | {"hooks"}
+        | ({"components"} if components else set())
+        | ({"constants"} if constants else set())
+    )
     return {
         "version": version.group("version"),
         "keys": keys,
         "hooks": hook_names,
         "components": component_names,
+        "constants": constant_names,
     }
 
 

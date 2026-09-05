@@ -16,9 +16,16 @@ const MISSING_LABEL_SENTINEL = "undefined";
 const READ_ONLY_DEMO_NOTICE = "Static Space";
 const RUNTIME_CLIENT_ID = `hv-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`;
 const SAMPLE_BATCH_SIZE = 1000;
-// Keep in sync with SAMPLES_PANEL_STATE_ID / SAMPLES_PANEL_STATE_ALIASES in
-// src/hyperview/runtime.py.
-const SAMPLES_PANEL_STATE_ID = "samples";
+/**
+ * The panel id the workspace's default Samples panel owns.
+ *
+ * The runtime spells this `hv.ui.SAMPLES_PANEL_ID` (SAMPLES_PANEL_STATE_ID in
+ * src/hyperview/runtime.py); panel modules read it off the SDK global as
+ * `sdk.constants.SAMPLES_PANEL_ID` instead of copying the literal.
+ */
+export const SAMPLES_PANEL_ID = "samples";
+const SAMPLES_PANEL_STATE_ID = SAMPLES_PANEL_ID;
+// Keep in sync with SAMPLES_PANEL_STATE_ALIASES in src/hyperview/runtime.py.
 const SAMPLES_PANEL_STATE_ALIASES = new Set([SAMPLES_PANEL_STATE_ID, "grid"]);
 const SESSION_TOKEN_STORAGE_KEY = "hyperview.session-token";
 const MUTATING_METHODS = new Set(["POST", "PATCH", "DELETE"]);
@@ -380,13 +387,18 @@ export async function fetchRuntimeState(workspaceId?: string | null): Promise<Ru
 
 export async function setLabelFilterCollection(args: {
   workspaceId: string;
+  /** The panel whose sample view the filtered collection lands in. Omit for the Samples panel. */
+  panelId?: string | null;
   field?: string;
   value?: string | null;
   clear?: boolean;
 }): Promise<RuntimeSnapshot> {
   const payload = await runControlCommand({
     command: "collection.filter.set",
-    target: { workspace_id: args.workspaceId },
+    target: {
+      workspace_id: args.workspaceId,
+      ...(args.panelId ? { panel_id: args.panelId } : {}),
+    },
     args: {
       field: args.field ?? "label",
       ...(args.clear ? { clear: true } : { value: toApiLabel(args.value) }),
@@ -1200,6 +1212,8 @@ const COLLECTION_PANEL_TARGET_COMMANDS = new Set([
   "collection.filter.set",
   "collection.selection.set",
   "collection.neighbors.create",
+  "collection.search.create",
+  "panel.samples.retrieval.set-anchor",
 ]);
 
 // Mirrors the runtime's panel-state resolution: a panel addresses itself by id,
@@ -1596,8 +1610,9 @@ async function runStaticControlCommandNow(args: {
   const snapshot = await getStaticSnapshot();
   // Collection commands write the issuing panel's state, so an extension panel
   // driving them in a bundle updates itself rather than a panel named "samples".
-  // Only the `collection.*` ids carry a panel target; the Samples-panel
-  // retrieval commands are workspace-scoped on the live server too.
+  // The set that carries a panel target mirrors the CommandSpecs whose target is
+  // a CollectionTarget on the live server; every other command here is
+  // workspace-scoped and always resolves to the shared Samples state slot.
   const collectionPanelId = COLLECTION_PANEL_TARGET_COMMANDS.has(args.command)
     ? resolveStaticPanelStateId(snapshot, args.target)
     : SAMPLES_PANEL_STATE_ID;

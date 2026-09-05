@@ -97,6 +97,7 @@ class PanelSpecEntry:
             source=source,
             renderer=self.resolved_renderer(),
             extension=extension_name,
+            extension_panel=self.id,
             default_props=dict(self.default_props),
             default_state=dict(self.default_state),
             props_schema=dict(self.props_schema) if self.props_schema is not None else None,
@@ -357,21 +358,18 @@ def discover_shipped_extensions() -> list[Path]:
 
 
 def load_core_panel_definitions() -> list[PanelDefinition]:
-    """Load native panel definitions from HyperView's packaged core manifest."""
+    """Load the panel definitions from HyperView's packaged core manifest."""
 
     manifest = ExtensionManifest.load(SHIPPED_EXTENSIONS_DIR / CORE_EXTENSION_NAME)
     if manifest.name != CORE_EXTENSION_NAME:
         raise ValueError("The packaged core extension manifest must be named 'core'")
-    definitions = [
+    # A renderer reference is not an origin claim: ``resolved_renderer()``
+    # decides whether a panel is drawn by a native component or a module, and
+    # either is legitimate wherever the panel was declared.
+    return [
         panel.to_definition(manifest.name, source="shipped")
         for panel in manifest.panels
     ]
-    invalid = [item.panel_type for item in definitions if not item.renderer.startswith("native:")]
-    if invalid:
-        raise ValueError(
-            "Core panel renderers must use native: references: " + ", ".join(invalid)
-        )
-    return definitions
 
 
 def resolve_shipped_extension(name: str) -> Path:

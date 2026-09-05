@@ -194,15 +194,30 @@ test("a neighbors collection issued by an extension panel stays on that panel", 
   assert.equal(panels.samples, undefined);
 });
 
-// The live server's Samples retrieval commands take a workspace target only --
-// `collection.neighbors.create` is the id that carries a panel. The emulator
-// routes the same way so a bundle and a Live Space agree.
-test("a Samples retrieval command ignores a panel target, as the live server does", async () => {
+// `panel.samples.retrieval.set-anchor` now takes a CollectionTarget on the live
+// server, so the emulator honours its panel target too: a bundle and a Live
+// Space have to route the same command the same way.
+test("a retrieval anchor targeted at a panel writes that panel", async () => {
   const { runControlCommand } = await loadStaticApi();
 
   const payload = await runControlCommand({
     command: "panel.samples.retrieval.set-anchor",
     target: { workspace_id: "demo", panel_id: "region-readout" },
+    args: { sample_id: "a", k: 2, source: "panel" },
+  });
+
+  assert.equal(payload.result.panel_id, "region-readout");
+  assert.equal(payload.snapshot.workspace.ui.panels["region-readout"].state.mode, "retrieval");
+  assert.equal(payload.snapshot.workspace.ui.panels.samples, undefined);
+});
+
+// The retrieval commands that stayed workspace-scoped still ignore a panel id.
+test("a workspace-scoped retrieval command ignores a panel target", async () => {
+  const { runControlCommand } = await loadStaticApi();
+
+  const payload = await runControlCommand({
+    command: "panel.samples.retrieval.set-anchor",
+    target: { workspace_id: "demo" },
     args: { sample_id: "a", k: 2, source: "panel" },
   });
 

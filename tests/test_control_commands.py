@@ -849,3 +849,261 @@ def test_workspace_scoped_commands_still_reject_a_panel_target(tmp_path: Path) -
     assert result.ok is False
     assert result.error is not None
     assert result.error.code == "validation_error"
+
+
+def _write_installed_panel_extension(folder: Path, *, name: str, panel_id: str) -> Path:
+    """An extension folder the runtime installs the way `hv extension install` does."""
+
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "extension.toml").write_text(
+        "\n".join(
+            [
+                f'name = "{name}"',
+                "",
+                "[[panels]]",
+                f'id = "{panel_id}"',
+                'title = "Installed Panel"',
+                'position = "center"',
+                'file = "panel.js"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (folder / "panel.js").write_text(
+        "export default function Panel() { return null; }\n",
+        encoding="utf-8",
+    )
+    return folder
+
+
+def test_view_menu_request_opens_an_installed_extension_panel(tmp_path: Path) -> None:
+    """The shape the View menu now sends for a `module:` renderer opens the panel.
+
+    Sending `kind="builtin"` for an installed extension's panel -- what the menu
+    used to hard-code -- looks the panel type up among the shipped definitions,
+    finds nothing, and fails. The panel definition carries the extension and the
+    manifest panel id precisely so the caller can send the extension shape.
+    """
+
+    service = _service_with_dataset(tmp_path)
+    folder = _write_installed_panel_extension(
+        tmp_path / "installed-ext", name="installed-ext", panel_id="readout"
+    )
+    service.runtime.install_extension("default", folder)
+
+    definitions = {
+        definition.panel_type: definition
+        for definition in service.runtime.list_panel_definitions()
+    }
+    definition = definitions["installed-ext.readout"]
+    assert definition.renderer == "module:panel.js"
+    assert definition.extension == "installed-ext"
+    assert definition.extension_panel == "readout"
+    assert definition.to_dict()["extension_panel"] == "readout"
+
+    stale = service.run(
+        CommandEnvelope(
+            command="workspace.panel.add",
+            target={"workspace_id": "default"},
+            args={
+                "panel_id": "readout",
+                "kind": "builtin",
+                "builtin_panel": definition.panel_type,
+                "position": "center",
+            },
+        )
+    )
+    assert stale.ok is False
+    assert stale.error is not None
+    assert "Unknown built-in panel type" in stale.error.message
+
+    added = service.run(
+        CommandEnvelope(
+            command="workspace.panel.add",
+            target={"workspace_id": "default"},
+            args={
+                "panel_id": "readout",
+                "kind": "extension",
+                "extension": definition.extension,
+                "extension_panel": definition.extension_panel,
+                "position": "center",
+            },
+        )
+    )
+
+    assert added.ok is True, added.error
+    assert added.workspace is not None
+    panel = added.workspace["ui"]["custom_panels"][0]
+    assert panel["id"] == "readout"
+    assert panel["kind"] == "module"
+    assert panel["renderer"] == "module:panel.js"
+    assert panel["extension"] == "installed-ext"
+
+
+def test_view_menu_request_opens_a_shipped_module_extension_panel(tmp_path: Path) -> None:
+    """A shipped extension whose renderer is a module is opened as a module panel.
+
+    `reference` ships with the package, so its panel type does resolve among the
+    shipped definitions -- and answering `kind="builtin"` for it produced a panel
+    labelled builtin whose renderer was `module:panel.jsx`, which the native host
+    then reported as an unsupported renderer.
+    """
+
+    service = _service_with_dataset(tmp_path)
+    service.runtime.install_extension(
+        "default",
+        resolve_shipped_extension("reference"),
+        add_panels=False,
+        source="shipped",
+    )
+
+    definition = next(
+        item
+        for item in service.runtime.list_panel_definitions()
+        if item.extension == "reference" and item.extension_panel == "reference"
+    )
+    assert definition.renderer == "module:panel.jsx"
+    assert definition.source == "shipped"
+
+    legacy = service.runtime.build_custom_panel(
+        "default",
+        panel_id="reference",
+        kind="builtin",
+        builtin_panel=definition.panel_type,
+        require_resolved_layout=False,
+    )
+    # The old request shape resolved, but to a panel the native host cannot draw.
+    assert legacy.kind == "builtin"
+    assert legacy.renderer == "module:panel.jsx"
+
+    added = service.run(
+        CommandEnvelope(
+            command="workspace.panel.add",
+            target={"workspace_id": "default"},
+            args={
+                "panel_id": "reference",
+                "kind": "extension",
+                "extension": "reference",
+                "extension_panel": "reference",
+            },
+        )
+    )
+
+    assert added.ok is True, added.error
+    assert added.workspace is not None
+    panel = added.workspace["ui"]["custom_panels"][0]
+    assert panel["kind"] == "module"
+    assert panel["renderer"] == "module:panel.jsx"
+    assert panel["extension"] == "reference"
+    # The module file stays server-side; the frontend loads it by panel id.
+    assert "module_file" not in panel
+
+
+def test_collection_search_writes_the_panel_named_by_the_target(tmp_path: Path) -> None:
+    """`collection.search.create` is panel-scoped like the other collection commands."""
+
+    service = _service_with_dataset_and_reference_panel(tmp_path)
+    dataset = service.runtime.get_dataset(workspace_id="default")
+    _add_space(dataset, "text_space", modality="multimodal")
+    engine = SimpleNamespace(
+        supported_modalities=lambda spec: (
+            frozenset({"image", "text"})
+            if spec.model_id == "text_space-model"
+            else frozenset({"image"})
+        )
+    )
+
+    with patch("hyperview.embeddings.engine.get_engine", return_value=engine):
+        seeded = service.run(
+            CommandEnvelope(
+                command="collection.filter.set",
+                target={"workspace_id": "default"},
+                args={"value": "cat", "source": "samples"},
+            )
+        )
+        assert seeded.ok is True
+        samples_collection_id = seeded.result["collection_id"]
+
+        targeted = service.run(
+            CommandEnvelope(
+                command="collection.search.create",
+                target={"workspace_id": "default", "panel_id": "results"},
+                args={"query_text": "a red shirt", "k": 2},
+            )
+        )
+
+    assert targeted.ok is True, targeted.error
+    assert targeted.workspace is not None
+    assert targeted.result["panel_id"] == "results"
+    panels = targeted.workspace["ui"]["panels"]
+    results_state = panels["results"]["state"]
+    assert results_state["collection"]["kind"] == "search"
+    assert results_state["collection"]["query"]["queryText"] == "a red shirt"
+    assert results_state["collection_id"] == targeted.result["collection_id"]
+    # Panel A is untouched: same collection, same revision it was left at.
+    assert panels["samples"]["state"]["collection_id"] == samples_collection_id
+    assert results_state["collection_id"] != samples_collection_id
+    assert targeted.revision == panels["results"]["state_revision"]
+
+
+def test_search_and_anchor_without_a_panel_still_write_samples(tmp_path: Path) -> None:
+    """The workspace-scoped form of the newly panel-scoped commands is unchanged."""
+
+    service = _service_with_dataset_and_reference_panel(tmp_path)
+    dataset = service.runtime.get_dataset(workspace_id="default")
+    _add_space(dataset, "text_space", modality="multimodal")
+    engine = SimpleNamespace(
+        supported_modalities=lambda spec: (
+            frozenset({"image", "text"})
+            if spec.model_id == "text_space-model"
+            else frozenset({"image"})
+        )
+    )
+
+    with patch("hyperview.embeddings.engine.get_engine", return_value=engine):
+        search = service.run(
+            CommandEnvelope(
+                command="collection.search.create",
+                target={"workspace_id": "default"},
+                args={"query_text": "a red shirt", "k": 2},
+            )
+        )
+
+    assert search.ok is True, search.error
+    assert search.result["panel_id"] == "samples"
+    assert search.workspace is not None
+    assert search.workspace["ui"]["panels"]["samples"]["state"]["collection"]["kind"] == "search"
+
+    anchor = service.run(
+        CommandEnvelope(
+            command="panel.samples.retrieval.set-anchor",
+            target={"workspace_id": "default"},
+            args={"sample_id": "s0", "k": 2},
+        )
+    )
+
+    assert anchor.ok is True, anchor.error
+    assert anchor.result["panel_id"] == "samples"
+    assert anchor.workspace is not None
+    assert anchor.workspace["ui"]["panels"]["samples"]["state"]["mode"] == "retrieval"
+
+
+def test_retrieval_anchor_targets_a_second_samples_panel(tmp_path: Path) -> None:
+    service = _service_with_dataset_and_reference_panel(tmp_path)
+
+    result = service.run(
+        CommandEnvelope(
+            command="panel.samples.retrieval.set-anchor",
+            target={"workspace_id": "default", "panel_id": "results"},
+            args={"sample_id": "s0", "k": 2},
+        )
+    )
+
+    assert result.ok is True, result.error
+    assert result.result["panel_id"] == "results"
+    assert result.workspace is not None
+    panels = result.workspace["ui"]["panels"]
+    assert panels["results"]["state"]["mode"] == "retrieval"
+    assert panels["samples"]["state"]["collection"]["kind"] == "all"
+    assert "mode" not in panels["samples"]["state"]

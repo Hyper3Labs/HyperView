@@ -147,6 +147,7 @@ export interface RuntimePanelDefinition {
   source: string;
   renderer: string;
   extension: string | null;
+  extension_panel: string | null;
   default_props: Record<string, unknown>;
   default_state: Record<string, unknown>;
   props_schema: Record<string, unknown> | null;
@@ -191,7 +192,6 @@ export interface RuntimePanel {
   builtin_panel: "samples" | string | null;
   extension: string | null;
   extension_panel: string | null;
-  module_file: string | null;
   layout_key: string | null;
   geometry: Geometry | string | null;
   layout_dimension: number | null;

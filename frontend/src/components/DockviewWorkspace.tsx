@@ -143,6 +143,35 @@ function defaultPanelId(definition: RuntimePanelDefinition) {
   return typeof id === "string" && id.length > 0 ? id : definition.panel_type;
 }
 
+/**
+ * The transport fields that open a panel of this definition.
+ *
+ * The renderer reference decides how a panel is drawn, so it also decides which
+ * shape `workspace.panel.add` needs: a `native:` renderer is a built-in panel
+ * named by its panel type, a `module:` renderer is an extension panel named by
+ * its extension and its manifest id. Hard-coding `builtin` here is what used to
+ * make the View menu ask the runtime for a built-in that does not exist (an
+ * installed extension's panel) or dock a module panel into the native host (a
+ * shipped extension's, which then reported its own renderer as unsupported).
+ */
+function panelAddRequest(definition: RuntimePanelDefinition) {
+  const isModule = definition.renderer?.startsWith("module:") ?? false;
+  if (isModule && definition.extension && definition.extension_panel) {
+    return {
+      kind: "extension" as const,
+      builtinPanel: null,
+      extension: definition.extension,
+      extensionPanel: definition.extension_panel,
+    };
+  }
+  return {
+    kind: "builtin" as const,
+    builtinPanel: definition.panel_type,
+    extension: null,
+    extensionPanel: null,
+  };
+}
+
 function defaultPanelProps(definition: RuntimePanelDefinition) {
   const props = { ...definition.default_props };
   const presetName = definitionLayout(definition).preset;
@@ -650,13 +679,12 @@ export function useDockviewApi() {
       void addRuntimePanel({
         workspaceId: activeWorkspaceId,
         panelId,
-        kind: "builtin",
-        builtinPanel: definition.panel_type,
+        ...panelAddRequest(definition),
         title: definition.title,
         position: "center",
         props: defaultPanelProps(definition),
       }).then(applyRuntimeSnapshot).catch((error) => {
-        console.error("Failed to add built-in panel:", error);
+        console.error("Failed to add panel:", error);
       });
     },
     [activeWorkspaceId, applyRuntimeSnapshot, ctx?.api, customPanels, panelDefinitions]
@@ -1082,8 +1110,7 @@ export function DockviewWorkspace() {
           const snapshot = await addRuntimePanel({
             workspaceId: activeWorkspaceId,
             panelId,
-            kind: "builtin",
-            builtinPanel: definition.panel_type,
+            ...panelAddRequest(definition),
             title: definition.title,
             position,
             referencePanelId:

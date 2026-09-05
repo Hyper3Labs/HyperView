@@ -6,6 +6,9 @@
     "PanelToolbarButton",
     "PanelToolbarIconButton"
   ],
+  "constants": [
+    "SAMPLES_PANEL_ID"
+  ],
   "hooks": [
     "listTools",
     "useActiveLayout",
@@ -31,6 +34,7 @@
   "keys": [
     "React",
     "components",
+    "constants",
     "createClient",
     "hooks",
     "version"

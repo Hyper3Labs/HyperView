@@ -14,11 +14,18 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from hyperview.runtime import CustomPanelSpec, HyperViewRuntime
+from hyperview.runtime import SAMPLES_PANEL_STATE_ID, CustomPanelSpec, HyperViewRuntime
 
 PanelPosition = Literal["center", "right", "bottom"]
 PanelDirection = Literal["right", "left", "above", "below", "within"]
 ContainerKind = Literal["horizontal", "vertical", "tabs", "grid"]
+
+#: The panel id the workspace's default Samples panel owns.
+#:
+#: Collection commands with no ``panel_id`` land here, and a panel that wants to
+#: read or drive the shared sample view addresses this id. Scripts and demos
+#: should use ``hv.ui.SAMPLES_PANEL_ID`` rather than copying the literal.
+SAMPLES_PANEL_ID = SAMPLES_PANEL_STATE_ID
 
 SCATTER_PANEL_TYPE = "scatter"
 SAMPLES_PANEL_TYPE = "samples"
@@ -686,6 +693,7 @@ def _panel_to_spec(
 
 
 __all__ = [
+    "SAMPLES_PANEL_ID",
     "Container",
     "Explorer",
     "ExtensionPanel",

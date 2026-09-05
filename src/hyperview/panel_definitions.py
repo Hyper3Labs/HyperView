@@ -24,6 +24,7 @@ class PanelDefinition:
     renderer: str
     title: str | None = None
     extension: str | None = None
+    extension_panel: str | None = None
     default_props: dict[str, Any] = field(default_factory=dict)
     default_state: dict[str, Any] = field(default_factory=dict)
     props_schema: dict[str, Any] | None = None
@@ -58,6 +59,7 @@ class PanelDefinition:
             "source": self.source,
             "renderer": self.renderer,
             "extension": self.extension,
+            "extension_panel": self.extension_panel,
             "default_props": _json_object_copy(self.default_props),
             "default_state": _json_object_copy(self.default_state),
             "props_schema": (

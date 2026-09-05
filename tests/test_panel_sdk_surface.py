@@ -48,4 +48,28 @@ def test_surface_lists_every_hook_the_sdk_global_installs() -> None:
     assert "useSupportsSampleSimilarity" in surface["hooks"]
     assert declared_components == set(surface["components"])
     assert "Panel" in surface["components"]
-    assert set(surface["keys"]) == {"React", "components", "createClient", "hooks", "version"}
+    assert set(surface["keys"]) == {
+        "React",
+        "components",
+        "constants",
+        "createClient",
+        "hooks",
+        "version",
+    }
+
+
+def test_surface_publishes_the_samples_panel_id_constant() -> None:
+    """The default Samples panel id has one spelling per language, not three.
+
+    Panels used to copy the literal "samples"; the runtime spells it
+    `hv.ui.SAMPLES_PANEL_ID` and the SDK global `sdk.constants.SAMPLES_PANEL_ID`.
+    """
+
+    import hyperview.ui as hv_ui
+
+    surface = hyperview.panel_sdk_surface()
+
+    assert "SAMPLES_PANEL_ID" in surface["constants"]
+    assert hv_ui.SAMPLES_PANEL_ID == "samples"
+    source = SDK_SOURCE.read_text(encoding="utf-8")
+    assert "constants: {\n      SAMPLES_PANEL_ID,\n    }," in source
