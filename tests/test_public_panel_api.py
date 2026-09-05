@@ -152,6 +152,41 @@ def test_created_collections_survive_static_export_when_a_view_binds_them(
     assert bound in kept
 
 
+def test_a_samples_panel_opens_on_its_authored_collection_whatever_its_id() -> None:
+    session, runtime, workspace_id = _make_session()
+    first = session.create_collection(["sample-4", "sample-2"], name="A", workspace_id=workspace_id)
+    second = session.create_collection(["sample-1"], name="B", workspace_id=workspace_id)
+
+    session.ui.apply_view(
+        hv.ui.View(
+            hv.ui.Samples(id="samples", mode="results", collection_id=first),
+            hv.ui.Samples(id="baseline", mode="results", collection_id=second),
+            hv.ui.Samples(id="everything"),
+        ),
+        workspace_id=workspace_id,
+    )
+
+    panels = runtime.get_workspace(workspace_id).ui.panels
+    # The default Samples panel used to be seeded with the all-samples collection
+    # regardless of the view, so a Static Space opened on the whole dataset.
+    assert panels["samples"].state["collection_id"] == first
+    assert panels["samples"].state["collection"]["id"] == first
+    assert panels["baseline"].state["collection_id"] == second
+    assert panels["everything"].state["collection"]["kind"] == "all"
+
+
+def test_an_unknown_authored_collection_falls_back_to_every_sample() -> None:
+    session, runtime, workspace_id = _make_session()
+
+    session.ui.apply_view(
+        hv.ui.View(hv.ui.Samples(id="samples", collection_id="selection:missing")),
+        workspace_id=workspace_id,
+    )
+
+    state = runtime.get_workspace(workspace_id).ui.panels["samples"].state
+    assert state["collection"]["kind"] == "all"
+
+
 def _read_json(path: Path) -> dict:
     import json
 

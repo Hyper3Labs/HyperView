@@ -1582,7 +1582,11 @@ class HyperViewRuntime:
             and definition.panel_type == "samples"
             and workspace.dataset_name
         ):
-            state.update(_samples_collection_state(self._build_all_collection_locked(workspace)))
+            state.update(
+                _samples_collection_state(
+                    self._opening_samples_collection_locked(workspace, panel)
+                )
+            )
 
         if initial_state is None:
             if state:
@@ -1600,6 +1604,27 @@ class HyperViewRuntime:
             state=state,
             state_revision=existing.state_revision + 1 if existing is not None else 0,
         )
+
+    def _opening_samples_collection_locked(
+        self,
+        workspace: WorkspaceState,
+        panel: CustomPanelSpec,
+    ) -> CollectionState:
+        """The collection a Samples panel shows when it first enters the workspace.
+
+        A view that authors ``collection_id`` on a Samples panel has said what
+        the panel opens on, so its runtime state starts there whenever the
+        workspace stores that collection; the panel's own id does not matter.
+        Anything else -- no authored collection, or one the workspace does not
+        know -- opens on every sample, as before.
+        """
+
+        authored = panel.props.get("collectionId", panel.props.get("collection_id"))
+        if isinstance(authored, str) and authored.strip():
+            stored = workspace.collections.get(authored.strip())
+            if stored is not None:
+                return stored
+        return self._build_all_collection_locked(workspace)
 
     def _apply_initial_panel_states_locked(
         self,
