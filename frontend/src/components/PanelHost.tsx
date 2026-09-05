@@ -75,14 +75,16 @@ function resolveRuntimePanelComponent(moduleValue: unknown): ComponentType<Runti
 /**
  * Whether this panel is drawn by loading a panel module.
  *
- * `kind` is only the fallback for a panel whose renderer a snapshot never
- * carried; the renderer namespace is the answer whenever there is one.
+ * The runtime resolves a renderer for every panel it puts on the wire, so the
+ * namespace is the whole answer. A panel that somehow arrives without one is
+ * treated as a module: that host reports a missing module clearly, where the
+ * native host would only say the renderer is unsupported.
  */
-function usesModuleRenderer(renderer: string | null | undefined, kind: string): boolean {
+function usesModuleRenderer(renderer: string | null | undefined): boolean {
   if (typeof renderer === "string" && renderer.length > 0) {
-    return renderer.startsWith("module:");
+    return !renderer.startsWith("native:");
   }
-  return kind === "module";
+  return true;
 }
 
 function PanelUnavailable() {
@@ -257,13 +259,11 @@ export function PanelHost(props: IDockviewPanelProps<PanelHostParams>) {
     return <StaticPanelUnavailable panel={panel} />;
   }
 
-  // The renderer reference decides which host draws the panel, not `kind`.
-  // A `module:` renderer is loaded as an ESM module wherever it was declared --
-  // core, a shipped extension, an installed one -- and a `native:` renderer
-  // resolves to a component this shell bundles. Routing on `kind` made a
-  // module panel that arrived labelled `builtin` render as an unsupported
-  // native renderer instead of loading its module.
-  const rendersModule = usesModuleRenderer(panel.renderer, panel.kind);
+  // The renderer reference decides which host draws the panel. A `module:`
+  // renderer is loaded as an ESM module wherever it was declared -- core, a
+  // shipped extension, an installed one -- and a `native:` renderer resolves to
+  // a component this shell bundles.
+  const rendersModule = usesModuleRenderer(panel.renderer);
 
   return (
     <PanelInstanceProvider

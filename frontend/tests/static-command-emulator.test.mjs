@@ -15,7 +15,6 @@ const API_MODULE = pathToFileURL(
 function panel(id) {
   return {
     id,
-    kind: "module",
     panel_type: id,
     source: "extension",
     renderer: `extension:${id}`,

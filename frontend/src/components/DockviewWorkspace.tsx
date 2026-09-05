@@ -146,26 +146,25 @@ function defaultPanelId(definition: RuntimePanelDefinition) {
 /**
  * The transport fields that open a panel of this definition.
  *
- * The renderer reference decides how a panel is drawn, so it also decides which
- * shape `workspace.panel.add` needs: a `native:` renderer is a built-in panel
- * named by its panel type, a `module:` renderer is an extension panel named by
- * its extension and its manifest id. Hard-coding `builtin` here is what used to
- * make the View menu ask the runtime for a built-in that does not exist (an
- * installed extension's panel) or dock a module panel into the native host (a
- * shipped extension's, which then reported its own renderer as unsupported).
+ * The renderer reference decides how a panel is drawn, so it also decides what
+ * `workspace.panel.add` has to be told: a `module:` renderer is an extension
+ * panel, named by its extension and its manifest id, and a `native:` renderer
+ * is a shipped panel, named by its panel type. Naming every panel by its panel
+ * type is what used to make the View menu ask the runtime for a built-in that
+ * does not exist (an installed extension's panel) or dock a module panel into
+ * the native host (a shipped extension's, which then reported its own renderer
+ * as unsupported).
  */
 function panelAddRequest(definition: RuntimePanelDefinition) {
   const isModule = definition.renderer?.startsWith("module:") ?? false;
   if (isModule && definition.extension && definition.extension_panel) {
     return {
-      kind: "extension" as const,
       builtinPanel: null,
       extension: definition.extension,
       extensionPanel: definition.extension_panel,
     };
   }
   return {
-    kind: "builtin" as const,
     builtinPanel: definition.panel_type,
     extension: null,
     extensionPanel: null,
@@ -449,8 +448,19 @@ function isClosableDockPanel(panelId: string) {
   );
 }
 
+/**
+ * Whether a placed panel is drawn by loading its panel module.
+ *
+ * The runtime resolves a renderer for every panel it puts on the wire, so the
+ * namespace is the whole answer; see `usesModuleRenderer` in the panel host,
+ * which routes the same way.
+ */
+function rendersModulePanel(panel: RuntimePanel) {
+  return !panel.renderer?.startsWith("native:");
+}
+
 function getDockPanelId(panel: RuntimePanel) {
-  return panel.kind === "builtin" ? panel.id : `${RUNTIME_PANEL_PREFIX}${panel.id}`;
+  return rendersModulePanel(panel) ? `${RUNTIME_PANEL_PREFIX}${panel.id}` : panel.id;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -568,12 +578,6 @@ function DockviewPanelActions(props: IDockviewHeaderActionsProps) {
         workspaceId: activeWorkspaceId,
         panelId: nextPanelId,
         title: sourcePanel.title,
-        kind:
-          sourcePanel.kind === "module"
-            ? "extension"
-            : sourcePanel.panel_type === "scatter"
-              ? "scatter"
-              : "builtin",
         builtinPanel: sourcePanel.builtin_panel,
         extension: sourcePanel.extension,
         extensionPanel: sourcePanel.extension_panel,
@@ -1195,7 +1199,6 @@ export function DockviewWorkspace() {
     void addRuntimePanel({
       workspaceId: activeWorkspaceId,
       panelId: `scatter-${requestedLayoutKey.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
-      kind: "builtin",
       builtinPanel: "scatter",
       title: "Embeddings",
       position: "center",
@@ -1279,8 +1282,9 @@ export function DockviewWorkspace() {
         id: runtimePanelId,
         component: RUNTIME_PANEL_COMPONENT,
         title: panel.title,
-        tabComponent:
-          panel.kind === "module" ? undefined : getPanelTabComponent(builtInPanelType),
+        tabComponent: rendersModulePanel(panel)
+          ? undefined
+          : getPanelTabComponent(builtInPanelType),
         params: getRuntimePanelHostParams(
           panel,
           panelStates[panel.id],

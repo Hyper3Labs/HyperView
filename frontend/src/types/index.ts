@@ -163,8 +163,6 @@ export interface RuntimePanelDefinition {
   static_reason: string | null;
 }
 
-export type RuntimePanelKind = "module" | "builtin";
-
 export type RuntimePanelPosition = "center" | "right" | "bottom";
 
 export type RuntimePanelDirection = "right" | "left" | "above" | "below" | "within";
@@ -183,7 +181,6 @@ export interface RuntimePanelLayout {
 
 export interface RuntimePanel {
   id: string;
-  kind: RuntimePanelKind;
   panel_type: string;
   source: string;
   renderer: string;

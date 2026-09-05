@@ -427,7 +427,6 @@ export async function addRuntimePanel(args: {
   workspaceId: string;
   panelId: string;
   title?: string | null;
-  kind?: "extension" | "scatter" | "builtin";
   builtinPanel?: string | null;
   extension?: string | null;
   extensionPanel?: string | null;
@@ -450,7 +449,6 @@ export async function addRuntimePanel(args: {
     args: {
       panel_id: args.panelId,
       title: args.title ?? null,
-      kind: args.kind ?? "extension",
       builtin_panel: args.builtinPanel ?? null,
       extension: args.extension ?? null,
       extension_panel: args.extensionPanel ?? null,
