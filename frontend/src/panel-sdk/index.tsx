@@ -21,10 +21,9 @@ import {
   fetchRuntimeState,
   fetchSamplesBatch,
   fetchSimilarSamples,
-  fetchStaticBundleManifest,
+  getCapabilities,
   getRuntimeClientId,
   isAbortError,
-  isStaticBundle,
   listTools as listRuntimeTools,
   runControlCommand,
   runTool as runRuntimeTool,
@@ -36,8 +35,10 @@ import {
   type CollectionItem,
   type OrbitView3DRequest,
   type ToolMetadata,
+  type Capabilities,
 } from "@/lib/api";
 import { RUNTIME_PANEL_PREFIX } from "@/lib/dockviewPanelPolicy";
+import { useCapabilities } from "@/lib/useCapabilities";
 import { useColorSettings } from "@/store/useColorSettings";
 import { useStore } from "@/store/useStore";
 import type {
@@ -77,7 +78,7 @@ export interface HyperViewCommandClient {
 
 /** Whether natural-language text-query inference is available in this runtime. */
 export function supportsTextSearch(dataset?: DatasetInfo | null): boolean {
-  if (isStaticBundle()) return false;
+  if (!getCapabilities().text_search) return false;
   return Boolean(
     dataset?.indexes?.some((index) => index.query_modes.includes("text"))
   );
@@ -99,55 +100,40 @@ export function supportsSampleSimilarity(dataset?: DatasetInfo | null): boolean 
 /** Whether live or explicitly exported image-query similarity is available. */
 export function useSupportsSampleSimilarity(): boolean {
   const dataset = useStore((state) => state.datasetInfo);
-  const [supported, setSupported] = React.useState(false);
+  const capabilities = useCapabilities();
 
-  React.useEffect(() => {
-    let cancelled = false;
-    if (!isStaticBundle()) {
-      setSupported(supportsSampleSimilarity(dataset));
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    void fetchStaticBundleManifest()
-      .then((manifest) => {
-        if (!cancelled) {
-          setSupported(manifest?.capabilities.sample_similarity === true);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setSupported(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [dataset]);
-
-  return supported;
+  // A Static Space answers from its manifest, which knows whether the export
+  // wrote a similarity index; a live server answers from the dataset's own
+  // indexes. Both arrive here as the same capability.
+  if (!capabilities.sample_similarity) return false;
+  return capabilities.server_runtime ? supportsSampleSimilarity(dataset) : true;
 }
 
 /** Whether the current runtime can resolve a lasso for this layout dimension. */
 export function supportsLassoSelection(layoutDimension: 2 | 3): boolean {
-  return layoutDimension === 2 || !isStaticBundle();
+  const capabilities = getCapabilities();
+  return layoutDimension === 2 ? capabilities.lasso_2d : capabilities.lasso_3d;
 }
 
 /** Hydration-safe reactive form of {@link supportsLassoSelection}. */
 export function useSupportsLassoSelection(layoutDimension: 2 | 3): boolean {
-  const [supported, setSupported] = React.useState(true);
-  React.useEffect(() => {
-    setSupported(supportsLassoSelection(layoutDimension));
-  }, [layoutDimension]);
-  return supported;
+  const capabilities = useCapabilities();
+  return layoutDimension === 2 ? capabilities.lasso_2d : capabilities.lasso_3d;
 }
+
+/**
+ * Everything this host lets a panel do, as one object.
+ *
+ * The `useSupports*` hooks above each answer one question; this is the whole
+ * contract the host published (src/hyperview/capabilities.py), so a panel can
+ * ask about a capability the SDK has no dedicated hook for.
+ */
+export { useCapabilities };
+export type { Capabilities };
 
 /** Whether this panel can call Python-backed extension tools. */
 export function useSupportsTools(): boolean {
-  const [supported, setSupported] = React.useState(false);
-  React.useEffect(() => {
-    setSupported(!isStaticBundle());
-  }, []);
-  return supported;
+  return useCapabilities().python_tools;
 }
 
 export interface HyperViewToolClient {
@@ -327,7 +313,7 @@ export function createHyperViewPanelClient(workspaceId: string | null): HyperVie
     },
     async setActiveLayout(layoutKey) {
       if (!workspaceId) throw new Error("No active workspace");
-      if (isStaticBundle()) return fetchRuntimeState(workspaceId);
+      if (!getCapabilities().runtime_mutations) return fetchRuntimeState(workspaceId);
       const payload = await runControlCommand({
         command: "workspace.active-layout.set",
         target: { workspace_id: workspaceId },
@@ -364,13 +350,13 @@ export function useCommandClient(): HyperViewCommandClient {
       setActiveLayout: async (layoutKey: string | null) => {
         setActiveLayoutKey(layoutKey);
         const snapshot = await client.setActiveLayout(layoutKey);
-        if (!isStaticBundle()) applyRuntimeSnapshot(snapshot);
+        if (getCapabilities().runtime_mutations) applyRuntimeSnapshot(snapshot);
         return snapshot;
       },
       setLayoutView: async (layoutKey: string, camera3d: OrbitView3DRequest | null) => {
         setLayoutViewCamera(layoutKey, camera3d);
         const snapshot = await client.setLayoutView(layoutKey, camera3d);
-        if (!isStaticBundle()) applyRuntimeSnapshot(snapshot);
+        if (getCapabilities().runtime_mutations) applyRuntimeSnapshot(snapshot);
         return snapshot;
       },
     };
@@ -381,7 +367,7 @@ const STATIC_TOOLS_UNAVAILABLE =
   "Tools require the HyperView server and are unavailable in static exports.";
 
 function assertToolsAvailable(): void {
-  if (isStaticBundle()) {
+  if (!getCapabilities().python_tools) {
     throw new Error(STATIC_TOOLS_UNAVAILABLE);
   }
 }
@@ -623,7 +609,7 @@ export function useSelection(options?: { panelId?: string | null }) {
       }
       const sampleIds = Array.from(new Set(ids));
       clearLassoSelection();
-      if (isStaticBundle()) {
+      if (!getCapabilities().runtime_mutations) {
         setSelectedIds(new Set(sampleIds), "panel");
         return updateStaticSelection(sampleIds);
       }
@@ -1272,6 +1258,7 @@ export interface HyperViewPanelSdkGlobal {
     useSupportsSampleSimilarity: typeof useSupportsSampleSimilarity;
     useSupportsTextSearch: typeof useSupportsTextSearch;
     useSupportsTools: typeof useSupportsTools;
+    useCapabilities: typeof useCapabilities;
   };
   createClient: typeof createHyperViewPanelClient;
 }
@@ -1319,6 +1306,7 @@ export function installHyperViewPanelSdkGlobal() {
       useSupportsSampleSimilarity,
       useSupportsTextSearch,
       useSupportsTools,
+      useCapabilities,
     },
     createClient: createHyperViewPanelClient,
   };

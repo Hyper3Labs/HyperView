@@ -12,6 +12,7 @@
   "hooks": [
     "listTools",
     "useActiveLayout",
+    "useCapabilities",
     "useCollection",
     "useCommandClient",
     "useDatasetInfo",
