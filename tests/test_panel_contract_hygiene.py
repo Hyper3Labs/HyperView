@@ -10,7 +10,9 @@ from hyperview.runtime import CustomPanelSpec, PanelStateEntry, WorkspaceUiState
 
 ROOT = Path(__file__).resolve().parents[1]
 PANEL_SDK_SOURCE = ROOT / "frontend" / "src" / "panel-sdk" / "index.tsx"
-REFERENCE_PANEL_SOURCE = ROOT / "src" / "hyperview" / "shipped_extensions" / "reference" / "panel.jsx"
+REFERENCE_PANEL_SOURCE = (
+    ROOT / "src" / "hyperview" / "shipped_extensions" / "reference" / "panel.jsx"
+)
 
 
 def test_v2_sdk_exposes_generic_similarity_hook_to_extensions() -> None:
@@ -42,9 +44,7 @@ def test_custom_panel_snapshot_carries_state_only_in_panel_state_map() -> None:
 
 
 def test_custom_panel_kind_is_normalized_and_unknown_values_fail_clearly() -> None:
-    scatter = CustomPanelSpec.from_dict(
-        {"id": "map", "title": "Map", "kind": "scatter"}
-    )
+    scatter = CustomPanelSpec.from_dict({"id": "map", "title": "Map", "kind": "scatter"})
     extension = CustomPanelSpec.from_dict(
         {"id": "summary", "title": "Summary", "kind": "extension"}
     )
@@ -59,9 +59,7 @@ def test_custom_panel_kind_is_normalized_and_unknown_values_fail_clearly() -> No
         ValueError,
         match="Unsupported panel kind 'iframe'; expected 'builtin' or 'module'",
     ):
-        CustomPanelSpec.from_dict(
-            {"id": "legacy", "title": "Legacy", "kind": "iframe"}
-        )
+        CustomPanelSpec.from_dict({"id": "legacy", "title": "Legacy", "kind": "iframe"})
 
 
 def test_extension_panel_definitions_do_not_publish_lifecycle(tmp_path: Path) -> None:
@@ -128,10 +126,20 @@ def test_shipped_reference_panel_uses_only_components_exported_by_v2_sdk() -> No
     panel_source = REFERENCE_PANEL_SOURCE.read_text(encoding="utf-8")
     sdk_source = PANEL_SDK_SOURCE.read_text(encoding="utf-8")
 
-    component_match = re.search(r"const \{ ([^}]+) \} = components;", panel_source)
+    component_match = re.search(
+        r"(?m)^const \{((?:(?!^const \{)[\s\S])*?)\} = components;", panel_source
+    )
     assert component_match is not None, "the reference panel should demonstrate the component kit"
+    # The destructure may carry inline fallbacks (``Panel = (...) => ...``); the
+    # names it binds are the identifiers that open each entry.
+    body = component_match.group(1)
+    if "\n" in body:
+        used_components = re.findall(r"(?m)^\s*([A-Za-z_]\w*)\s*(?:=|,|$)", body)
+    else:
+        used_components = [name.strip() for name in body.split(",") if name.strip()]
+    assert used_components, "the reference panel should demonstrate the component kit"
 
     declaration = re.search(r"components:\s*\{([\s\S]*?)\};", sdk_source)
     assert declaration is not None
-    for component in (name.strip() for name in component_match.group(1).split(",")):
-        assert f"{component}: typeof {component};" in declaration.group(1)
+    for component in used_components:
+        assert f"{component}: typeof {component};" in declaration.group(1), component
