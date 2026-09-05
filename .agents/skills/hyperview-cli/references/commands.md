@@ -483,7 +483,6 @@ Add the built-in samples panel through the same runtime panel API:
 hyperview ui panel add \
   --workspace research \
   --panel-id samples \
-  --kind builtin \
   --builtin-panel samples \
   --props-json '{"mode":"browse"}' \
   --position right
@@ -496,7 +495,6 @@ hyperview ui panel add \
   --workspace research \
   --panel-id uncha-poincare \
   --title "UNCHA" \
-  --kind scatter \
   --layout-key <uncha-poincare-layout-key> \
   --position center
 
@@ -504,7 +502,6 @@ hyperview ui panel add \
   --workspace research \
   --panel-id hycoclip-poincare \
   --title "HyCoCLIP" \
-  --kind scatter \
   --layout-key <hycoclip-poincare-layout-key> \
   --position center \
   --reference-panel-id uncha-poincare \

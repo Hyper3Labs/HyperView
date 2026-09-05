@@ -829,7 +829,7 @@ class PanelStateEntry:
         }
 
 
-def _authored_collection_id(panel: CustomPanelSpec) -> str | None:
+def _authored_collection_id(panel: PanelInstance) -> str | None:
     """The collection a view authored for a Samples panel, if any."""
 
     authored = panel.props.get("collectionId", panel.props.get("collection_id"))
@@ -1715,7 +1715,7 @@ class HyperViewRuntime:
     def _reopen_samples_collection_locked(
         self,
         workspace: WorkspaceState,
-        panel: CustomPanelSpec,
+        panel: PanelInstance,
     ) -> None:
         """Move a Samples panel the workspace already knows onto its newly authored collection.
 

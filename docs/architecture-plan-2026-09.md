@@ -257,3 +257,43 @@ Two operational facts that came out of the same debugging:
   authored collection reopens the Samples panel on it, the same way authored
   initial state wins over a previous run; an unchanged view still leaves a
   visitor's navigation alone.
+
+### D4 status (2026-09-05)
+
+`kind` is deleted. It is gone from the placed-panel record, from
+`to_dict`/`to_storage_dict`, from the exported `api/runtime.json`, from the
+frontend's `RuntimePanel`, and from every branch that used to read it. What it
+used to decide is read off `renderer` -- `native:*` for a panel the shell draws,
+`module:*` for one an extension draws -- which the runtime resolves for every
+panel from `builtin_panel`, `module_file` or `extension`/`extension_panel`
+before it goes on the wire. `renders_native()` / `renders_module()` in Python
+and one predicate over `renderer` in the shell replaced the enum comparisons.
+
+Legacy payloads still load. `migrate_legacy_panel_payload` in `runtime.py` is
+the only place that knows the old values -- persisted `workspaces.json`,
+bundles exported before this, older `workspace.panel.add` scripts -- and it
+folds each into what it implied before dropping it: `scatter` sets
+`panel_type: scatter`, `renderer: native:scatter` and `source: shipped`;
+`builtin` sets `renderer: native:<builtin_panel>`; `module` and `extension`
+implied nothing `renderer` and `module_file` do not already say. An unknown
+value is still a clear error. The `workspace.panel.add` argument and the CLI
+`--kind` flag are accepted, ignored, deprecated (the flag is hidden, the
+command answers with a deprecation message), and dropped from the skill docs.
+
+`CustomPanelSpec` is now `PanelInstance`, with `CustomPanelSpec = PanelInstance`
+kept as a module-level alias so external code and the public `hyperview` API
+keep importing.
+
+Two renames D4 asks for were deliberately not done here:
+
+- **`custom_panels` -> `panels`.** `panels` is already taken on that object:
+  `ui.panels` is the panel *state* map, keyed by panel id. Renaming the
+  placed-panel list to `panels` would put two different things under one name in
+  the same payload, which is the exact failure D4 exists to fix. The rename
+  needs `ui.panels` renamed first (`panel_state`, say), and that is a second
+  wire change with its own bundle-compatibility cost.
+- **`source: shipped | extension | module` -> `origin: bundled | local`.** Both
+  the key and its value set change, so every bundle exported before it stops
+  round-tripping through a reader that has not learned the mapping. It is worth
+  doing with the next deliberate bundle-format revision, alongside
+  `custom_panels`, not as a side effect of deleting an enum.
