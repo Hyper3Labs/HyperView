@@ -72,6 +72,19 @@ function resolveRuntimePanelComponent(moduleValue: unknown): ComponentType<Runti
   throw new Error("Unsupported panel module export shape.");
 }
 
+/**
+ * Whether this panel is drawn by loading a panel module.
+ *
+ * `kind` is only the fallback for a panel whose renderer a snapshot never
+ * carried; the renderer namespace is the answer whenever there is one.
+ */
+function usesModuleRenderer(renderer: string | null | undefined, kind: string): boolean {
+  if (typeof renderer === "string" && renderer.length > 0) {
+    return renderer.startsWith("module:");
+  }
+  return kind === "module";
+}
+
 function PanelUnavailable() {
   return (
     <Panel className="h-full">
@@ -244,15 +257,19 @@ export function PanelHost(props: IDockviewPanelProps<PanelHostParams>) {
     return <StaticPanelUnavailable panel={panel} />;
   }
 
+  // The renderer reference decides which host draws the panel, not `kind`.
+  // A `module:` renderer is loaded as an ESM module wherever it was declared --
+  // core, a shipped extension, an installed one -- and a `native:` renderer
+  // resolves to a component this shell bundles. Routing on `kind` made a
+  // module panel that arrived labelled `builtin` render as an unsupported
+  // native renderer instead of loading its module.
+  const rendersModule = usesModuleRenderer(panel.renderer, panel.kind);
+
   return (
     <PanelInstanceProvider
-      value={panelInstanceValue(
-        panel,
-        panelState,
-        panel.kind === "builtin" ? props.params : undefined
-      )}
+      value={panelInstanceValue(panel, panelState, rendersModule ? undefined : props.params)}
     >
-      {panel.kind === "module" ? (
+      {rendersModule ? (
         <ModulePanelHost panel={panel} />
       ) : (
         <BuiltInPanelHost panel={panel} />

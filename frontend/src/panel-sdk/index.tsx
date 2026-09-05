@@ -29,6 +29,7 @@ import {
   runControlCommand,
   runTool as runRuntimeTool,
   runtimeSnapshotFromCommandResult,
+  SAMPLES_PANEL_ID,
   setLayoutView,
   updateStaticSelection,
   type ControlCommandResult,
@@ -262,9 +263,6 @@ function workspaceTarget(workspaceId: string | null) {
   return { workspace_id: workspaceId ?? "default" };
 }
 
-// Keep in sync with SAMPLES_PANEL_STATE_ID in src/hyperview/runtime.py.
-const SAMPLES_PANEL_STATE_ID = "samples";
-
 /**
  * Address a collection command at a panel, or leave it workspace-scoped.
  *
@@ -275,6 +273,28 @@ const SAMPLES_PANEL_STATE_ID = "samples";
  */
 function collectionPanelTarget(panelId: string | null | undefined) {
   return panelId ? { panel_id: panelId } : undefined;
+}
+
+/**
+ * The panel a collection command issued from this host should be addressed at.
+ *
+ * This is the write side of `usePanelInteractions`' read rule, and it has to
+ * agree with it: a panel reads its own collection state once it owns a
+ * collection, so that is exactly when it should write there too. A panel that
+ * owns none -- the scatter panel, or an extension panel that only computes ids
+ * for the shared sample view -- stays workspace-scoped, and the command lands
+ * on the Samples panel as before. An explicit id always wins.
+ */
+function useCollectionOwnerPanelId(explicitPanelId?: string | null): string | null {
+  const instance = usePanelInstance();
+  const hostPanelId = instance.panelId ?? null;
+  const hostOwnsCollection = useStore((state) => {
+    if (!hostPanelId) return false;
+    const collectionId = state.panelStates[hostPanelId]?.state?.collection_id;
+    return typeof collectionId === "string" && collectionId.length > 0;
+  });
+  if (explicitPanelId) return explicitPanelId;
+  return hostOwnsCollection ? hostPanelId : null;
 }
 
 function panelLayoutPatch(options: PanelResizeOptions): Record<string, unknown> {
@@ -578,7 +598,15 @@ export function usePanelActions() {
   return useMemo(() => ({ focusPanel, updateProps }), [focusPanel, updateProps]);
 }
 
-export function useSelection() {
+/**
+ * Workspace selection, plus the lasso that presents one as a result set.
+ *
+ * `panelId` names the panel whose sample view a presented result set lands in;
+ * by default it is the calling panel when that panel owns a collection, and the
+ * Samples panel otherwise.
+ */
+export function useSelection(options?: { panelId?: string | null }) {
+  const collectionPanelId = useCollectionOwnerPanelId(options?.panelId);
   const activeWorkspaceId = useStore((state) => state.activeWorkspaceId);
   const applyRuntimeSnapshot = useStore((state) => state.applyRuntimeSnapshot);
   const selectedIds = useStore((state) => state.selectedIds);
@@ -613,11 +641,14 @@ export function useSelection() {
   );
 
   const presentSelection = useCallback(
-    async (ids: string[], source: string) => {
+    async (ids: string[], source: string, panelId?: string | null) => {
       if (!activeWorkspaceId) throw new Error("No active workspace");
       const payload = await runControlCommand({
         command: "collection.selection.set",
-        target: { workspace_id: activeWorkspaceId },
+        target: {
+          workspace_id: activeWorkspaceId,
+          ...collectionPanelTarget(panelId ?? collectionPanelId),
+        },
         args: {
           sample_ids: Array.from(new Set(ids)),
           focus: true,
@@ -629,7 +660,7 @@ export function useSelection() {
       clearLassoSelection();
       return snapshot;
     },
-    [activeWorkspaceId, applyRuntimeSnapshot, clearLassoSelection]
+    [activeWorkspaceId, applyRuntimeSnapshot, clearLassoSelection, collectionPanelId]
   );
 
   const selectLasso = useCallback(
@@ -640,6 +671,7 @@ export function useSelection() {
       view3d?: OrbitView3DRequest | null;
       viewportWidth?: number | null;
       viewportHeight?: number | null;
+      panelId?: string | null;
     }) => {
       setLassoLoading(true);
       setLassoError(null);
@@ -660,7 +692,7 @@ export function useSelection() {
           offset += page.sample_ids.length;
           if (page.sample_ids.length === 0) break;
         } while (offset < total);
-        await presentSelection(ids, "scatter-lasso");
+        await presentSelection(ids, "scatter-lasso", query.panelId ?? null);
         return ids;
       } catch (reason) {
         const message = reason instanceof Error ? reason.message : "Lasso selection failed";
@@ -783,7 +815,7 @@ export function usePanelInteractions(options?: { panelId?: string | null }) {
     requestedPanelState.collection_id.length > 0;
   const collectionPanelState = ownsCollection
     ? (requestedPanelState as Record<string, unknown>)
-    : panelStates[SAMPLES_PANEL_STATE_ID]?.state ?? {};
+    : panelStates[SAMPLES_PANEL_ID]?.state ?? {};
   const collectionId =
     typeof collectionPanelState.collection_id === "string"
       ? collectionPanelState.collection_id
@@ -1211,6 +1243,14 @@ export interface HyperViewPanelSdkGlobal {
     PanelToolbarButton: typeof PanelToolbarButton;
     PanelToolbarIconButton: typeof PanelToolbarIconButton;
   };
+  /**
+   * Ids and other literals a panel would otherwise hard-code. `SAMPLES_PANEL_ID`
+   * is the panel that owns the workspace's default sample view, and the panel a
+   * collection command lands on when it names no other.
+   */
+  constants: {
+    SAMPLES_PANEL_ID: typeof SAMPLES_PANEL_ID;
+  };
   hooks: {
     useCommandClient: typeof useCommandClient;
     useQuery: typeof useQuery;
@@ -1254,6 +1294,9 @@ export function installHyperViewPanelSdkGlobal() {
       PanelToolbar,
       PanelToolbarButton,
       PanelToolbarIconButton,
+    },
+    constants: {
+      SAMPLES_PANEL_ID,
     },
     hooks: {
       useCommandClient,
