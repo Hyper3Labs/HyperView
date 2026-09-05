@@ -203,3 +203,33 @@ through the extension path and opening extension panels from the UI, D6 one
 capability table, D7 `demo.toml` (deprioritised: demos are intentionally
 free-form). A restore data-safety fix (media copied out of the bundle, export
 refusing to read from its own output) is in progress for 1.1.1.
+
+### Panel parity (branch `fix/panel-parity`)
+
+Closed on this branch, against the D4/D5/D6 list:
+
+- **The renderer namespace decides rendering, not `kind`.** The two checks that
+  forced core panels to be `native:` and extension panels to be `module:` are
+  gone, and `PanelHost` routes on the renderer prefix. A core panel may ship as
+  a module and an installed extension may name a bundled component; both draw.
+- **`kind` is migrated in one place.** `_migrate_kind()` is the single
+  translation from the legacy transport values (`scatter`, `extension`) to the
+  two the runtime keeps.
+- **`module_file` is off the wire.** `WorkspaceState.to_dict()` no longer
+  discloses the server-side path of a panel module; the registry keeps it
+  through `to_dict(for_storage=True)`, so a restart still reopens the panel.
+- **The View menu opens extension panels.** A panel definition now carries
+  `extension_panel`, the manifest id, so the frontend can send the extension
+  request shape for a `module:` renderer instead of hard-coding `builtin` --
+  which used to fail outright for an installed extension and, for a shipped one
+  like `reference`, dock a module panel into the native host.
+- **`SAMPLES_PANEL_ID` is public.** `hv.ui.SAMPLES_PANEL_ID` and
+  `sdk.constants.SAMPLES_PANEL_ID` name the panel that collection commands
+  default to, on both sides of the wire.
+- **Every collection command is panel-scoped.** `collection.search.create` and
+  `panel.samples.retrieval.set-anchor` take a `CollectionTarget` like the other
+  three, in the runtime and in the Static Space emulator alike.
+
+Still open after it: `kind` itself survives on `CustomPanelSpec` and the
+transport (D4 wants it deleted, not merely made non-deciding), and capability
+information is still defined in more than one table (D6).
