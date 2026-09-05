@@ -257,3 +257,29 @@ def test_workspace_registry_reads_remain_valid_during_writes(tmp_path: Path) -> 
         reader.join(timeout=5)
 
     assert not parse_errors
+
+
+def test_runtime_config_dir_follows_hyperview_home(monkeypatch, tmp_path) -> None:
+    from hyperview.runtime import get_runtime_config_dir
+    from hyperview.storage.config import get_default_datasets_dir, get_default_media_dir
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("HYPERVIEW_HOME", str(home))
+    monkeypatch.delenv("HYPERVIEW_DATASETS_DIR", raising=False)
+    monkeypatch.delenv("HYPERVIEW_MEDIA_DIR", raising=False)
+
+    assert get_default_datasets_dir() == home / "datasets"
+    assert get_default_media_dir() == home / "media"
+    assert get_runtime_config_dir() == home
+
+    # A datasets dir elsewhere moves the data, not the registries.
+    monkeypatch.setenv("HYPERVIEW_DATASETS_DIR", str(tmp_path / "elsewhere" / "datasets"))
+    assert get_runtime_config_dir() == home
+
+
+def test_runtime_config_dir_without_home_is_the_datasets_parent(monkeypatch, tmp_path) -> None:
+    from hyperview.runtime import get_runtime_config_dir
+
+    monkeypatch.delenv("HYPERVIEW_HOME", raising=False)
+    monkeypatch.setenv("HYPERVIEW_DATASETS_DIR", str(tmp_path / "run" / "datasets"))
+    assert get_runtime_config_dir() == tmp_path / "run"

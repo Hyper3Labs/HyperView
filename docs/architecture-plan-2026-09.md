@@ -247,12 +247,13 @@ collection when the workspace stores it and falls back to every sample.
 
 Two operational facts that came out of the same debugging:
 
-- The workspace registry lives in the parent of `HYPERVIEW_DATASETS_DIR`
+- The workspace registry lived in the parent of `HYPERVIEW_DATASETS_DIR`
   (`<parent>/workspaces.json`), so two datasets dirs with the same parent
-  share workspaces. A reproducible export needs its own parent directory, not
-  just its own datasets dir.
-- Re-applying a view over a persisted workspace keeps the previous run's panel
-  state when the panel id already exists, even if the authored `collectionId`
-  prop changed. Authored *initial state* wins over a previous run; authored
-  *props* do not. Whether the Samples collection prop should be treated as
-  initial state is open.
+  shared workspaces. Fixed by naming the home directory: `HYPERVIEW_HOME`
+  holds datasets, media, and the registries; `HYPERVIEW_DATASETS_DIR` alone
+  keeps the old parent rule. Build-then-export runs set `HYPERVIEW_HOME`.
+- Re-applying a view over a persisted workspace kept the previous run's panel
+  state even when the authored `collectionId` prop changed. Now a changed
+  authored collection reopens the Samples panel on it, the same way authored
+  initial state wins over a previous run; an unchanged view still leaves a
+  visitor's navigation alone.

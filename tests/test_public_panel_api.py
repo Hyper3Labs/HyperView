@@ -175,6 +175,46 @@ def test_a_samples_panel_opens_on_its_authored_collection_whatever_its_id() -> N
     assert panels["everything"].state["collection"]["kind"] == "all"
 
 
+def test_reauthoring_the_samples_collection_moves_a_persisted_panel() -> None:
+    session, runtime, workspace_id = _make_session()
+    first = session.create_collection(["sample-4", "sample-2"], name="A", workspace_id=workspace_id)
+    second = session.create_collection(["sample-1"], name="B", workspace_id=workspace_id)
+
+    session.ui.apply_view(
+        hv.ui.View(hv.ui.Samples(id="samples", mode="results", collection_id=first)),
+        workspace_id=workspace_id,
+    )
+    # A visitor navigates elsewhere; re-applying the same view must not undo that.
+    runtime.patch_panel_state(
+        workspace_id,
+        "samples",
+        _samples_state_for(runtime, workspace_id, second),
+    )
+    session.ui.apply_view(
+        hv.ui.View(hv.ui.Samples(id="samples", mode="results", collection_id=first)),
+        workspace_id=workspace_id,
+    )
+    assert runtime.get_workspace(workspace_id).ui.panels["samples"].state["collection_id"] == second
+
+    # The author changing the collection is a new statement, and it wins.
+    session.ui.apply_view(
+        hv.ui.View(hv.ui.Samples(id="samples", mode="results", collection_id=second)),
+        workspace_id=workspace_id,
+    )
+    session.ui.apply_view(
+        hv.ui.View(hv.ui.Samples(id="samples", mode="results", collection_id=first)),
+        workspace_id=workspace_id,
+    )
+    state = runtime.get_workspace(workspace_id).ui.panels["samples"].state
+    assert state["collection_id"] == first
+    assert state["collection"]["id"] == first
+
+
+def _samples_state_for(runtime, workspace_id: str, collection_id: str) -> dict:
+    collection = runtime.get_workspace(workspace_id).collections[collection_id]
+    return {"collection_id": collection.id, "collection": collection.to_dict()}
+
+
 def test_an_unknown_authored_collection_falls_back_to_every_sample() -> None:
     session, runtime, workspace_id = _make_session()
 

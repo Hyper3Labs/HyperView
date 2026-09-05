@@ -7,6 +7,7 @@ import hashlib
 import importlib
 import inspect
 import json
+import os
 import queue
 import threading
 import time
@@ -33,7 +34,7 @@ from hyperview.panel_definitions import (
     merge_default_props,
     validate_json_contract,
 )
-from hyperview.storage.config import StorageConfig
+from hyperview.storage.config import StorageConfig, get_default_home_dir
 from hyperview.storage.schema import (
     index_id_for_space_key,
     parse_layout_dimension,
@@ -156,8 +157,19 @@ def _json_merge_patch(current: dict[str, Any], patch: dict[str, Any]) -> dict[st
 
 
 def get_runtime_config_dir() -> Path:
-    datasets_dir = StorageConfig.default().datasets_dir
-    config_dir = datasets_dir.parent
+    """Where the workspace, provider, and job registries live.
+
+    ``HYPERVIEW_HOME`` when set. Otherwise the parent of the datasets
+    directory, which is ``~/.hyperview`` by default -- and, when only
+    ``HYPERVIEW_DATASETS_DIR`` is set, whatever directory contains it. Two
+    datasets directories with the same parent therefore share one registry;
+    set ``HYPERVIEW_HOME`` to keep a run fully separate.
+    """
+
+    if os.environ.get("HYPERVIEW_HOME"):
+        config_dir = get_default_home_dir()
+    else:
+        config_dir = StorageConfig.default().datasets_dir.parent
     config_dir.mkdir(parents=True, exist_ok=True)
     return config_dir
 
@@ -750,6 +762,15 @@ class PanelStateEntry:
             "state": _json_object_copy(self.state),
             "state_revision": self.state_revision,
         }
+
+
+def _authored_collection_id(panel: CustomPanelSpec) -> str | None:
+    """The collection a view authored for a Samples panel, if any."""
+
+    authored = panel.props.get("collectionId", panel.props.get("collection_id"))
+    if isinstance(authored, str) and authored.strip():
+        return authored.strip()
+    return None
 
 
 def _samples_collection_state(collection: CollectionState) -> dict[str, Any]:
@@ -1619,12 +1640,42 @@ class HyperViewRuntime:
         know -- opens on every sample, as before.
         """
 
-        authored = panel.props.get("collectionId", panel.props.get("collection_id"))
-        if isinstance(authored, str) and authored.strip():
-            stored = workspace.collections.get(authored.strip())
+        authored = _authored_collection_id(panel)
+        if authored is not None:
+            stored = workspace.collections.get(authored)
             if stored is not None:
                 return stored
         return self._build_all_collection_locked(workspace)
+
+    def _reopen_samples_collection_locked(
+        self,
+        workspace: WorkspaceState,
+        panel: CustomPanelSpec,
+    ) -> None:
+        """Move a Samples panel the workspace already knows onto its newly authored collection.
+
+        A previous run's state normally survives re-applying a view, so a
+        visitor's navigation is not undone by a restart. Changing the authored
+        ``collection_id`` is the author speaking again, and it wins the same
+        way authored initial state does.
+        """
+
+        definition = self._definition_for_panel_spec_locked(panel)
+        if definition is None or definition.panel_type != "samples" or not workspace.dataset_name:
+            return
+        existing = workspace.ui.panels.get(panel.id)
+        if existing is None:
+            return
+        state = dict(existing.state)
+        state.update(
+            _samples_collection_state(self._opening_samples_collection_locked(workspace, panel))
+        )
+        if state == existing.state:
+            return
+        workspace.ui.panels[panel.id] = PanelStateEntry(
+            state=state,
+            state_revision=existing.state_revision + 1,
+        )
 
     def _apply_initial_panel_states_locked(
         self,
@@ -2814,6 +2865,7 @@ class HyperViewRuntime:
                     self._bump_version()
                 return workspace
 
+            previous_panels = {panel.id: panel for panel in workspace.ui.custom_panels}
             workspace.ui.custom_panels = next_panels
             workspace.ui.has_explicit_view = next_has_explicit_view
             workspace.ui.active_panel_id = next_active_panel_id
@@ -2823,6 +2875,11 @@ class HyperViewRuntime:
             self._prune_panel_states_locked(workspace)
             for panel in next_panels:
                 self._seed_default_panel_state_locked(workspace, panel)
+                previous = previous_panels.get(panel.id)
+                if previous is not None and _authored_collection_id(
+                    previous
+                ) != _authored_collection_id(panel):
+                    self._reopen_samples_collection_locked(workspace, panel)
             self._apply_initial_panel_states_locked(
                 workspace,
                 next_panels,

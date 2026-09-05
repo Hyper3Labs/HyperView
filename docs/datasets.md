@@ -12,7 +12,7 @@ dataset = hv.Dataset("my_dataset")
 dataset = hv.Dataset("my_dataset", persist=False)
 ```
 
-**Storage location:** `~/.hyperview/datasets/` (configurable via `HYPERVIEW_DATABASE_DIR`)
+**Storage location:** `~/.hyperview/datasets/`. `HYPERVIEW_HOME` moves the whole `~/.hyperview` tree (datasets, media, and the workspace registry together); `HYPERVIEW_DATASETS_DIR` moves only the datasets.
 
 Internally, each dataset is stored as two Lance tables (directories) inside that folder:
 - `hyperview_{dataset_name}.lance/` (samples)

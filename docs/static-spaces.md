@@ -192,6 +192,15 @@ the image and passes the flag, so the container keeps one copy of the media
 instead of two. Do not use it on a workstation, where the bundle can be moved,
 deleted, or exported over.
 
+HyperView keeps its state under one home directory: `~/.hyperview`, or
+`HYPERVIEW_HOME` when set. Datasets, media, and the workspace registry
+(`workspaces.json`) all live there. `HYPERVIEW_DATASETS_DIR` moves the datasets
+alone; without `HYPERVIEW_HOME` the registry then sits in that directory's
+parent, so two datasets directories with the same parent share one registry.
+A reproducible build-then-export run should set `HYPERVIEW_HOME` to a fresh
+directory, so nothing a previous run persisted (panel state included) leaks
+into the bundle.
+
 Restore is idempotent. A container that restarts against the same datasets
 directory reuses the dataset it finds rather than re-ingesting, and
 re-registering vectors and coordinates is an upsert.

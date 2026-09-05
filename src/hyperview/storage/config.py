@@ -5,28 +5,42 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+def get_default_home_dir() -> Path:
+    """The directory HyperView keeps its state in.
+
+    ``HYPERVIEW_HOME`` when set, otherwise ``~/.hyperview``. Datasets, media,
+    and the workspace, provider, and job registries all live under it unless
+    an individual ``HYPERVIEW_*_DIR`` variable moves one of them. Point two
+    processes at different homes and they share nothing.
+    """
+    env_dir = os.environ.get("HYPERVIEW_HOME")
+    if env_dir:
+        return Path(env_dir)
+    return Path.home() / ".hyperview"
+
+
 def get_default_datasets_dir() -> Path:
     """Get the default datasets directory.
 
-    Uses HYPERVIEW_DATASETS_DIR env var if set, otherwise ~/.hyperview/datasets/
+    Uses HYPERVIEW_DATASETS_DIR env var if set, otherwise <home>/datasets/
     Each dataset gets its own subdirectory with isolated LanceDB tables.
     """
     env_dir = os.environ.get("HYPERVIEW_DATASETS_DIR")
     if env_dir:
         return Path(env_dir)
-    return Path.home() / ".hyperview" / "datasets"
+    return get_default_home_dir() / "datasets"
 
 
 def get_default_media_dir() -> Path:
     """Get the default media directory for downloaded images.
 
-    Uses HYPERVIEW_MEDIA_DIR env var if set, otherwise ~/.hyperview/media/
+    Uses HYPERVIEW_MEDIA_DIR env var if set, otherwise <home>/media/
     Similar to FiftyOne's ~/fiftyone/huggingface/hub/ pattern.
     """
     env_dir = os.environ.get("HYPERVIEW_MEDIA_DIR")
     if env_dir:
         return Path(env_dir)
-    return Path.home() / ".hyperview" / "media"
+    return get_default_home_dir() / "media"
 
 
 @dataclass
