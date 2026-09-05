@@ -297,3 +297,54 @@ Two renames D4 asks for were deliberately not done here:
   round-tripping through a reader that has not learned the mapping. It is worth
   doing with the next deliberate bundle-format revision, alongside
   `custom_panels`, not as a side effect of deleting an enum.
+
+### D6 status (2026-09-05)
+
+Capability is now defined once, in `src/hyperview/capabilities.py`. It names
+two hosting modes (`live`, `static`), the commands a viewer may run in each,
+and the capability flags each permits. The four former copies all derive from
+it:
+
+- `hyperview.server.security.command_allowed_without_token()` calls
+  `command_allowed_in_mode(command, "live")`. Its comment about why the set is
+  closed stays where it was.
+- `static_export.py` writes `capabilities_payload("static", ...)` into the
+  bundle manifest, so `capabilities.commands` ships with every Static Space
+  alongside the flags. Only the facts the export knows — layouts, precomputed
+  similarity, panel statuses — are passed in as overrides.
+- A Live Space answers `GET /api/capabilities` with the same payload.
+- `scripts/emit_capabilities_surface.py` writes
+  `frontend/src/generated/capabilities.ts`. That file is the only place
+  TypeScript names a viewer command, and it is what the shell knows before a
+  manifest or the endpoint answers.
+
+One `useCapabilities()` hook (`frontend/src/lib/useCapabilities.ts`) resolves
+the object: manifest for a Static Space, endpoint for a live server, generated
+mode defaults as the fallback. The emulator in `api.ts` refuses anything
+outside `capabilities.commands`, so a bundle that did not export a command does
+not half-emulate it. The panel SDK exposes the object as
+`hooks.useCapabilities` (v2, additive; the `useSupports*` hooks are unchanged
+and now read the same table).
+
+The Static Space command set is the Live Space set narrowed, not a second list:
+static has no prefix rules, because the emulator implements named commands
+rather than families, and `collection.search.create` is absent for the same
+reason `text_search` is false (D2 — a text query needs a model).
+
+`isStaticBundle()` went from 45 uses across six files to 14, all in
+`frontend/src/lib/api.ts`, and every one is about asset mechanics rather than
+capability: its own definition (line 109) and `detectHostingMode()` (269),
+plus the branches that choose between a REST call and a JSON shard —
+`backendUrl` (102), `resolveStaticSampleUrls` (129),
+`fetchStaticBundleManifest` (247), `runControlCommand` routing (363),
+`fetchDataset` (452), `fetchRuntimeState` (463), `fetchSamples` (588),
+`fetchEmbeddings` (611), `fetchSamplesBatch` (637), `fetchCollectionItems`
+(706), `fetchSimilarSamples` (771), `fetchLassoSelection` (884). "Where does
+this data come from" is not a capability, and a live server that lost a
+capability still fetches over HTTP.
+
+Guarded by `tests/test_capabilities_contract.py` (the security allowlist, the
+static-subset rule, the panel-target commands against the command registry, and
+the generated TypeScript against the Python table), by the manifest assertions
+in `tests/test_static_export.py`, and by the emulator refusal tests in
+`frontend/tests/static-command-emulator.test.mjs`.
