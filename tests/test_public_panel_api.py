@@ -324,7 +324,7 @@ def test_find_layout_separates_two_spaces_of_one_model_by_modality() -> None:
     dataset = _make_dataset(f"find_layout_modality_{uuid4().hex}")
     image_only = _add_layout(
         dataset,
-        model_id="hyper3-clip-v0.5",
+        model_id="hyper3-clip-v1",
         provider="hyper-models",
         geometry="poincare",
         modality="image",
@@ -332,7 +332,7 @@ def test_find_layout_separates_two_spaces_of_one_model_by_modality() -> None:
     )
     multimodal = _add_layout(
         dataset,
-        model_id="hyper3-clip-v0.5",
+        model_id="hyper3-clip-v1",
         provider="hyper-models",
         geometry="poincare",
         modality="multimodal",
@@ -340,12 +340,12 @@ def test_find_layout_separates_two_spaces_of_one_model_by_modality() -> None:
     )
     assert image_only != multimodal
 
-    assert dataset.find_layout(model="hyper3-clip-v0.5", modality="image") == image_only
-    assert dataset.find_layout(model="hyper3-clip-v0.5", modality="multimodal") == multimodal
+    assert dataset.find_layout(model="hyper3-clip-v1", modality="image") == image_only
+    assert dataset.find_layout(model="hyper3-clip-v1", modality="multimodal") == multimodal
 
     # Without the modality the two are indistinguishable, and the error says so.
     with pytest.raises(ValueError) as error:
-        dataset.find_layout(model="hyper3-clip-v0.5", geometry="poincare")
+        dataset.find_layout(model="hyper3-clip-v1", geometry="poincare")
     assert "modality=image" in str(error.value)
     assert "modality=multimodal" in str(error.value)
 

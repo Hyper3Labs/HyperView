@@ -28,10 +28,11 @@ dependencies = [
     "uvicorn[standard]>=0.40.0",
     "embed-anything>=0.7.0",
     "huggingface-hub>=1.11.0,<2.0",
-    # 0.3.1 is the floor, not a preference: 0.3.0 loads the Hyper3-CLIP v0.5 text
+    # 0.3.2 is the floor, not a preference: it publishes the Hyper3-CLIP v1
+    # catalog name. 0.3.0 also loads the Hyper3-CLIP text
     # tower with randomly initialised weights and still returns embeddings, so a
     # resolver allowed to keep 0.3.0 gives silently meaningless text search.
-    "hyper-models>=0.3.1",  # PyPI package: https://pypi.org/project/hyper-models/
+    "hyper-models>=0.3.2",  # PyPI package: https://pypi.org/project/hyper-models/
     "numpy>=1.26.4,<2.4",
     "umap-learn>=0.5.11",
     "pillow>=12.1.0",
@@ -61,7 +62,7 @@ publish = [
     "huggingface-hub>=1.11.0,<2.0",
 ]
 ml = [
-    "hyper-models[ml]>=0.3.1",
+    "hyper-models[ml]>=0.3.2",
     "torch>=2.9.1",
     "torchvision>=0.24.1",
     "timm>=1.0.0",

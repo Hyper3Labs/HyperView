@@ -205,25 +205,25 @@ def test_embed_anything_text_query_passes_list_to_model() -> None:
 
 
 def test_hyper_models_image_only_model_does_not_claim_text_support() -> None:
-    provider = HyperModelsEmbeddings(name="hyper3-clip-v0.5")
+    provider = HyperModelsEmbeddings(name="hyper3-clip-v1")
     provider._model_info = SimpleNamespace(input_name="image", geometry="hyperboloid", dim=513)
 
     assert provider.supports == frozenset({"image"})
 
     with pytest.raises(
         ValueError,
-        match=r"hyper-models model 'hyper3-clip-v0.5' does not support text queries",
+        match=r"hyper-models model 'hyper3-clip-v1' does not support text queries",
     ):
         provider.compute_query_embeddings("dog in park")
 
 
 def test_hyper_models_image_only_text_search_fails_before_encoding() -> None:
-    provider = HyperModelsEmbeddings(name="hyper3-clip-v0.5")
+    provider = HyperModelsEmbeddings(name="hyper3-clip-v1")
     provider._model_info = SimpleNamespace(input_name="image", geometry="hyperboloid", dim=513)
     engine = EmbeddingEngine()
     spec = EmbeddingSpec(
         provider="hyper-models",
-        model_id="hyper3-clip-v0.5",
+        model_id="hyper3-clip-v1",
         modality="multimodal",
     )
     engine._cache[spec.content_hash()] = provider

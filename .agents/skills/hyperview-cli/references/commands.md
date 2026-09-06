@@ -110,7 +110,7 @@ Use built-in providers directly when possible. Hyper3-CLIP is available through
 the `hyper-models` provider:
 
 ```python
-dataset.compute_embeddings(model="hyper3-clip-v0.5", provider="hyper-models")
+dataset.compute_embeddings(model="hyper3-clip-v1", provider="hyper-models")
 ```
 
 Register a custom provider only when the model is not available through a

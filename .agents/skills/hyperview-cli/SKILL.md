@@ -105,7 +105,7 @@ Read [references/extensions.md](references/extensions.md) when the task involves
 - Treat dataset creation and workspace binding as separate steps when needed: `dataset create ...` creates persisted data, `workspace create --dataset ...` or `workspace set-dataset ...` binds it to a workspace.
 - Prefer `workspace create --dataset ...` over separate create and dataset-attach calls when setting up a new workspace.
 - In Python dataset setup code, use public ingestion helpers such as `dataset.add_samples([...])` or `dataset.add_images_dir(...)`.
-- Prefer built-in providers before registering custom providers. For Hyper3-CLIP, use `dataset.compute_embeddings(model="hyper3-clip-v0.5", provider="hyper-models")`.
+- Prefer built-in providers before registering custom providers. For Hyper3-CLIP, use `dataset.compute_embeddings(model="hyper3-clip-v1", provider="hyper-models")`.
 - In comparison demos, fail fast when a required model/provider cannot compute embeddings; do not silently substitute the baseline model as a "candidate" fallback.
 - When a project truly needs a custom Python provider, use `hyperview provider register ...` from the CLI or `hv.register_provider(...)` in Python.
 - For custom panel code, create an extension under `.hyperview/extensions/<extension-name>/`; do not register arbitrary panel module files directly.

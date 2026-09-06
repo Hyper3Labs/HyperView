@@ -676,7 +676,7 @@ wheels = [
 
 [[package]]
 name = "hyper-models"
-version = "0.3.1"
+version = "0.3.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "huggingface-hub" },
@@ -685,9 +685,9 @@ dependencies = [
     { name = "onnxruntime" },
     { name = "pillow" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8f/a8/eeaa855d2652e0de4b8f88787bd80b1b46d984d120a861f71ec0ba838eab/hyper_models-0.3.1.tar.gz", hash = "sha256:2a4d695d9ad41223abba13f330905e86964c32d7ecb239a3986903704ed09d14", size = 44658, upload-time = "2026-09-01T21:56:52.859Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/13/80/d472f8ac662c461db4d5ff593edf66662178c1de0c08cf5132d33749ed8a/hyper_models-0.3.2.tar.gz", hash = "sha256:7481cc46497ae6d84ef2ca3209fc40e95b4e2fefeac2c79a321bfea822c3be39", size = 44721, upload-time = "2026-09-06T21:43:19.438Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c5/56/4a681ac30abde995a054ade1dd5bf1c68e975b20a9193e5724a26bf98e17/hyper_models-0.3.1-py3-none-any.whl", hash = "sha256:6a5a0fe8ffdef83e6eb5f4d8e30d493ea569cfe4c9e5a7812e88f8c615e54744", size = 51824, upload-time = "2026-09-01T21:56:51.462Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/07/ab1913444c35cbf8a77c8e71c7fbc8a3be942cacc99c6713c9adb075bd58/hyper_models-0.3.2-py3-none-any.whl", hash = "sha256:5bc70226a72bfde4c4c2f53e37e79f9a7cd417bd7436a1362895efb3adb221c4", size = 51899, upload-time = "2026-09-06T21:43:18.11Z" },
 ]
 
 [package.optional-dependencies]
@@ -753,8 +753,8 @@ requires-dist = [
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.28.1" },
     { name = "huggingface-hub", specifier = ">=1.11.0,<2.0" },
     { name = "huggingface-hub", marker = "extra == 'publish'", specifier = ">=1.11.0,<2.0" },
-    { name = "hyper-models", specifier = ">=0.3.1" },
-    { name = "hyper-models", extras = ["ml"], marker = "extra == 'ml'", specifier = ">=0.3.1" },
+    { name = "hyper-models", specifier = ">=0.3.2" },
+    { name = "hyper-models", extras = ["ml"], marker = "extra == 'ml'", specifier = ">=0.3.2" },
     { name = "lancedb", specifier = ">=0.33.0" },
     { name = "numpy", specifier = ">=1.26.4,<2.4" },
     { name = "pillow", specifier = ">=12.1.0" },
