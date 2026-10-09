@@ -7,21 +7,21 @@ HyperView turns image datasets into live embedding workspaces. Load samples, com
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Hyper3Labs/HyperView) [![Open in HF Spaces](https://huggingface.co/datasets/huggingface/badges/resolve/main/open-in-hf-spaces-sm.svg)](https://huggingface.co/spaces/hyper3labs/HyperView) [![Discord](https://img.shields.io/badge/Discord-hyper%C2%B3labs-5865F2?logo=discord&logoColor=white)](https://discord.gg/Za3rBkTPSf)
 
 <p align="center">
-  <a href="https://hyper3labs.github.io/spaces/abo-catalog/" target="_blank">
+  <a href="https://spaces.hyper3labs.com/abo-catalog/" target="_blank">
     <img src="https://raw.githubusercontent.com/Hyper3Labs/HyperView/main/assets/screenshot.png" alt="HyperView screenshot" width="100%">
   </a>
   <br>
-  <strong><a href="https://hyper3labs.github.io/spaces/abo-catalog/" target="_blank">Open a live workspace in your browser</a></strong> — no install, no backend
+  <strong><a href="https://spaces.hyper3labs.com/abo-catalog/" target="_blank">Open a prepared workspace in your browser</a></strong> — no install, no backend
 </p>
 
 Six prepared workspaces, each exported with `hyperview export` and served as
 static files:
-[ABO Catalog](https://hyper3labs.github.io/spaces/abo-catalog/) ·
-[Fashion Products](https://hyper3labs.github.io/spaces/fashion-products/) ·
-[Precision Regions](https://hyper3labs.github.io/spaces/precision-regions/) ·
-[Logo Search](https://hyper3labs.github.io/spaces/logo-search/) ·
-[GeoSpatial](https://hyper3labs.github.io/spaces/geospatial/) ·
-[Visual Safety](https://hyper3labs.github.io/spaces/visual-safety/)
+[ABO Catalog](https://spaces.hyper3labs.com/abo-catalog/) ·
+[Fashion Products](https://spaces.hyper3labs.com/fashion-products/) ·
+[Precision Regions](https://spaces.hyper3labs.com/precision-regions/) ·
+[Logo Search](https://spaces.hyper3labs.com/logo-search/) ·
+[GeoSpatial](https://spaces.hyper3labs.com/geospatial/) ·
+[Visual Safety](https://spaces.hyper3labs.com/visual-safety/)
 
 ## Install
 
